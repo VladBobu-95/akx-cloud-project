@@ -1,0 +1,38 @@
+# Este archivo SOLO se usa en tu PC de casa (Docker Compose lo carga
+# automaticamente si existe). NO lo subas al servidor: esta en .gitignore... no,
+# en realidad SI se sube al repo, pero en el servidor se ignora arrancando con:
+#   docker compose -f docker-compose.yml up -d --build
+#
+# En casa basta con:  docker compose up -d
+# y levanta ademas un Ollama local para no depender del servidor.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: clouddrive-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - clouddrive_ollama_data:/root/.ollama
+
+  # Visor web de la base de datos (solo local). Abrir en http://localhost:8080
+  # System: PostgreSQL · Server: db · usuario/contraseña/BD: los de tu .env
+  adminer:
+    image: adminer:latest
+    container_name: clouddrive-adminer
+    restart: unless-stopped
+    depends_on:
+      - db
+    ports:
+      - "${ADMINER_PORT_HOST:-8080}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+
+  api:
+    environment:
+      NODE_ENV: development
+      OLLAMA_URL: http://ollama:11434
+
+volumes:
+  clouddrive_ollama_data:
