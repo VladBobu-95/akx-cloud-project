@@ -68,9 +68,10 @@ Gestionas los archivos y carpetas del usuario USANDO SIEMPRE las herramientas; n
 Cómo actuar:
 - Las acciones sobre archivos (copiar/mover/renombrar/borrar) se hacen indicando el NOMBRE del archivo; el sistema lo localiza solo. No necesitas ids.
 - Si quieres ver qué hay, usa "buscar_archivos" (con "texto" para filtrar por nombre, o "carpeta" para listar una carpeta; sin nada lista los más recientes).
-- Para crear una carpeta usa "crear_carpeta" con la "ruta" (ej: "/facturas"). Para listarlas, "listar_carpetas".
+- Para crear una carpeta usa "crear_carpeta" con la "ruta" (ej: "/facturas"). Para listarlas, "listar_carpetas". NUNCA llames a "crear_carpeta" como paso previo a "renombrar_carpeta", "mover_carpeta" ni ninguna otra operación: si el usuario menciona una carpeta, asume que ya existe y actúa directamente.
 - Para crear un archivo/nota/documento (.md o .txt) DEBES llamar a "crear_archivo" (nombre, carpeta y contenido). Nunca describas que lo creas sin llamar a la herramienta. Si el usuario NO indica carpeta, NO pongas "carpeta" (se creará en la raíz); no te inventes una carpeta a partir del nombre.
 - "eliminar_carpeta" borra la carpeta ENTERA (carpeta + contenido). "vaciar_carpeta" borra SOLO el contenido y deja la carpeta: úsalo si piden "borra el contenido de X" o "vacía X".
+- Si el usuario pide borrar TODAS las carpetas (aunque no mencione archivos), usa "borrar_todo" directamente.
 - Para mover/renombrar/copiar carpetas usa "mover_carpeta"/"renombrar_carpeta"/"copiar_carpeta".
 - Para listar carpetas usa "listar_carpetas" (devuelve TODAS, incluidas las que tienen archivos).
 - Papelera: "listar_papelera", "restaurar_archivo", "borrar_permanente" (definitivo) y "vaciar_papelera".
@@ -241,7 +242,7 @@ const TOOLS = [
     function: {
       name: "borrar_todo",
       description:
-        "Borra TODO: envía a la papelera todos los archivos del usuario y elimina todas sus carpetas. Úsalo solo cuando el usuario pida explícitamente borrar/vaciar todo, todos los archivos y carpetas, o empezar de cero. Los archivos quedan recuperables desde la papelera.",
+        "Borra TODO: envía a la papelera todos los archivos del usuario y elimina todas sus carpetas. Úsalo cuando el usuario pida borrar/vaciar todo, empezar de cero, o borrar TODAS las carpetas (con o sin archivos). Los archivos quedan recuperables desde la papelera.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -738,9 +739,13 @@ export const chatear = async (
   usuarioId: string,
   mensajes: MensajeChat[],
 ): Promise<{ respuesta: string; acciones: string[] }> => {
+  console.log("[chat] chatear() llamado, mensajes:", mensajes.length);
+  // Solo los últimos 6 mensajes (3 intercambios) para evitar que el modelo
+  // re-ejecute tool_calls de turnos anteriores cuyo contexto no está en el historial.
+  const historialReciente = mensajes.slice(-6);
   const messages: OllamaMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    ...mensajes.map((m): OllamaMessage => ({
+    ...historialReciente.map((m): OllamaMessage => ({
       role: m.rol === "usuario" ? "user" : "assistant",
       content: m.contenido,
     })),
@@ -748,24 +753,18 @@ export const chatear = async (
 
   const acciones: string[] = [];
 
-  // Pre-flight: detectar consultas de ventas sin pasar por el modelo
-  // (qwen2.5:3b no llama a ventas_top de forma fiable con prompts)
+  // Pre-flight: "borra todo / todas las carpetas / vacía todo / empezar de cero"
+  // El modelo no llama borrar_todo de forma fiable para estas frases.
   const ultimoMensaje = mensajes[mensajes.length - 1]?.contenido ?? "";
   const msgLower = ultimoMensaje.toLowerCase();
-  const esConsultaVentas =
-    /vend(id[ao]|[ei]|o)\s*(m[aá]s|menos|top|mayor|peor)|m[aá]s\s*vend|menos\s*vend|ranking.*venta|venta.*ranking|qu[eé]\s*(he\s*)?(vend|compr|factur)|producto[s]?\s*(m[aá]s|menos|top)/.test(msgLower);
+  const esBorrarTodo =
+    /borra(r)?\s+(todo|todas?\s+(las\s+)?carpetas?|todo\s+lo)|vac[ií]a(r)?\s+(todo|todas?\s+(las\s+)?carpetas?)|elimina(r)?\s+(todo|todas?\s+(las\s+)?carpetas?)|empeza(r)?\s+de\s+cero/.test(msgLower);
 
-  if (esConsultaVentas) {
-    const mesMatch = /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/.exec(msgLower);
-    const args: Record<string, unknown> = {};
-    if (mesMatch) {
-      const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-      args.mes = meses.indexOf(mesMatch[1]) + 1;
-    }
-    const resultado = await ejecutarTool("ventas_top", args, usuarioId, acciones);
+  if (esBorrarTodo) {
+    const resultado = await ejecutarTool("borrar_todo", {}, usuarioId, acciones);
     const r = resultado as Record<string, unknown>;
-    if (typeof r.resumen === "string") {
-      return { respuesta: r.resumen, acciones };
+    if (r.ok) {
+      return { respuesta: "Hecho.", acciones };
     }
   }
 
@@ -776,6 +775,8 @@ export const chatear = async (
     messages.push(respuesta);
 
     const toolCalls = respuesta.tool_calls ?? [];
+    console.log("[chat] tool_calls:", JSON.stringify(toolCalls));
+    console.log("[chat] content:", respuesta.content?.slice(0, 200));
     if (toolCalls.length === 0) {
       return { respuesta: respuesta.content || "Hecho.", acciones };
     }
@@ -797,8 +798,7 @@ export const chatear = async (
       const r = resultado as Record<string, unknown>;
       // Herramientas que devuelven un resumen preconstruido (bypass del modelo)
       const tieneResumen =
-        (esHerramientaFactura && r.ok && typeof r.resumen === "string") ||
-        (tc.function.name === "ventas_top" && typeof r.resumen === "string");
+        esHerramientaFactura && r.ok && typeof r.resumen === "string";
       if (tieneResumen) {
         resumenesFactura.push(r.resumen as string);
       }
