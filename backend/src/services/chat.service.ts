@@ -26,7 +26,15 @@ import {
   normalizarRuta,
 } from "./carpetas.service";
 import { buscarSemantica } from "./rag.service";
-import { escanearFactura, obtenerFactura, ventasTop } from "./facturas.service";
+import {
+  escanearFactura,
+  obtenerFactura,
+  ventasTop,
+  totalesFacturado,
+  rankingMd,
+  totalesMd,
+  type FiltroFacturas,
+} from "./facturas.service";
 
 // Helpers de rutas .
 const padreRuta = (r: string): string => {
@@ -81,7 +89,14 @@ Cómo actuar:
   • Si el usuario pide VER o RESUMIR una factura específica YA escaneada → usa "obtener_factura" (lee de BD, rápido, sin re-procesar el PDF).
   • Si el usuario pide ESCANEAR/PROCESAR una o varias facturas concretas por nombre → usa "escanear_factura" UNA VEZ POR CADA archivo mencionado (nunca uses "escanear_todas_facturas" si el usuario nombró archivos específicos).
   • Si el usuario pide escanear/procesar TODAS sus facturas sin nombrarlas → usa "escanear_todas_facturas".
-  • Para ventas ("qué vendí más", "lo más vendido", "qué he comprado", "ranking de productos") → llama "ventas_top" INMEDIATAMENTE, sin preguntar nada. El mes es opcional; si no lo menciona el usuario, llámala sin "mes".
+- ANALÍTICA DE FACTURAS — llama a la herramienta INMEDIATAMENTE, sin preguntar:
+  • Rankings de productos o buscar un producto ("qué vendí más", "lo más/menos vendido", "ranking", "cuánto he vendido de X") → "ventas_top".
+  • Totales facturados ("cuánto he facturado", "total gastado", "cuánto le he facturado a X") → "totales_facturas".
+  • Aplica filtros SOLO si el usuario los menciona, extrayéndolos del mensaje:
+    - Si nombra facturas concretas (por nº o por nombre de archivo) → ponlas TODAS en "facturas" (array).
+    - Si nombra a quién se factura → "cliente"; si nombra el proveedor/quien emite → "emisor".
+    - Periodo → "mes"/"anio" o "desde"/"hasta". Para menos vendido usa orden:"menos".
+  • Si no hay filtros, llama la herramienta sin parámetros (cubre todas las facturas).
 - Si una acción devuelve "necesita_aclaracion" con varias opciones, pregunta al usuario cuál de ellas quiere.
 - Las carpetas son rutas tipo "/facturas/2026" ("/" es la raíz).
 - Haz lo que pide el usuario en la misma respuesta, sin pedir confirmaciones innecesarias.
@@ -415,12 +430,48 @@ const TOOLS = [
     function: {
       name: "ventas_top",
       description:
-        "Devuelve el ranking de productos más vendidos (unidades e importe). Llámala SIEMPRE cuando pregunten qué se ha vendido más, los productos más vendidos, menos vendidos, o el ranking de ventas. Los parámetros 'mes' y 'anio' son OPCIONALES: solo los incluyes si el usuario especifica un mes concreto.",
+        "Ranking de productos por ventas (unidades e importe), o búsqueda de un producto concreto. Úsala cuando pregunten qué se ha vendido más/menos, el ranking de ventas, o cuánto se ha vendido de un producto. TODOS los filtros son OPCIONALES y se combinan: úsalos solo si el usuario los menciona. Si nombra facturas concretas, ponlas en 'facturas'. Si nombra un cliente o proveedor/emisor, usa 'cliente'/'emisor'. Si pregunta por un producto concreto, usa 'producto'.",
       parameters: {
         type: "object",
         properties: {
-          mes: { type: "number", description: "mes 1-12, solo si el usuario lo especifica" },
-          anio: { type: "number", description: "año (opcional, por defecto el actual)" },
+          facturas: {
+            type: "array",
+            items: { type: "string" },
+            description: "nº de factura o nombre de archivo de las facturas a incluir, ej: [\"FAC-001\", \"factura_enero.pdf\"]",
+          },
+          cliente: { type: "string", description: "filtrar por cliente (a quién se factura)" },
+          emisor: { type: "string", description: "filtrar por emisor/proveedor (quién emite)" },
+          producto: { type: "string", description: "filtrar por un producto concreto, ej: tornillos" },
+          orden: { type: "string", enum: ["mas", "menos"], description: "'mas' = más vendido (defecto), 'menos' = menos vendido" },
+          mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
+          anio: { type: "number", description: "año, solo si lo especifica" },
+          desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
+          hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
+          limite: { type: "number", description: "cuántos productos devolver (defecto 10)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "totales_facturas",
+      description:
+        "Devuelve los TOTALES facturados (nº de facturas, subtotal, IVA y total). Úsala cuando pregunten cuánto han facturado/gastado en total, en un periodo, a un cliente, de un emisor, o de unas facturas concretas. TODOS los filtros son OPCIONALES: úsalos solo si el usuario los menciona.",
+      parameters: {
+        type: "object",
+        properties: {
+          facturas: {
+            type: "array",
+            items: { type: "string" },
+            description: "nº de factura o nombre de archivo de las facturas a incluir",
+          },
+          cliente: { type: "string", description: "filtrar por cliente" },
+          emisor: { type: "string", description: "filtrar por emisor/proveedor" },
+          mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
+          anio: { type: "number", description: "año, solo si lo especifica" },
+          desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
+          hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
         },
       },
     },
@@ -454,6 +505,63 @@ const resolverEnPapelera = async (
   if (exacto) return { archivo: exacto };
   if (lista.length === 1) return { archivo: lista[0] };
   return { opciones: lista.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
+};
+
+// Traduce los argumentos de las tools de analítica (ventas_top, totales_facturas)
+// a un FiltroFacturas y a un título legible para el markdown del resultado.
+const filtroFacturasDesdeArgs = (
+  args: Record<string, unknown>,
+): { filtro: FiltroFacturas; titulo: string } => {
+  const filtro: FiltroFacturas = {};
+  const partes: string[] = [];
+
+  if (Array.isArray(args.facturas)) {
+    const facturas = args.facturas.map((x) => String(x).trim()).filter(Boolean);
+    if (facturas.length) {
+      filtro.facturas = facturas;
+      partes.push(`facturas ${facturas.join(", ")}`);
+    }
+  }
+  if (typeof args.cliente === "string" && args.cliente.trim()) {
+    filtro.cliente = args.cliente.trim();
+    partes.push(`cliente ${filtro.cliente}`);
+  }
+  if (typeof args.emisor === "string" && args.emisor.trim()) {
+    filtro.emisor = args.emisor.trim();
+    partes.push(`emisor ${filtro.emisor}`);
+  }
+  if (typeof args.producto === "string" && args.producto.trim()) {
+    filtro.producto = args.producto.trim();
+    partes.push(`producto "${filtro.producto}"`);
+  }
+
+  // Periodo: mes/anio tienen prioridad; si no, año suelto o desde/hasta explícitos.
+  const mes = typeof args.mes === "number" ? args.mes : undefined;
+  if (mes && mes >= 1 && mes <= 12) {
+    const anio = typeof args.anio === "number" ? args.anio : new Date().getFullYear();
+    const mm = String(mes).padStart(2, "0");
+    const ultimoDia = new Date(anio, mes, 0).getDate();
+    filtro.desde = `${anio}-${mm}-01`;
+    filtro.hasta = `${anio}-${mm}-${ultimoDia}`;
+    const nombreMes = new Date(anio, mes - 1).toLocaleString("es-ES", { month: "long" });
+    partes.push(`${nombreMes} ${anio}`);
+  } else {
+    if (typeof args.anio === "number") {
+      filtro.desde = `${args.anio}-01-01`;
+      filtro.hasta = `${args.anio}-12-31`;
+      partes.push(`${args.anio}`);
+    }
+    if (typeof args.desde === "string" && args.desde.trim()) {
+      filtro.desde = args.desde.trim();
+      partes.push(`desde ${filtro.desde}`);
+    }
+    if (typeof args.hasta === "string" && args.hasta.trim()) {
+      filtro.hasta = args.hasta.trim();
+      partes.push(`hasta ${filtro.hasta}`);
+    }
+  }
+
+  return { filtro, titulo: partes.length ? partes.join(" · ") : "todas las facturas" };
 };
 
 // Ejecuta una herramienta contra los servicios reales (siempre con el usuario del token).
@@ -666,27 +774,17 @@ const ejecutarTool = async (
         return { ok: true, resumen: r.resumen, numero: r.numero, lineas: r.lineas };
       }
       case "ventas_top": {
-        let rango: { desde?: string; hasta?: string } = {};
-        const mes = typeof args.mes === "number" ? args.mes : undefined;
-        let tituloPeriodo = "todas las facturas";
-        if (mes && mes >= 1 && mes <= 12) {
-          const anio = typeof args.anio === "number" ? args.anio : new Date().getFullYear();
-          const mm = String(mes).padStart(2, "0");
-          const ultimoDia = new Date(anio, mes, 0).getDate();
-          rango = { desde: `${anio}-${mm}-01`, hasta: `${anio}-${mm}-${ultimoDia}` };
-          const nombreMes = new Date(anio, mes - 1).toLocaleString("es-ES", { month: "long" });
-          tituloPeriodo = `${nombreMes} ${anio}`;
-        }
-        const top = await ventasTop(usuarioId, rango, 10);
-        if (top.length === 0) {
-          return { resumen: "No hay facturas escaneadas para ese periodo." };
-        }
-        const eur = (n: number) => `${n.toFixed(2)} €`;
-        const filas = top
-          .map((t, i) => `| ${i + 1} | ${t.producto} | ${t.unidades} | ${eur(t.importe)} |`)
-          .join("\n");
-        const resumen = `## Productos más vendidos (${tituloPeriodo})\n\n| # | Producto | Unidades | Importe |\n|---|---|---|---|\n${filas}`;
-        return { resumen };
+        const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        const orden: "asc" | "desc" = args.orden === "menos" ? "asc" : "desc";
+        const limite = typeof args.limite === "number" ? args.limite : 10;
+        const top = await ventasTop(usuarioId, filtro, { orden, limite });
+        const prefijo = orden === "asc" ? "Productos menos vendidos" : "Productos más vendidos";
+        return { resumen: rankingMd(top, `${prefijo} (${titulo})`) };
+      }
+      case "totales_facturas": {
+        const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        const totales = await totalesFacturado(usuarioId, filtro);
+        return { resumen: totalesMd(totales, `Totales facturados (${titulo})`) };
       }
       default:
         return { error: `herramienta desconocida: ${nombre}` };
@@ -815,8 +913,8 @@ export const chatear = async (
       return { respuesta: respuesta.content || "Hecho.", acciones };
     }
 
-    // Resúmenes de facturas preconstruidos (markdown listo para mostrar directamente)
-    const resumenesFactura: string[] = [];
+    // Resúmenes preconstruidos (markdown listo para mostrar directamente)
+    const resumenes: string[] = [];
 
     for (const tc of toolCalls) {
       const args =
@@ -826,22 +924,18 @@ export const chatear = async (
       const resultado = await ejecutarTool(tc.function.name, args, usuarioId, acciones);
       messages.push({ role: "tool", content: JSON.stringify(resultado) });
 
-      // Acumular resúmenes de facturas para devolver directamente sin pasar por el modelo
-      const esHerramientaFactura =
-        tc.function.name === "escanear_factura" || tc.function.name === "obtener_factura";
+      // Cualquier herramienta que devuelva un "resumen" (facturas, ventas_top,
+      // totales_facturas) trae el markdown ya formateado con € server-side.
       const r = resultado as Record<string, unknown>;
-      // Herramientas que devuelven un resumen preconstruido (bypass del modelo)
-      const tieneResumen =
-        esHerramientaFactura && r.ok && typeof r.resumen === "string";
-      if (tieneResumen) {
-        resumenesFactura.push(r.resumen as string);
+      if (typeof r.resumen === "string") {
+        resumenes.push(r.resumen);
       }
     }
 
-    // Si TODAS las llamadas de esta iteración tienen resumen preconstruido, devolver directamente
-    // sin otro turno del modelo (evita que el modelo reformatee mal o invente cosas).
-    if (resumenesFactura.length === toolCalls.length && resumenesFactura.length > 0) {
-      return { respuesta: resumenesFactura.join("\n\n---\n\n"), acciones };
+    // Si TODAS las llamadas de esta iteración tienen resumen preconstruido, devolver
+    // directamente sin otro turno del modelo (evita que reformatee mal o invente cosas).
+    if (resumenes.length === toolCalls.length && resumenes.length > 0) {
+      return { respuesta: resumenes.join("\n\n---\n\n"), acciones };
     }
   }
 

@@ -291,12 +291,83 @@ export const obtenerFactura = async (
   return { encontrada: true, resumen: resumenFacturaMd(datos), numero: factura.numero };
 };
 
-// Ranking de productos más vendidos (por importe), opcionalmente en un rango de fechas.
+// Filtro común para las consultas analíticas de facturas. Todos los campos son
+// opcionales y se combinan en AND. `facturas` admite nº de factura o nombre de
+// archivo (se busca en ambos). `producto` solo aplica a los rankings.
+export interface FiltroFacturas {
+  facturas?: string[];
+  cliente?: string;
+  emisor?: string;
+  desde?: string;
+  hasta?: string;
+  producto?: string;
+}
+
+// Construye las condiciones WHERE y los parámetros posicionales a partir del filtro.
+// Asume que la consulta tiene alias "f" (facturas) y "a" (LEFT JOIN archivos).
+// $1 es siempre el usuario.
+const construirFiltro = (
+  usuarioId: string,
+  filtro: FiltroFacturas,
+): { where: string; params: unknown[] } => {
+  const cond: string[] = [`f."propietarioId" = $1`];
+  const params: unknown[] = [usuarioId];
+  const add = (valor: unknown): string => {
+    params.push(valor);
+    return `$${params.length}`;
+  };
+
+  if (filtro.facturas?.length) {
+    // Cada identificador puede coincidir con el nº de factura o el nombre de archivo.
+    const ors = filtro.facturas
+      .map((id) => String(id).trim())
+      .filter(Boolean)
+      .map((id) => {
+        const p = add(`%${id}%`);
+        return `(f."numero" ILIKE ${p} OR a."nombre" ILIKE ${p})`;
+      });
+    if (ors.length) cond.push(`(${ors.join(" OR ")})`);
+  }
+  if (filtro.cliente?.trim()) cond.push(`f."cliente" ILIKE ${add(`%${filtro.cliente.trim()}%`)}`);
+  if (filtro.emisor?.trim()) cond.push(`f."emisor" ILIKE ${add(`%${filtro.emisor.trim()}%`)}`);
+  if (filtro.desde) cond.push(`f."fecha" >= ${add(filtro.desde)}::date`);
+  if (filtro.hasta) cond.push(`f."fecha" <= ${add(filtro.hasta)}::date`);
+  if (filtro.producto?.trim()) cond.push(`l."descripcion" ILIKE ${add(`%${filtro.producto.trim()}%`)}`);
+
+  return { where: cond.join(" AND "), params };
+};
+
+// Markdown de un ranking de productos (con € server-side).
+export const rankingMd = (
+  filas: { producto: string; unidades: number; importe: number }[],
+  titulo: string,
+): string => {
+  if (filas.length === 0) return "No hay datos de ventas para esa consulta.";
+  const cuerpo = filas
+    .map((t, i) => `| ${i + 1} | ${t.producto} | ${t.unidades} | ${eur(t.importe)} |`)
+    .join("\n");
+  return `## ${titulo}\n\n| # | Producto | Unidades | Importe |\n|---|---|---|---|\n${cuerpo}`;
+};
+
+// Markdown de los totales facturados (con € server-side).
+export const totalesMd = (
+  t: { numFacturas: number; subtotal: number; iva: number; total: number },
+  titulo: string,
+): string => {
+  if (t.numFacturas === 0) return "No hay facturas que cumplan esa consulta.";
+  return `## ${titulo}\n\n- **Facturas:** ${t.numFacturas}\n- **Subtotal:** ${eur(t.subtotal)}\n- **IVA:** ${eur(t.iva)}\n- **TOTAL:** ${eur(t.total)}`;
+};
+
+// Ranking de productos (por importe) sobre las facturas que cumplen el filtro.
+// orden 'desc' = más vendido (defecto); 'asc' = menos vendido.
 export const ventasTop = async (
   usuarioId: string,
-  rango: { desde?: string; hasta?: string } = {},
-  limite = 10,
+  filtro: FiltroFacturas = {},
+  opts: { orden?: "desc" | "asc"; limite?: number } = {},
 ): Promise<{ producto: string; unidades: number; importe: number }[]> => {
+  const { where, params } = construirFiltro(usuarioId, filtro);
+  const orden = opts.orden === "asc" ? "ASC" : "DESC";
+  const limiteParam = `$${params.length + 1}`;
   const filas: { producto: string; unidades: number; importe: number }[] =
     await AppDataSource.query(
       `SELECT lower(l."descripcion") AS producto,
@@ -304,19 +375,44 @@ export const ventasTop = async (
               SUM(l."total")::float AS importe
        FROM "lineas_factura" l
        JOIN "facturas" f ON f."id" = l."facturaId"
-       WHERE f."propietarioId" = $1
-         AND ($2::date IS NULL OR f."fecha" >= $2::date)
-         AND ($3::date IS NULL OR f."fecha" <= $3::date)
+       LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+       WHERE ${where}
        GROUP BY lower(l."descripcion")
-       ORDER BY importe DESC
-       LIMIT $4`,
-      [usuarioId, rango.desde ?? null, rango.hasta ?? null, limite],
+       ORDER BY importe ${orden}
+       LIMIT ${limiteParam}`,
+      [...params, opts.limite ?? 10],
     );
   return filas.map((r) => ({
     producto: r.producto,
     unidades: Number(r.unidades),
     importe: Number(r.importe),
   }));
+};
+
+// Totales facturados (nº facturas, subtotal, IVA, total) sobre el filtro dado.
+// El campo `producto` del filtro no aplica aquí (son totales de cabecera).
+export const totalesFacturado = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+): Promise<{ numFacturas: number; subtotal: number; iva: number; total: number }> => {
+  const { producto: _producto, ...rest } = filtro;
+  const { where, params } = construirFiltro(usuarioId, rest);
+  const [row] = await AppDataSource.query(
+    `SELECT COUNT(DISTINCT f."id")::int AS numfacturas,
+            COALESCE(SUM(f."subtotal"), 0)::float AS subtotal,
+            COALESCE(SUM(f."iva"), 0)::float AS iva,
+            COALESCE(SUM(f."total"), 0)::float AS total
+     FROM "facturas" f
+     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+     WHERE ${where}`,
+    params,
+  );
+  return {
+    numFacturas: Number(row.numfacturas),
+    subtotal: Number(row.subtotal),
+    iva: Number(row.iva),
+    total: Number(row.total),
+  };
 };
 
 // Totales globales de ventas + top productos.
@@ -328,7 +424,7 @@ export const resumenVentas = async (
      FROM "facturas" WHERE "propietarioId" = $1`,
     [usuarioId],
   );
-  const top = await ventasTop(usuarioId, {}, 5);
+  const top = await ventasTop(usuarioId, {}, { limite: 5 });
   return { numFacturas: tot.num, totalFacturado: tot.facturado, top };
 };
 
