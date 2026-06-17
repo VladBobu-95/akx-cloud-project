@@ -697,6 +697,41 @@ const ejecutarTool = async (
   }
 };
 
+// Algunos modelos (p.ej. qwen2.5-coder) a veces emiten las tool calls como
+// texto JSON dentro de "content" en lugar de en el campo "tool_calls". Esto las
+// extrae como respaldo para poder ejecutarlas igual.
+const extraerToolCallsDeTexto = (content: string): OllamaToolCall[] => {
+  if (!content) return [];
+  const calls: OllamaToolCall[] = [];
+  const candidatos: string[] = [];
+  // Bloques de código ```json ... ``` (o ``` ... ```)
+  const fence = /```(?:json)?\s*([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = fence.exec(content)) !== null) candidatos.push(m[1]);
+  // Si no hay bloques, intentar interpretar todo el contenido como JSON
+  if (candidatos.length === 0) candidatos.push(content);
+  for (const c of candidatos) {
+    try {
+      const parsed = JSON.parse(c.trim()) as unknown;
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      for (const p of arr) {
+        const obj = p as { name?: unknown; arguments?: unknown };
+        if (obj && typeof obj.name === "string") {
+          calls.push({
+            function: {
+              name: obj.name,
+              arguments: (obj.arguments as Record<string, unknown>) ?? {},
+            },
+          });
+        }
+      }
+    } catch {
+      // No es JSON válido: lo ignoramos (es texto normal del asistente).
+    }
+  }
+  return calls;
+};
+
 // Llama a Ollama /api/chat (sin streaming).
 const llamarOllama = async (messages: OllamaMessage[]): Promise<OllamaMessage> => {
   let res: Response;
@@ -709,9 +744,6 @@ const llamarOllama = async (messages: OllamaMessage[]): Promise<OllamaMessage> =
         messages,
         tools: TOOLS,
         stream: false,
-        // qwen3 usa thinking mode por defecto, lo que rompe el formato tool_calls.
-        // Con think:false usa el formato estándar de function calling.
-        think: false,
         keep_alive: "30m",
         options: { temperature: 0 },
       }),
@@ -737,16 +769,17 @@ export const chatear = async (
   usuarioId: string,
   mensajes: MensajeChat[],
 ): Promise<{ respuesta: string; acciones: string[] }> => {
-  console.log("[chat] chatear() llamado, mensajes:", mensajes.length);
-  // Solo los últimos 6 mensajes (3 intercambios) para evitar que el modelo
-  // re-ejecute tool_calls de turnos anteriores cuyo contexto no está en el historial.
-  const historialReciente = mensajes.slice(-6);
+  // Solo el último mensaje del usuario. En un asistente de archivos cada orden es
+  // independiente; enviar el historial hace que modelos pequeños re-ejecuten
+  // acciones de turnos anteriores (p.ej. repetir un "borrar_todo"), lo cual es
+  // peligroso. Si en el futuro se quieren follow-ups, reintroducir contexto acotado.
+  const ultimo = mensajes[mensajes.length - 1];
   const messages: OllamaMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    ...historialReciente.map((m): OllamaMessage => ({
-      role: m.rol === "usuario" ? "user" : "assistant",
-      content: m.contenido,
-    })),
+    {
+      role: ultimo.rol === "usuario" ? "user" : "assistant",
+      content: ultimo.contenido,
+    },
   ];
 
   const acciones: string[] = [];
@@ -772,9 +805,12 @@ export const chatear = async (
     const respuesta = await llamarOllama(messages);
     messages.push(respuesta);
 
-    const toolCalls = respuesta.tool_calls ?? [];
-    console.log("[chat] tool_calls:", JSON.stringify(toolCalls));
-    console.log("[chat] content:", respuesta.content?.slice(0, 200));
+    let toolCalls = respuesta.tool_calls ?? [];
+    // Respaldo: si el modelo no usó el campo tool_calls pero escribió las
+    // llamadas como texto JSON en content, las extraemos y ejecutamos.
+    if (toolCalls.length === 0 && respuesta.content) {
+      toolCalls = extraerToolCallsDeTexto(respuesta.content);
+    }
     if (toolCalls.length === 0) {
       return { respuesta: respuesta.content || "Hecho.", acciones };
     }
