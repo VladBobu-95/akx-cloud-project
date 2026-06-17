@@ -418,6 +418,56 @@ export const totalesFacturado = async (
   };
 };
 
+// Dado un conjunto de identificadores (nº/nombre de archivo), localiza los ficheros
+// de factura que casan y escanea los que aún NO estén escaneados. Devuelve cuántos
+// escaneó. Sirve para que las consultas analíticas funcionen aunque el usuario no
+// haya escaneado antes esas facturas.
+export const asegurarFacturasEscaneadas = async (
+  usuarioId: string,
+  identificadores: string[],
+): Promise<number> => {
+  const ids = identificadores.map((s) => String(s).trim()).filter(Boolean);
+  if (ids.length === 0) return 0;
+
+  const archivoRepo = AppDataSource.getRepository(Archivo);
+  const qb = archivoRepo
+    .createQueryBuilder("a")
+    .where("a.propietarioId = :uid", { uid: usuarioId })
+    .andWhere("a.eliminadoEn IS NULL");
+  // Mismo matching con límites de dígito que el filtro de analítica.
+  const ors = ids.map((_, i) => `a."nombre" ~* :re${i}`);
+  qb.andWhere(`(${ors.join(" OR ")})`);
+  ids.forEach((id, i) => {
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    qb.setParameter(`re${i}`, `(^|[^0-9])${escaped}([^0-9]|$)`);
+  });
+  const archivos = await qb.getMany();
+
+  // Solo ficheros que parezcan factura (PDF/imagen).
+  const facturasArchivo = archivos.filter(
+    (a) =>
+      /\.(pdf|jpe?g|png|webp|tiff?)$/i.test(a.nombre) ||
+      /^(application\/pdf|image\/)/.test(a.mimeType),
+  );
+  if (facturasArchivo.length === 0) return 0;
+
+  const facturaRepo = AppDataSource.getRepository(Factura);
+  let escaneadas = 0;
+  for (const archivo of facturasArchivo) {
+    const ya = await facturaRepo.findOne({
+      where: { archivo: { id: archivo.id }, propietario: { id: usuarioId } },
+    });
+    if (ya) continue; // ya estaba escaneada
+    try {
+      await escanearFactura(usuarioId, archivo.id);
+      escaneadas++;
+    } catch {
+      // Si un archivo no se puede escanear, lo ignoramos y seguimos con los demás.
+    }
+  }
+  return escaneadas;
+};
+
 // Totales globales de ventas + top productos.
 export const resumenVentas = async (
   usuarioId: string,

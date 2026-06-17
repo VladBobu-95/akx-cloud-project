@@ -31,6 +31,7 @@ import {
   obtenerFactura,
   ventasTop,
   totalesFacturado,
+  asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
   type FiltroFacturas,
@@ -775,6 +776,11 @@ const ejecutarTool = async (
       }
       case "ventas_top": {
         const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        // Si nombra facturas concretas, escanea al vuelo las que aún no lo estén.
+        if (filtro.facturas?.length) {
+          const n = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
+          if (n > 0) acciones.push(`${n} factura(s) escaneada(s) automáticamente`);
+        }
         const orden: "asc" | "desc" = args.orden === "menos" ? "asc" : "desc";
         const limite = typeof args.limite === "number" ? args.limite : 10;
         const top = await ventasTop(usuarioId, filtro, { orden, limite });
@@ -783,6 +789,10 @@ const ejecutarTool = async (
       }
       case "totales_facturas": {
         const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        if (filtro.facturas?.length) {
+          const n = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
+          if (n > 0) acciones.push(`${n} factura(s) escaneada(s) automáticamente`);
+        }
         const totales = await totalesFacturado(usuarioId, filtro);
         return { resumen: totalesMd(totales, `Totales facturados (${titulo})`) };
       }
