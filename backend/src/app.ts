@@ -13,6 +13,11 @@ import facturasRoutes from "./routes/facturas.routes";
 
 export const app = express();
 
+// La API corre detrás de nginx (Docker), que añade X-Forwarded-For.
+// Confiar en el primer proxy permite que express-rate-limit identifique
+// bien las IPs y evita el ValidationError de X-Forwarded-For.
+app.set("trust proxy", 1);
+
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(
   cors({
