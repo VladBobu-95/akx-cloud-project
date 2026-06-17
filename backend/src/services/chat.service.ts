@@ -709,12 +709,10 @@ const llamarOllama = async (messages: OllamaMessage[]): Promise<OllamaMessage> =
         messages,
         tools: TOOLS,
         stream: false,
-        // Mantiene el modelo cargado en RAM 30 min entre mensajes. Sin esto se
-        // descarga a los 5 min y el siguiente mensaje paga ~24s de recarga.
+        // qwen3 usa thinking mode por defecto, lo que rompe el formato tool_calls.
+        // Con think:false usa el formato estándar de function calling.
+        think: false,
         keep_alive: "30m",
-        // Temperatura 0: máximo determinismo. El modelo improvisa lo mínimo y
-        // sigue mejor las instrucciones (llamar a las herramientas en vez de
-        // inventar que ya las ejecutó).
         options: { temperature: 0 },
       }),
     });
