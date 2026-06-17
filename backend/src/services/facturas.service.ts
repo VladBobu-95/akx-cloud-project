@@ -444,7 +444,7 @@ export const ventasTop = async (
        LEFT JOIN "archivos" a ON a."id" = f."archivoId"
        WHERE ${where}
        GROUP BY lower(l."descripcion")
-       ORDER BY importe ${orden}
+       ORDER BY unidades ${orden}
        LIMIT ${limiteParam}`,
       [...params, opts.limite ?? 10],
     );
