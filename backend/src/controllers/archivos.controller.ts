@@ -24,6 +24,7 @@ import {
   reubicarCarpeta,
 } from "../services/carpetas.service";
 import { indexarArchivo, buscarSemantica } from "../services/rag.service";
+import { autoEscanearArchivo } from "../services/facturas.service";
 import { AppError } from "../utils/errors";
 
 // GET /api/archivos/carpetas
@@ -126,6 +127,12 @@ export const ctrlSubir = async (
     const usuarioId = req.usuario!.id;
     void indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
       console.error(`Error indexando "${archivo.nombre}":`, err),
+    );
+
+    // Auto-escaneo de factura EN SEGUNDO PLANO: si el archivo es PDF/imagen y parece
+    // una factura, se extrae y guarda para que la analítica funcione sin pasos manuales.
+    void autoEscanearArchivo(usuarioId, archivo).catch((err) =>
+      console.error(`Error auto-escaneando "${archivo.nombre}":`, err),
     );
   } catch (error) {
     next(error);

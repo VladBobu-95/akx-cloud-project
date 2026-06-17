@@ -25,6 +25,33 @@ const ocrImagen = async (buffer: Buffer): Promise<string> => {
   return data.text ?? "";
 };
 
+// OCR con un modelo de visión de Ollama (deepseek-ocr por defecto). Mucho mejor
+// que Tesseract para facturas. Lanza si Ollama falla (el llamador hace fallback).
+const ocrConOllama = async (buffer: Buffer): Promise<string> => {
+  const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: env.OLLAMA_OCR_MODEL,
+      messages: [
+        {
+          role: "user",
+          content:
+            "Transcribe TODO el texto de esta imagen tal cual aparece (números, importes, fechas, líneas de la tabla). No añadas explicaciones.",
+          images: [buffer.toString("base64")],
+        },
+      ],
+      stream: false,
+      options: { temperature: 0 },
+    }),
+  });
+  const data = (await res.json()) as { message?: { content?: string }; error?: string };
+  if (!res.ok || data.error || !data.message?.content) {
+    throw new Error(`OCR Ollama falló: ${data.error ?? res.status}`);
+  }
+  return data.message.content;
+};
+
 // Lee un objeto de MinIO completo a un Buffer.
 const obtenerBufferMinio = async (archivo: Archivo): Promise<Buffer> => {
   const stream = await minioClient.getObject(env.MINIO_BUCKET, archivo.claveMinio);
@@ -39,7 +66,13 @@ const leerContenidoFactura = async (archivo: Archivo, pista?: string): Promise<s
   const buffer = await obtenerBufferMinio(archivo);
   let texto = "";
   if (/^image\//.test(archivo.mimeType)) {
-    texto = await ocrImagen(buffer);
+    // OCR con modelo de visión de Ollama; si falla, fallback a Tesseract.
+    try {
+      texto = await ocrConOllama(buffer);
+    } catch (err) {
+      console.error("[facturas] OCR Ollama falló, usando Tesseract:", err);
+      texto = await ocrImagen(buffer);
+    }
   } else {
     texto = (await extraerTexto(buffer, archivo.mimeType, archivo.nombre)) ?? "";
   }
@@ -160,11 +193,13 @@ const eur = (n: number | string): string => `${Number(n).toFixed(2)} €`;
 // --- API pública del servicio ---
 
 // Escanea una factura (PDF/imagen), guarda los datos en BD y genera los resúmenes.
+// opts.soloSiFactura: para el auto-escaneo al subir; si el archivo no parece una
+// factura (sin líneas ni importes), no guarda nada y devuelve { omitida: true }.
 export const escanearFactura = async (
   usuarioId: string,
   archivoId: string,
-  pista?: string,
-): Promise<{ numero?: string; total?: number; lineas: number; resumen: string }> => {
+  opts: { pista?: string; soloSiFactura?: boolean } = {},
+): Promise<{ numero?: string; total?: number; lineas: number; resumen: string; omitida?: boolean }> => {
   const archivoRepo = AppDataSource.getRepository(Archivo);
   const archivo = await archivoRepo.findOne({
     where: { id: archivoId },
@@ -175,8 +210,17 @@ export const escanearFactura = async (
     throw new AppError(403, "No tienes permiso sobre este archivo");
   }
 
-  const contenido = await leerContenidoFactura(archivo, pista);
+  const contenido = await leerContenidoFactura(archivo, opts.pista);
   const datos = await extraerDatosFactura(contenido);
+
+  // Auto-escaneo: si no parece una factura, no ensuciamos la BD.
+  if (opts.soloSiFactura) {
+    const tieneLineas = (datos.lineas ?? []).some((l) => l.descripcion?.trim());
+    const tieneImportes = Number(datos.total) > 0 || Number(datos.subtotal) > 0;
+    if (!tieneLineas && !tieneImportes) {
+      return { lineas: 0, resumen: "", omitida: true };
+    }
+  }
 
   const facturaRepo = AppDataSource.getRepository(Factura);
   // Si ya se había escaneado este archivo, reemplazamos su factura (y sus líneas por CASCADE).
@@ -230,6 +274,25 @@ export const escanearFactura = async (
     lineas: datos.lineas?.length ?? 0,
     resumen: resumenFacturaMd(datos),
   };
+};
+
+// ¿El archivo es candidato a factura (PDF o imagen)?
+export const esArchivoFactura = (archivo: Archivo): boolean =>
+  /\.(pdf|jpe?g|png|webp|tiff?)$/i.test(archivo.nombre) ||
+  /^(application\/pdf|image\/)/.test(archivo.mimeType);
+
+// Auto-escaneo al subir: si el archivo parece una factura, intenta escanearlo en
+// segundo plano. Solo persiste si la extracción tiene pinta de factura (soloSiFactura).
+// Pensado para llamarse "fire-and-forget"; los errores se logean, no se propagan.
+export const autoEscanearArchivo = async (
+  usuarioId: string,
+  archivo: Archivo,
+): Promise<void> => {
+  if (!esArchivoFactura(archivo)) return;
+  const r = await escanearFactura(usuarioId, archivo.id, { soloSiFactura: true });
+  if (!r.omitida) {
+    console.log(`[facturas] Auto-escaneada "${archivo.nombre}" (${r.lineas} línea/s)`);
+  }
 };
 
 const resumenFacturaMd = (d: DatosFactura): string => {

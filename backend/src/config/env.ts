@@ -23,6 +23,9 @@ const envSchema = z.object({
   OLLAMA_MODEL: z.string().default("qwen2.5:3b"),
   // Modelo de embeddings para la búsqueda semántica (RAG). nomic-embed-text = 768 dims.
   OLLAMA_EMBED_MODEL: z.string().default("nomic-embed-text"),
+  // Modelo de visión para OCR de imágenes de factura (mejor que Tesseract).
+  // Si falla, se usa Tesseract como fallback.
+  OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente

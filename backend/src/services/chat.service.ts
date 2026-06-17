@@ -768,7 +768,7 @@ const ejecutarTool = async (
         if (res.error) return { error: res.error };
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
         const pista = typeof args.pista === "string" ? args.pista : undefined;
-        const r = await escanearFactura(usuarioId, res.archivo!.id, pista);
+        const r = await escanearFactura(usuarioId, res.archivo!.id, { pista });
         acciones.push(
           `Factura escaneada${r.numero ? ` (${r.numero})` : ""}: ${r.lineas} línea/s`,
         );
