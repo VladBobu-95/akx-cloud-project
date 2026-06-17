@@ -795,33 +795,58 @@ const ejecutarTool = async (
   }
 };
 
+const NOMBRES_TOOLS = new Set(TOOLS.map((t) => t.function.name));
+
+// Extrae todos los objetos JSON de nivel superior `{...}` de un texto, respetando
+// el anidamiento y las comillas. Maneja varios objetos pegados o dentro de prosa.
+const extraerObjetosJSON = (texto: string): string[] => {
+  const objetos: string[] = [];
+  let profundidad = 0;
+  let inicio = -1;
+  let enCadena = false;
+  let escape = false;
+  for (let i = 0; i < texto.length; i++) {
+    const ch = texto[i];
+    if (enCadena) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') enCadena = false;
+      continue;
+    }
+    if (ch === '"') enCadena = true;
+    else if (ch === "{") {
+      if (profundidad === 0) inicio = i;
+      profundidad++;
+    } else if (ch === "}") {
+      if (profundidad > 0) {
+        profundidad--;
+        if (profundidad === 0 && inicio >= 0) {
+          objetos.push(texto.slice(inicio, i + 1));
+          inicio = -1;
+        }
+      }
+    }
+  }
+  return objetos;
+};
+
 // Algunos modelos (p.ej. qwen2.5-coder) a veces emiten las tool calls como
-// texto JSON dentro de "content" en lugar de en el campo "tool_calls". Esto las
-// extrae como respaldo para poder ejecutarlas igual.
+// texto JSON dentro de "content" en lugar de en el campo "tool_calls" (a veces
+// varias seguidas). Esto las extrae como respaldo para poder ejecutarlas igual.
+// Solo acepta objetos cuyo "name" sea una herramienta real (evita falsos positivos).
 const extraerToolCallsDeTexto = (content: string): OllamaToolCall[] => {
   if (!content) return [];
   const calls: OllamaToolCall[] = [];
-  const candidatos: string[] = [];
-  // Bloques de código ```json ... ``` (o ``` ... ```)
-  const fence = /```(?:json)?\s*([\s\S]*?)```/g;
-  let m: RegExpExecArray | null;
-  while ((m = fence.exec(content)) !== null) candidatos.push(m[1]);
-  // Si no hay bloques, intentar interpretar todo el contenido como JSON
-  if (candidatos.length === 0) candidatos.push(content);
-  for (const c of candidatos) {
+  for (const obj of extraerObjetosJSON(content)) {
     try {
-      const parsed = JSON.parse(c.trim()) as unknown;
-      const arr = Array.isArray(parsed) ? parsed : [parsed];
-      for (const p of arr) {
-        const obj = p as { name?: unknown; arguments?: unknown };
-        if (obj && typeof obj.name === "string") {
-          calls.push({
-            function: {
-              name: obj.name,
-              arguments: (obj.arguments as Record<string, unknown>) ?? {},
-            },
-          });
-        }
+      const parsed = JSON.parse(obj) as { name?: unknown; arguments?: unknown };
+      if (parsed && typeof parsed.name === "string" && NOMBRES_TOOLS.has(parsed.name)) {
+        calls.push({
+          function: {
+            name: parsed.name,
+            arguments: (parsed.arguments as Record<string, unknown>) ?? {},
+          },
+        });
       }
     } catch {
       // No es JSON válido: lo ignoramos (es texto normal del asistente).

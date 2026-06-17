@@ -319,12 +319,15 @@ const construirFiltro = (
 
   if (filtro.facturas?.length) {
     // Cada identificador puede coincidir con el nº de factura o el nombre de archivo.
+    // Regex con límites de dígito (~*) para que "1" case con "factura_1.pdf" pero
+    // NO con "factura_10.pdf"/"factura_21.pdf" (ILIKE %1% era demasiado amplio).
     const ors = filtro.facturas
       .map((id) => String(id).trim())
       .filter(Boolean)
       .map((id) => {
-        const p = add(`%${id}%`);
-        return `(f."numero" ILIKE ${p} OR a."nombre" ILIKE ${p})`;
+        const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const p = add(`(^|[^0-9])${escaped}([^0-9]|$)`);
+        return `(f."numero" ~* ${p} OR a."nombre" ~* ${p})`;
       });
     if (ors.length) cond.push(`(${ors.join(" OR ")})`);
   }
