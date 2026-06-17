@@ -25,9 +25,9 @@ akx-cloud-project/
 | API | Node 22, Express 5, TypeScript 6 |
 | ORM | TypeORM 1.x + PostgreSQL 16 + pgvector |
 | Objetos | MinIO (S3-compatible) |
-| IA chat | Ollama — `qwen2.5:3b` (mín) / `qwen2.5:7b`+ (recomendado con GPU) |
+| IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5:3b/7b` como fallback en máquinas pequeñas |
 | IA embeddings | Ollama — `bge-m3` (1024 dims, multilingüe) |
-| OCR | Tesseract.js (imágenes) |
+| OCR facturas | Ollama visión — `deepseek-ocr` (`OLLAMA_OCR_MODEL`); Tesseract.js como fallback |
 | Extracción PDF | pdf-parse v2 |
 | Extracción DOCX | mammoth |
 | Auth | JWT + bcrypt |
@@ -48,8 +48,9 @@ cp .env.example .env   # editar con valores reales
 docker compose up -d
 
 # 3. Descargar modelos de Ollama (solo la primera vez)
-docker exec clouddrive-ollama ollama pull qwen2.5:3b
+docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # o qwen2.5:3b en máquinas pequeñas
 docker exec clouddrive-ollama ollama pull bge-m3
+docker exec clouddrive-ollama ollama pull deepseek-ocr        # OCR de facturas (opcional, hay fallback)
 ```
 
 | URL | Servicio |
@@ -81,11 +82,16 @@ MINIO_CONSOLE_HOST=9001
 API_PORT_HOST=3000
 JWT_SECRET=<mínimo 32 chars aleatorios>
 
-# Ollama (en local lo sobreescribe el override a http://ollama:11434)
+# Ollama (en local lo sobreescribe el override a http://ollama:11434;
+# en el servidor apunta al Ollama externo con GPU vía host.docker.internal)
 OLLAMA_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=qwen2.5:3b
+OLLAMA_MODEL=qwen2.5-coder:14b
 OLLAMA_EMBED_MODEL=bge-m3
+OLLAMA_OCR_MODEL=deepseek-ocr
 ```
+
+> El servicio `api` del `docker-compose.yml` incluye `extra_hosts: host.docker.internal:host-gateway`
+> para que el contenedor pueda alcanzar el Ollama del host/servidor en Linux.
 
 ---
 
@@ -133,7 +139,8 @@ src/
     carpetas.service.ts   ← Carpetas: mover/copiar/vaciar/borrar con contenido
     chat.service.ts       ← Chatbot IA (ver sección CHAT)
     extraccion.service.ts ← Extrae texto de PDF/DOCX/txt/imagen
-    facturas.service.ts   ← Escaneo, obtención y ranking de facturas
+    facturas.service.ts   ← Escaneo (OCR deepseek-ocr), auto-escaneo al subir,
+                            analítica filtrable (ventasTop, totalesFacturado)
     rag.service.ts        ← Embeddings bge-m3, indexación, búsqueda semántica
 ```
 
@@ -212,17 +219,27 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 
 ### Flujo principal
 
-1. **Pre-flight de ventas**: regex sobre el mensaje del usuario detecta consultas de ventas ("vendido más", "top productos"…). Si coincide, llama `ventasTop` directamente sin pasar por el modelo → devuelve markdown preconstruido. Workaround para qwen2.5:3b que no hace function calling fiable.
+1. **Solo el último mensaje**: al modelo se le envía únicamente el último mensaje del usuario (no el historial). Reenviar turnos previos hacía que modelos pequeños **re-ejecutaran** acciones anteriores (p. ej. repetir `borrar_todo` al pedir cualquier cosa). Cada orden de archivos es independiente.
 
-2. **Bucle de herramientas** (máx 15 iter): llama Ollama → si hay `tool_calls` → ejecuta → **bypass pattern**: si TODAS las herramientas devuelven `resumen: string`, se retorna ese markdown directamente sin otra llamada al modelo (evita que el modelo pequeño reformatee mal, use `$` en vez de `€`, o invente datos).
+2. **Pre-flight de "borrar todo"**: regex que detecta "borra todo / todas las carpetas / empezar de cero" y llama `borrar_todo` directamente (el modelo no lo invocaba de forma fiable para esas frases).
+
+3. **Bucle de herramientas** (máx 15 iter): llama Ollama → si hay `tool_calls` → ejecuta → repite. Dos refuerzos:
+   - **Parser de respaldo de tool calls**: si el modelo escribe las llamadas como **texto JSON** en `content` (en vez de en `tool_calls`), se extraen con un escáner de llaves balanceadas (admite varias pegadas) y se ejecutan igual. Solo acepta nombres de herramientas reales.
+   - **Bypass pattern**: si TODAS las herramientas de una iteración devuelven `resumen: string`, se retorna ese markdown directamente sin otra llamada al modelo (evita que reformatee mal, use `$` en vez de `€`, o invente datos).
+
+`temperature: 0` y `keep_alive: 30m`.
 
 ### Herramientas disponibles al modelo
-`buscar_archivos`, `copiar_archivo`, `mover_archivo`, `renombrar_archivo`, `eliminar_archivo`, `crear_archivo`, `crear_carpeta`, `listar_carpetas`, `eliminar_carpeta`, `vaciar_carpeta`, `mover_carpeta`, `renombrar_carpeta`, `copiar_carpeta`, `borrar_todo`, `listar_papelera`, `restaurar_archivo`, `borrar_permanente`, `vaciar_papelera`, `leer_archivo`, `estadisticas`, `buscar_semantica`, `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`, `ventas_top`
+`buscar_archivos`, `copiar_archivo`, `mover_archivo`, `renombrar_archivo`, `eliminar_archivo`, `crear_archivo`, `crear_carpeta`, `listar_carpetas`, `eliminar_carpeta`, `vaciar_carpeta`, `mover_carpeta`, `renombrar_carpeta`, `copiar_carpeta`, `borrar_todo`, `listar_papelera`, `restaurar_archivo`, `borrar_permanente`, `vaciar_papelera`, `leer_archivo`, `estadisticas`, `buscar_semantica`, `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`, `ventas_top`, `totales_facturas`
 
-### Tools con bypass (devuelven markdown preconstruido)
-- `escanear_factura` → escanea PDF/imagen con Ollama (JSON schema forzado) → guarda en BD → devuelve markdown con € server-side
+### Analítica de facturas (`ventas_top`, `totales_facturas`)
+Ambas aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre de archivo; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo ranking), `mes`/`anio` o `desde`/`hasta`, `orden` (más/menos vendido). Si se nombran facturas concretas que aún **no están escaneadas**, se **escanean al vuelo** (`asegurarFacturasEscaneadas`) antes de agregar.
+
+### Tools con bypass (devuelven markdown preconstruido, con € server-side)
+- `escanear_factura` → OCR (deepseek-ocr) + extracción JSON forzada con Ollama → guarda en BD → markdown
 - `obtener_factura` → lee de BD directamente, sin re-escanear el PDF
-- `ventas_top` → SQL GROUP BY sobre lineas_factura → tabla markdown
+- `ventas_top` → ranking de productos (SQL GROUP BY sobre `lineas_factura`)
+- `totales_facturas` → totales (nº facturas, subtotal, IVA, total) filtrados
 
 ---
 
@@ -239,6 +256,21 @@ Búsqueda semántica:
 - Búsqueda **híbrida**: distancia coseno (`<=>`) OR `ILIKE` para keywords exactas
 - `MIN_SCORE = 0.50` calibrado para bge-m3 en español
 - Devuelve un fragmento representativo por archivo (deduplicado por archivoId)
+
+---
+
+## Auto-escaneo de facturas al subir
+
+Al subir un PDF/imagen, además de indexarlo para RAG, el controlador (`ctrlSubir`) dispara
+`autoEscanearArchivo` **en segundo plano** (fire-and-forget, igual que el RAG):
+
+1. Si el archivo es PDF/imagen, se escanea con `escanearFactura(..., { soloSiFactura: true })`.
+2. **Guardia**: solo persiste la factura si la extracción parece factura (tiene líneas o
+   importes > 0). Así no se crean facturas basura a partir de PDFs/imágenes cualesquiera.
+
+Resultado: la analítica de facturas funciona sin pasos manuales. Para facturas ya subidas
+antes de esta función, usar "escanea todas las facturas" en el chat (o nombrarlas, que se
+auto-escanean al consultarlas).
 
 ---
 
@@ -303,8 +335,18 @@ npm start    # ng serve → http://localhost:4200
 
 ## Limitaciones conocidas
 
-- **qwen2.5:3b** (2 GB RAM): function calling poco fiable. El pre-flight y el bypass son workarounds. Con qwen2.5:7b+ en GPU funciona correctamente.
-- **RAM del PC de desarrollo**: 7.8 GB total, ~2.2 GB libres. qwen2.5:7b necesita ~4.7 GB → OOM kill. Cuando haya mejor hardware: cambiar `OLLAMA_MODEL=qwen2.5:7b` en `.env` y `docker compose up -d api`.
+- **Modelo del chat**: en el servidor con GPU se usa `qwen2.5-coder:14b` (function calling fiable). En máquinas pequeñas, `qwen2.5:3b` tiene function calling poco fiable; el pre-flight, el parser de respaldo y el bypass son los workarounds que lo hacen usable.
+- **Cambiar de modelo**: editar `OLLAMA_MODEL` en `.env` y `docker compose up -d api` (recarga .env, sin rebuild). El modelo debe estar descargado en el Ollama correspondiente.
+- **PDFs escaneados (sin capa de texto)**: se leen con `pdf-parse`, que no hace OCR; solo las **imágenes** pasan por deepseek-ocr. Si una factura es un PDF puramente escaneado, habría que rasterizar las páginas a imagen antes del OCR (pendiente).
+- **Auto-escaneo al subir**: se ejecuta para todo PDF/imagen subido; con la guardia `soloSiFactura` no guarda los que no parecen factura, pero igualmente consume cómputo de OCR+IA por cada uno.
 - **Tipos de archivo permitidos**: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máximo 50 MB.
 - **Subida**: un archivo por petición HTTP; múltiples archivos → peticiones paralelas en el frontend.
 - **`acciones[]`** que devuelve el chat (ej: "Factura escaneada: 3 líneas") no se muestran en la UI actualmente.
+
+## Despliegue (servidor)
+
+- Monorepo clonado en el servidor; `docker compose build api && docker compose up -d api` tras `git pull`.
+- En el servidor **se borra `docker-compose.override.yml`** (no se usa Ollama en contenedor): la API apunta al Ollama externo con GPU vía `OLLAMA_URL=http://host.docker.internal:11434` + `extra_hosts`.
+- La API está detrás de nginx (servicio `web`): `app.set("trust proxy", 1)` en `app.ts` para que `express-rate-limit` lea bien la IP (X-Forwarded-For).
+- Puertos del host configurables por `.env` (`WEB_PORT_HOST`, `API_PORT_HOST`, `MINIO_PORT_HOST`, etc.) para evitar choques con otros servicios del servidor.
+- **No editar archivos a mano en el servidor**: cambios en local → commit → push → `git pull` (evita conflictos de merge).

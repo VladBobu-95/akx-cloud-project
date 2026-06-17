@@ -11,8 +11,8 @@ buscar por el **contenido** de los documentos (RAG con embeddings en pgvector).
 | Servidor HTTP / rutas | Express 5 + TypeScript (ts-node en dev, `tsc` en build) |
 | ORM / base de datos | TypeORM + PostgreSQL 16 (imagen **pgvector**) |
 | Almacenamiento de archivos | **MinIO** (S3-compatible), descarga por streaming desde la API |
-| IA / asistente | **Ollama**: chat `qwen2.5:7b` (*tool calling*) + embeddings `bge-m3` (RAG) |
-| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano |
+| IA / asistente | **Ollama**: chat `qwen2.5-coder:14b` (*tool calling*) + embeddings `bge-m3` (RAG) + OCR `deepseek-ocr` (facturas) |
+| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; OCR de imágenes con deepseek-ocr (fallback Tesseract) |
 | Subida de ficheros | Multer (en memoria, filtro MIME, límite 50 MB) |
 | Auth | JWT (`jsonwebtoken`) + bcrypt |
 | Validación | Zod (entrada y variables de entorno) |
@@ -34,10 +34,11 @@ mover archivo, buscar por contenido…) que ejecutan la lógica real con aislami
 ## Arranque
 
 ```bash
-copy .env.example .env       # rellenar contraseñas y JWT_SECRET (mín. 16 chars)
+cp .env.example .env         # rellenar contraseñas y JWT_SECRET (mín. 16 chars)
 docker compose up -d         # db + minio + api + web + ollama (en casa, vía override)
-docker exec clouddrive-ollama ollama pull qwen2.5:7b   # modelo del chatbot
-docker exec clouddrive-ollama ollama pull bge-m3       # modelo de embeddings (búsqueda)
+docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # chatbot (o qwen2.5:3b en máquinas pequeñas)
+docker exec clouddrive-ollama ollama pull bge-m3             # embeddings (búsqueda)
+docker exec clouddrive-ollama ollama pull deepseek-ocr       # OCR de facturas (opcional, hay fallback)
 ```
 
 Desarrollo con hot-reload (fuera de Docker): `cd backend && npm install && npm run dev`
@@ -83,15 +84,22 @@ devuelven 404 en vez de fingir éxito).
 Bucle de *tool calling* contra Ollama: el modelo recibe el mensaje + el catálogo de
 herramientas, decide cuáles llamar, la API las ejecuta de verdad y devuelve el
 resultado; se repite hasta que el modelo da la respuesta final. Las acciones reales se
-acumulan y se devuelven al frontend (las "✓"). Medidas para que sea fiable en CPU:
+acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
 
-- Modelo **`qwen2.5:7b`** (configurable con `OLLAMA_MODEL`; debe soportar tool calling).
-- **`temperature: 0`** (determinista) y **`keep_alive: 30m`** (no recarga el modelo entre mensajes).
-- El *system prompt* obliga a usar las herramientas, no inventar rutas y responder breve.
-- Herramientas disponibles: buscar/crear/mover/renombrar/copiar/eliminar archivos y
-  carpetas, papelera (listar/restaurar/borrar/vaciar), `leer_archivo`, `estadisticas`,
-  **`borrar_todo`** (envía todo a la papelera y elimina las carpetas) y
-  **`buscar_semantica`** (busca por el contenido de los documentos).
+- Modelo **`qwen2.5-coder:14b`** en el servidor con GPU (configurable con `OLLAMA_MODEL`;
+  debe soportar tool calling). `temperature: 0` y `keep_alive: 30m`.
+- **Solo se envía el último mensaje** al modelo (no el historial): reenviar turnos previos
+  hacía que modelos pequeños re-ejecutaran acciones anteriores (p. ej. repetir `borrar_todo`).
+- **Pre-flight de "borrar todo"** por regex (el modelo no lo invocaba fiable para esas frases).
+- **Parser de respaldo**: si el modelo emite las tool calls como texto JSON en `content`
+  en vez de en `tool_calls`, se extraen (escáner de llaves balanceadas) y se ejecutan igual.
+- **Bypass pattern**: si todas las tools de una iteración devuelven `resumen`, ese markdown
+  (con `€` server-side) se devuelve directo sin otra llamada al modelo.
+- Herramientas: buscar/crear/mover/renombrar/copiar/eliminar archivos y carpetas, papelera
+  (listar/restaurar/borrar/vaciar), `leer_archivo`, `estadisticas`, `borrar_todo`,
+  `buscar_semantica`, y **facturas**: `escanear_factura`, `escanear_todas_facturas`,
+  `obtener_factura`, `ventas_top` y `totales_facturas` (analítica filtrable por factura,
+  cliente, emisor, producto y periodo).
 
 **Cambiar de modelo:** edita `OLLAMA_MODEL` en `.env`, haz
 `docker exec clouddrive-ollama ollama pull <modelo>` y `docker compose up -d api`.
