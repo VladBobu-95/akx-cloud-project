@@ -199,7 +199,7 @@ interface Arrastre {
       <div class="context-menu" [style.left.px]="m.x" [style.top.px]="m.y">
         @if (m.tipo === 'archivo') {
           <button (click)="accionAbrirArchivo(m.ref)">👁️ Abrir</button>
-          <button (click)="accionEscanearFactura(m.ref)">🧾 Escanear factura</button>
+          <button (click)="accionEscanearFactura(m.ref)">🧾 Escanear</button>
           <button (click)="accionDescargarArchivo(m.ref)">⬇️ Descargar</button>
           <button (click)="accionCopiarArchivo(m.ref)">📋 Copiar</button>
           <button (click)="accionRenombrarArchivo(m.ref)">✏️ Renombrar</button>
