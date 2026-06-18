@@ -1506,6 +1506,47 @@ export const chatear = async (
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
+  // Pre-flight: ranking de productos ("qué es lo que más se vende [en julio]",
+  // "lo más/menos vendido", "producto más vendido", "qué vendí más", "ranking de
+  // ventas") con periodo opcional por NOMBRE de mes y/o año. El modelo pequeño a
+  // veces acierta los argumentos ({mes:7, orden:"mas"}) pero NO llama a la tool:
+  // los escupe como JSON en texto y se los muestra al usuario. Se resuelve aquí
+  // de forma determinista con "ventas_top". No captura cuando se nombra un
+  // producto concreto ("cuánto he vendido de X" no casa estos patrones) ni los
+  // rankings de cliente (piden "vendid"/"se vende"/"ranking de ventas", no
+  // "cliente"). Se compara sin tildes para tolerar acentos/enclíticos.
+  const esRankingVentas =
+    /\b(mas|menos)\s+vendid/.test(msgSinTildes) ||
+    /\bse\s+vende[n]?\s+(mas|menos)\b/.test(msgSinTildes) ||
+    /\bque\b.*\b(mas|menos)\b.*\bse\s+vende/.test(msgSinTildes) ||
+    /\bque\s+(mas|menos)\s+(he\s+)?vend(i|o|ido)/.test(msgSinTildes) ||
+    /\bproductos?\s+(mas|menos)\s+vendidos?\b/.test(msgSinTildes) ||
+    /\branking\s+de\s+(ventas|productos|lo\s+(mas|menos))/.test(msgSinTildes);
+  if (esRankingVentas) {
+    const MESES: Record<string, number> = {
+      enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
+      julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10,
+      noviembre: 11, diciembre: 12,
+    };
+    let mes: number | undefined;
+    for (const [nombreMes, num] of Object.entries(MESES)) {
+      if (new RegExp(`\\b${nombreMes}\\b`).test(msgSinTildes)) {
+        mes = num;
+        break;
+      }
+    }
+    const anioMatch = msgSinTildes.match(/\b(20\d{2})\b/);
+    const orden = /\bmenos\b/.test(msgSinTildes) ? "menos" : "mas";
+    const args: Record<string, unknown> = { orden };
+    if (mes) args.mes = mes;
+    if (anioMatch) args.anio = Number(anioMatch[1]);
+    const resultado = (await ejecutarTool("ventas_top", args, usuarioId, acciones)) as Record<
+      string,
+      unknown
+    >;
+    if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
   // Pre-flight: "¿tengo/hay/existe/dónde está... un archivo llamado X?" o
   // "busca el archivo X" es una simple comprobación de existencia/ubicación
   // que debería ser instantánea. El modelo a veces decide "comprobar"
