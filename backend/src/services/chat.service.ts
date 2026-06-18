@@ -10,6 +10,7 @@ import {
   crearArchivoTexto,
   listarPapelera,
   restaurarArchivo,
+  restaurarTodo,
   borrarPermanente,
   vaciarPapelera,
   eliminarTodosLosArchivos,
@@ -142,7 +143,7 @@ Cómo actuar:
 - Si el usuario pide borrar TODAS las carpetas (ej: "borra todas las carpetas"), usa "borrar_todas_carpetas": borra las carpetas Y su contenido (a la papelera), pero NO toca los archivos que ya estaban en la raíz. Si pide borrar TODOS los archivos/ficheros (ej: "borra todos los ficheros") sin mencionar carpetas, usa "borrar_todos_archivos": borra todos los archivos pero deja las carpetas (ahora vacías). Si pide borrar/vaciar TODO (absolutamente todo, incluida la raíz) o "empezar de cero", usa "borrar_todo".
 - Para mover/renombrar/copiar/eliminar/vaciar una carpeta que YA EXISTE, indica solo su NOMBRE (ej: "tmp"); el sistema la localiza igual que con archivos, sin necesidad de la ruta completa. Solo da la ruta completa (ej: "/proyectos/tmp") si quieres ser explícito o si hay varias carpetas con el mismo nombre y te piden aclarar. La ruta completa SÍ es obligatoria al CREAR una carpeta nueva (no existe nada que localizar) y al indicar el destino de un mover/copiar.
 - Para listar carpetas usa "listar_carpetas" (devuelve TODAS, incluidas las que tienen archivos).
-- Papelera: "listar_papelera", "restaurar_archivo" (recuperar), "borrar_permanente" (definitivo, irreversible) y "vaciar_papelera". OJO: "borra/elimina X de la papelera" significa BORRAR DEFINITIVAMENTE ese archivo (usa "borrar_permanente"), NO recuperarlo. Solo uses "restaurar_archivo" si el usuario dice explícitamente "restaura"/"recupera"/"saca X de la papelera".
+- Papelera: "listar_papelera", "restaurar_archivo" (recuperar uno), "restaurar_todo" (recuperar TODOS los de la papelera de golpe), "borrar_permanente" (definitivo, irreversible, uno) y "vaciar_papelera" (definitivo, irreversible, TODOS). OJO: "borra/elimina X de la papelera" significa BORRAR DEFINITIVAMENTE ese archivo (usa "borrar_permanente"), NO recuperarlo. Solo uses "restaurar_archivo"/"restaurar_todo" si el usuario dice explícitamente "restaura"/"recupera"/"saca X de la papelera". "restaurar_todo" y "vaciar_papelera" son ACCIONES OPUESTAS (recuperar vs. borrar para siempre) — NUNCA uses una cuando piden la otra.
 - Para responder sobre el contenido de un archivo CONCRETO (sabes su nombre) usa "leer_archivo". Si el usuario solo pide "lee/muestra/qué contiene X" sin una pregunta concreta sobre ese contenido, MUESTRA el contenido devuelto tal cual (no digas solo "lo he leído"). Para cifras de uso, "estadisticas".
 - Para preguntas sobre el CONTENIDO sin saber en qué archivo está (ej: "¿qué documento habla de X?", "¿dónde dice algo sobre Y?", "resume lo que tengo sobre Z") usa "buscar_semantica": busca por significado dentro de todos los documentos y devuelve los más relevantes con un fragmento. Responde basándote en esos fragmentos y di de qué archivo salen.
 - Una factura es un ARCHIVO normal (un PDF/imagen). Para copiarla/moverla/renombrarla/eliminarla usa SIEMPRE "copiar_archivo"/"mover_archivo"/"renombrar_archivo"/"eliminar_archivo" con su nombre — NO existen herramientas como "mover_factura" ni similares; nunca te inventes nombres de herramienta que no estén en la lista.
@@ -368,6 +369,15 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "restaurar_todo",
+      description:
+        "Recupera TODOS los archivos de la papelera de una vez (no borra nada). Úsalo cuando pidan 'restaura/recupera todos los archivos/ficheros' o 'restaura toda la papelera'. NUNCA confundas esto con 'vaciar_papelera', que es justo lo opuesto (borrado definitivo).",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "borrar_permanente",
       description:
         "Borra DEFINITIVAMENTE un archivo de la papelera (no se puede deshacer). Úsalo para 'borra/elimina X de la papelera' o 'borra X definitivamente'.",
@@ -382,7 +392,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "vaciar_papelera",
-      description: "Vacía la papelera: borra definitivamente todos los archivos eliminados.",
+      description:
+        "Borra DEFINITIVAMENTE todos los archivos de la papelera (no se puede deshacer). Úsalo SOLO si piden explícitamente 'vaciar/borrar definitivamente la papelera'. NUNCA lo uses para 'restaurar todos los archivos' — eso es 'restaurar_todo', la acción contraria.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -897,6 +908,11 @@ const ejecutarTool = async (
         acciones.push(`Restaurado "${res.archivo!.nombre}"`);
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
       }
+      case "restaurar_todo": {
+        const r = await restaurarTodo(usuarioId);
+        acciones.push(`Restaurados ${r.restaurados} archivo/s de la papelera.`);
+        return { ok: true, restaurados: r.restaurados, resumen: "Hecho." };
+      }
       case "borrar_permanente": {
         const res = await resolverEnPapelera(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
@@ -1362,6 +1378,24 @@ export const chatear = async (
         return { respuesta: "Hecho.", acciones };
       }
     }
+  }
+
+  // Pre-flight: "restaura/recupera todos los archivos/ficheros" (recuperar TODA
+  // la papelera de una vez). Sin este pre-flight, el modelo no tiene ninguna tool
+  // de "restaurar todo" entre las que conoce y puede "resolver" la frase con la
+  // única tool masiva de papelera que sí existía -vaciar_papelera- (se vio
+  // exactamente esto: "restaura todos los ficheros" acabó vaciando la papelera,
+  // justo la acción opuesta -borrado DEFINITIVO- a la pedida). Se resuelve aquí
+  // sin pasar por el modelo, igual que el resto de borrados/restauraciones masivas.
+  const esRestaurarTodo =
+    new RegExp(`\\b${VERBO_RESTAURAR}\\b\\s+todo\\b`).test(msgSinTildes) ||
+    new RegExp(
+      `\\b${VERBO_RESTAURAR}\\b\\s+(?:todos?|todas?)\\s+(?:el\\s+|la\\s+|los\\s+|las\\s+)?(?:archivos?|ficheros?|papelera)\\b`,
+    ).test(msgSinTildes);
+  if (esRestaurarTodo) {
+    const r = await restaurarTodo(usuarioId);
+    acciones.push(`Restaurados ${r.restaurados} archivo/s de la papelera.`);
+    return { respuesta: "Hecho.", acciones };
   }
 
   // Pre-flight: "¿qué hay en la papelera?" es una consulta directa y frecuente

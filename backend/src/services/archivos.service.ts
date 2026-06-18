@@ -389,6 +389,20 @@ export const vaciarPapelera = async (
   return { borrados: archivos.length };
 };
 
+// --- RESTAURAR TODO ---
+// Recupera TODOS los archivos que el usuario tiene en la papelera. Reutiliza
+// restaurarArchivo (uno a uno) para que se aplique igual su lógica de sufijo
+// "(restaurado)" si ya hay un archivo activo con el mismo nombre.
+export const restaurarTodo = async (
+  usuarioId: string,
+): Promise<{ restaurados: number }> => {
+  const archivos = await listarPapelera(usuarioId);
+  for (const archivo of archivos) {
+    await restaurarArchivo(archivo.id, usuarioId);
+  }
+  return { restaurados: archivos.length };
+};
+
 // Envía a la papelera TODOS los archivos activos del usuario (de cualquier
 // carpeta o de la raíz), pero NO toca las carpetas. Devuelve cuántos archivos afectó.
 export const eliminarTodosLosArchivos = async (
