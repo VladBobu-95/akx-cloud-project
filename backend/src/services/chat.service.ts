@@ -1080,8 +1080,48 @@ export const chatear = async (
   const esListarSoloArchivos = !esListarAmbos && pideArchivos;
   const esListarSoloCarpetas = !esListarAmbos && !esListarSoloArchivos && pideCarpetas;
   const soloRaiz = /\bra[ií]z\b/.test(msgLower);
+  const esListado = esListarAmbos || esListarSoloArchivos || esListarSoloCarpetas;
 
-  if (esListarAmbos || esListarSoloArchivos || esListarSoloCarpetas) {
+  // Si además nombran una carpeta concreta ("dentro de la carpeta X", "de la
+  // carpeta X"), el listado se limita a esa carpeta en vez de a todo el usuario
+  // (antes "lista todo lo que tengo dentro de la carpeta X" ignoraba el filtro
+  // y devolvía absolutamente todo).
+  const matchCarpetaObjetivo = esListado ? msgLower.match(/carpeta\s+([\wÀ-ÿ/-]+)/) : null;
+  if (matchCarpetaObjetivo) {
+    const res = await resolverCarpeta(usuarioId, matchCarpetaObjetivo[1]);
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      return {
+        respuesta: `Hay varias carpetas con ese nombre, ¿cuál quieres?\n\n${res.opciones
+          .map((o) => `- ${o}`)
+          .join("\n")}`,
+        acciones,
+      };
+    }
+    const ruta = res.ruta!;
+    const partes: string[] = [];
+    if (esListarAmbos || esListarSoloCarpetas) {
+      const sub = (await listarTodasCarpetas(usuarioId)).filter((c) => c.ruta.startsWith(`${ruta}/`));
+      partes.push(
+        sub.length
+          ? `**Carpetas dentro de ${ruta}** (${sub.length}):\n${sub.map((c) => `- ${c.ruta}`).join("\n")}`
+          : `No hay carpetas dentro de ${ruta}.`,
+      );
+    }
+    if (esListarAmbos || esListarSoloArchivos) {
+      const { archivos } = await listarArchivos(usuarioId, ruta, 1, 200);
+      partes.push(
+        archivos.length
+          ? `**Archivos dentro de ${ruta}** (${archivos.length}):\n${archivos
+              .map((a) => `- ${a.nombre}`)
+              .join("\n")}`
+          : `No hay archivos dentro de ${ruta}.`,
+      );
+    }
+    return { respuesta: partes.join("\n\n"), acciones };
+  }
+
+  if (esListado) {
     const partes: string[] = [];
     if (esListarAmbos || esListarSoloCarpetas) {
       const todas = await listarTodasCarpetas(usuarioId);
