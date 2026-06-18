@@ -133,6 +133,9 @@ export const buscarSemantica = async (
   // (distancia coseno por debajo del umbral) O (b) contiene literalmente el texto
   // buscado (ILIKE). Así una palabra suelta como "pintura" que aparece en la
   // factura sale aunque su similitud semántica sea media, sin devolver basura.
+  // El ILIKE usa unaccent() en ambos lados (igual que la analítica de facturas)
+  // para que "tecnologia" encuentre "Tecnología" — requiere la extensión
+  // unaccent (migración HabilitarUnaccent).
   const maxDist = 1 - MIN_SCORE;
   const kw = `%${texto}%`;
   const filas: Array<{
@@ -147,7 +150,7 @@ export const buscarSemantica = async (
      FROM "fragmentos" f
      JOIN "archivos" a ON a."id" = f."archivoId"
      WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NULL
-       AND ( (f."embedding" <=> $2::vector) <= $3 OR f."texto" ILIKE $4 )
+       AND ( (f."embedding" <=> $2::vector) <= $3 OR unaccent(f."texto") ILIKE unaccent($4) )
      ORDER BY "dist" ASC
      LIMIT $5`,
     [usuarioId, vecLiteral(vec), maxDist, kw, k * 4],

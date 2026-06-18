@@ -534,6 +534,26 @@ export const copiarArchivo = async (
   try {
     const guardado = await repo().save(copia);
     if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal);
+
+    // Duplicamos los fragmentos RAG del original para que la COPIA también
+    // aparezca en la búsqueda semántica (antes la copia tenía textoExtraido pero
+    // ningún fragmento, así que era invisible para "qué documento habla de X").
+    // Se reutilizan los embeddings ya calculados (INSERT ... SELECT): no hace
+    // falta volver a llamar a Ollama. Best-effort: si falla, la copia ya está
+    // guardada y no se aborta (igual que el resto del pipeline RAG).
+    // NO se copia la Factura asociada a propósito: duplicar el registro haría que
+    // la misma factura contara dos veces en la analítica (totales/ventas).
+    try {
+      await AppDataSource.query(
+        `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "indice", "texto", "embedding")
+         SELECT $1, "propietarioId", "indice", "texto", "embedding"
+         FROM "fragmentos" WHERE "archivoId" = $2`,
+        [guardado.id, original.id],
+      );
+    } catch (errFrag) {
+      console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
+    }
+
     delete (guardado as Partial<Archivo>).propietario;
     return guardado;
   } catch (err) {
