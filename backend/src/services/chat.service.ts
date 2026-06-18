@@ -1134,18 +1134,25 @@ export const chatear = async (
     return { respuesta: `En la papelera tienes ${lista.length} archivo(s):\n\n${detalle}`, acciones };
   }
 
-  // Pre-flight: "¿tengo/hay/existe un archivo llamado X?" o "busca el archivo
-  // X" es una simple comprobación de existencia que debería ser instantánea.
-  // El modelo a veces decide "comprobar" escaneando la factura (OCR, lento)
-  // en vez de simplemente buscar por nombre, así que se resuelve aquí
-  // directamente sin pasar por Ollama.
+  // Pre-flight: "¿tengo/hay/existe/dónde está... un archivo llamado X?" o
+  // "busca el archivo X" es una simple comprobación de existencia/ubicación
+  // que debería ser instantánea. El modelo a veces decide "comprobar"
+  // escaneando la factura (OCR, lento, y en servidores sin GPU puede tirar
+  // abajo el proceso) en vez de simplemente buscar por nombre, así que se
+  // resuelve aquí directamente sin pasar por Ollama. Se separa la intención
+  // (tengo/hay/existe/busca/dónde, en cualquier parte de la frase) del
+  // nombre (lo que sigue a "archivo"/"fichero"), para no depender de que no
+  // haya palabras de más en medio (ej. "existe EL archivo X").
+  const tieneIntencionExistencia = /\b(tengo|hay|existe|busca(r)?|d[oó]nde)\b/.test(msgLower);
+  const matchNombreArchivoBuscado = msgLower.match(
+    /(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)/,
+  );
   const matchExisteArchivo =
-    !/borra|elimina|mueve|mover|copia|copiar|renombra|cambia|escane[ao]/.test(msgLower) &&
-    msgLower.match(
-      /(?:tengo|hay|existe)\s+(?:un\s+|alg[uú]n\s+)?(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)|busca(?:r)?\s+(?:el\s+)?(?:archivo|fichero)\s+["']?([\wÀ-ÿ.-]+)/,
-    );
-  if (matchExisteArchivo) {
-    const nombreBuscado = matchExisteArchivo[1] ?? matchExisteArchivo[2];
+    tieneIntencionExistencia &&
+    matchNombreArchivoBuscado &&
+    !/borra|elimina|mueve|mover|copia|copiar|renombra|cambia|escane[ao]|muestra|abre/.test(msgLower);
+  if (matchExisteArchivo && matchNombreArchivoBuscado) {
+    const nombreBuscado = matchNombreArchivoBuscado[1];
     const lista = await buscarArchivos(usuarioId, nombreBuscado);
     if (lista.length === 0) {
       return { respuesta: `No, no tienes ningún archivo llamado "${nombreBuscado}".`, acciones };
@@ -1318,9 +1325,24 @@ export const chatear = async (
       const resultado = await ejecutarTool(tc.function.name, args, usuarioId, acciones);
       messages.push({ role: "tool", content: JSON.stringify(resultado) });
 
+      const r = resultado as Record<string, unknown>;
+
+      // Si hace falta aclarar entre varias coincidencias, se construye la
+      // pregunta aquí mismo: dejarlo en manos del modelo a veces resultaba en
+      // que preguntara "¿cuál quieres?" sin listar ninguna opción real.
+      if (r.necesita_aclaracion === true && Array.isArray(r.opciones)) {
+        const lista = (r.opciones as unknown[])
+          .map((o) => {
+            if (typeof o === "string") return `- ${o}`;
+            const obj = o as { nombre?: string; carpeta?: string };
+            return `- ${obj.nombre}${obj.carpeta && obj.carpeta !== "/" ? ` (${obj.carpeta})` : ""}`;
+          })
+          .join("\n");
+        return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+      }
+
       // Cualquier herramienta que devuelva un "resumen" (facturas, ventas_top,
       // totales_facturas) trae el markdown ya formateado con € server-side.
-      const r = resultado as Record<string, unknown>;
       if (typeof r.resumen === "string") {
         resumenes.push(r.resumen);
       }
