@@ -2,6 +2,7 @@ import { app } from "./app";
 import { env } from "./config/env";
 import { AppDataSource } from "./config/database";
 import { inicializarBucket } from "./config/minio";
+import { verificarModelosOllama } from "./config/ollama";
 
 const main = async (): Promise<void> => {
   await AppDataSource.initialize();
@@ -9,6 +10,8 @@ const main = async (): Promise<void> => {
 
   await inicializarBucket();
   console.log("MinIO listo");
+
+  await verificarModelosOllama();
 
   app.listen(env.PORT, () => {
     console.log(`API escuchando en http://localhost:${env.PORT}`);
