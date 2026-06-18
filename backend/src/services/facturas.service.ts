@@ -334,7 +334,11 @@ const construirFiltro = (
   usuarioId: string,
   filtro: FiltroFacturas,
 ): { where: string; params: unknown[] } => {
-  const cond: string[] = [`f."propietarioId" = $1`];
+  // Excluye facturas cuyo archivo está en la papelera: sin esto, una factura
+  // borrada seguía contando en ventas_top/totales_facturas (el registro de
+  // Factura en BD no depende del archivo para "existir" en estas consultas).
+  // a."id" IS NULL cubre el caso (raro) de una factura sin archivo asociado.
+  const cond: string[] = [`f."propietarioId" = $1`, `(a."id" IS NULL OR a."eliminadoEn" IS NULL)`];
   const params: unknown[] = [usuarioId];
   const add = (valor: unknown): string => {
     params.push(valor);

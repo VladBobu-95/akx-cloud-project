@@ -308,6 +308,28 @@ export const restaurarArchivo = async (
     throw new AppError(400, "El archivo no está en la papelera");
   }
 
+  // Si mientras estaba en la papelera se creó/subió otro archivo activo con el
+  // mismo nombre en la misma carpeta (ej. se volvió a escanear la factura, o
+  // se resubió el archivo), restaurar tal cual generaría un duplicado exacto
+  // (incluido el registro de Factura asociado si es una factura, duplicando
+  // los totales). Se le pone un sufijo automático en vez de chocar en silencio.
+  let nombreFinal = archivo.nombre;
+  let intento = 0;
+  while (
+    await repo().findOne({
+      where: { nombre: nombreFinal, carpeta: archivo.carpeta, propietario: { id: usuarioId } },
+    })
+  ) {
+    intento++;
+    const punto = archivo.nombre.lastIndexOf(".");
+    const base = punto > 0 ? archivo.nombre.slice(0, punto) : archivo.nombre;
+    const ext = punto > 0 ? archivo.nombre.slice(punto) : "";
+    nombreFinal = intento === 1 ? `${base} (restaurado)${ext}` : `${base} (restaurado ${intento})${ext}`;
+  }
+  if (nombreFinal !== archivo.nombre) {
+    await repo().update(id, { nombre: nombreFinal });
+  }
+
   // restore pone eliminadoEn a null → vuelve a aparecer en las queries normales
   await repo().restore(id);
 };
