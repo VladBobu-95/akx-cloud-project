@@ -14,11 +14,14 @@ const repo = () => AppDataSource.getRepository(Usuario);
 // --- SCHEMAS DE VALIDACIÓN (Zod) ---
 // Zod valida los datos que llegan del cliente antes de procesarlos.
 
+// OJO: aquí NO se acepta "rol". Si se incluyera, cualquiera podría auto-
+// registrarse como "admin" pasándolo en el body (escalada de privilegios). El
+// rol siempre lo fija el servidor a "user" (el default de la entidad); un admin
+// solo debería poder crearse por otra vía controlada (seed/migración/ruta admin).
 export const schemaRegistro = z.object({
   email: z.string().email("email inválido"),
   password: z.string().min(8, "la contraseña debe tener al menos 8 caracteres"),
   nombre: z.string().min(1, "el nombre de usuario es obligatorio"),
-  rol: z.enum(["user", "admin"]).default("user"),
 });
 
 export const schemaLogin = z.object({
@@ -38,12 +41,12 @@ export const registrar = async (
   // El número 12 es el "salt rounds": cuanto más alto, más seguro pero más lento.
   const passwordHash = await bcrypt.hash(datos.password, 12);
 
-  // Creamos el objeto Usuario y lo guardamos en la BD
+  // Creamos el objeto Usuario y lo guardamos en la BD. El rol NO se toma del
+  // input: se queda con el default de la entidad ("user").
   const usuario = repo().create({
     email: datos.email,
     nombre: datos.nombre,
     passwordHash,
-    rol: datos.rol,
   });
   await repo().save(usuario);
 
