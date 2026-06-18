@@ -1435,28 +1435,37 @@ export class ArchivosPage {
     const opsArch = archIds.map(id => this.svc.eliminar(id));
     const archsEnCarpetas = carpRutas.flatMap(ruta => this.archivosBajo(ruta));
     const opsCarp = archsEnCarpetas.map(a => this.svc.eliminar(a.id));
-    const limpiarCarpetasLocal = () => {
+    const actualizarCarpetasLocal = () => {
       for (const ruta of carpRutas) {
         this.carpetas.update(v => v.filter(c => c.ruta !== ruta && !c.ruta.startsWith(ruta + '/')));
-        this.svc.eliminarCarpetaApi(ruta).subscribe({ error: () => {} });
         const act = this.rutaActual();
         if (act === ruta || act.startsWith(ruta + '/')) this.rutaActual.set(this.padre(ruta));
       }
     };
-    const todos = [...opsArch, ...opsCarp];
-    if (todos.length === 0) {
-      limpiarCarpetasLocal();
+    // Borra la fila de "carpetas" (carpetas persistidas, aunque ya no estén
+    // vacías tras borrar su contenido arriba) DESPUÉS de los archivos, y se
+    // espera su respuesta antes de refrescar: si se dispara sin esperar (como
+    // antes) y se recarga la lista demasiado pronto, el DELETE puede no haber
+    // terminado todavía en el servidor y la carpeta "reaparece" hasta que se
+    // repite la acción una segunda vez.
+    const borrarCarpetasYTerminar = () => {
+      actualizarCarpetasLocal();
       this.limpiarSeleccion();
-      this.toast.exito(`${n} elemento${n !== 1 ? 's' : ''} borrado${n !== 1 ? 's' : ''}`);
+      this.toast.exito(`${n} elemento${n !== 1 ? 's' : ''} enviado${n !== 1 ? 's' : ''} a la papelera`);
+      if (carpRutas.length === 0) {
+        this.cargar();
+        return;
+      }
+      forkJoin(carpRutas.map(ruta => this.svc.eliminarCarpetaApi(ruta).pipe(catchError(() => of(null)))))
+        .subscribe(() => this.cargar());
+    };
+    const todosArchivos = [...opsArch, ...opsCarp];
+    if (todosArchivos.length === 0) {
+      borrarCarpetasYTerminar();
       return;
     }
-    forkJoin(todos).subscribe({
-      next: () => {
-        limpiarCarpetasLocal();
-        this.limpiarSeleccion();
-        this.toast.exito(`${n} elemento${n !== 1 ? 's' : ''} enviado${n !== 1 ? 's' : ''} a la papelera`);
-        this.cargar();
-      },
+    forkJoin(todosArchivos).subscribe({
+      next: () => borrarCarpetasYTerminar(),
       error: (err) => this.toast.error(mensajeError(err)),
     });
   }
