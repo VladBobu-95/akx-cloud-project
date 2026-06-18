@@ -634,7 +634,7 @@ const ejecutarTool = async (
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a crear." };
         const ruta = await crearCarpeta(usuarioId, rutaArg);
         acciones.push(`Carpeta creada: ${ruta}`);
-        return { ok: true, ruta };
+        return { ok: true, ruta, resumen: "Hecho." };
       }
       case "crear_archivo": {
         const carpeta = typeof args.carpeta === "string" && args.carpeta ? args.carpeta : "/";
@@ -652,14 +652,14 @@ const ejecutarTool = async (
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a borrar." };
         const r = await eliminarCarpetaConContenido(usuarioId, rutaArg);
         acciones.push(`Carpeta enviada a la papelera: ${rutaArg} (${r.borrados} archivo/s)`);
-        return { ok: true, borrados: r.borrados };
+        return { ok: true, borrados: r.borrados, resumen: "Hecho." };
       }
       case "vaciar_carpeta": {
         const rutaArg = extraerRuta(args);
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a vaciar." };
         const r = await vaciarCarpeta(usuarioId, rutaArg);
         acciones.push(`Contenido de ${rutaArg} enviado a la papelera (${r.borrados} archivo/s)`);
-        return { ok: true, borrados: r.borrados };
+        return { ok: true, borrados: r.borrados, resumen: "Hecho." };
       }
       case "listar_carpetas": {
         return await listarTodasCarpetas(usuarioId);
@@ -669,7 +669,7 @@ const ejecutarTool = async (
         acciones.push(
           `Borrado todo: ${r.archivos} archivo/s a la papelera y ${r.carpetas} carpeta/s eliminada/s`,
         );
-        return { ok: true, archivos: r.archivos, carpetas: r.carpetas };
+        return { ok: true, archivos: r.archivos, carpetas: r.carpetas, resumen: "Hecho." };
       }
       // --- Papelera ---
       case "listar_papelera": {
@@ -710,7 +710,7 @@ const ejecutarTool = async (
         const destino = unirRuta(normalizarRuta(destinoArg), hojaRuta(origen));
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta movida a ${destino} (${r.movidos} archivo/s)`);
-        return { ok: true, destino, movidos: r.movidos };
+        return { ok: true, destino, movidos: r.movidos, resumen: "Hecho." };
       }
       case "renombrar_carpeta": {
         const rutaArg = extraerRuta(args);
@@ -724,7 +724,7 @@ const ejecutarTool = async (
         const destino = unirRuta(padreRuta(origen), nuevoNombre);
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta renombrada a ${destino}`);
-        return { ok: true, destino, movidos: r.movidos };
+        return { ok: true, destino, movidos: r.movidos, resumen: "Hecho." };
       }
       case "copiar_carpeta": {
         const rutaArg = extraerRuta(args);
@@ -736,7 +736,7 @@ const ejecutarTool = async (
             : unirRuta(padreRuta(origen), `${hojaRuta(origen)} (copia)`);
         const r = await copiarCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta copiada a ${destino} (${r.copiados} archivo/s)`);
-        return { ok: true, destino, copiados: r.copiados };
+        return { ok: true, destino, copiados: r.copiados, resumen: "Hecho." };
       }
       // --- Leer / estadísticas ---
       case "leer_archivo": {
@@ -1001,7 +1001,7 @@ export const chatear = async (
     // Si TODAS las llamadas de esta iteración tienen resumen preconstruido, devolver
     // directamente sin otro turno del modelo (evita que reformatee mal o invente cosas).
     if (resumenes.length === toolCalls.length && resumenes.length > 0) {
-      return { respuesta: resumenes.join("\n\n---\n\n"), acciones };
+      return { respuesta: [...new Set(resumenes)].join("\n\n---\n\n"), acciones };
     }
   }
 

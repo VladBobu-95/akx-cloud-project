@@ -194,6 +194,9 @@ export const moverCarpetaConContenido = async (
   if (d === o || d.startsWith(`${o}/`)) {
     throw new AppError(400, "No puedes mover una carpeta dentro de sí misma");
   }
+  if (!(await carpetaExiste(usuarioId, o))) {
+    throw new AppError(404, `No existe ninguna carpeta "${o}".`);
+  }
   const archivosRepo = AppDataSource.getRepository(Archivo);
   const archivos = await archivosRepo
     .createQueryBuilder("a")
@@ -220,6 +223,9 @@ export const copiarCarpetaConContenido = async (
   const d = normalizarRuta(destino);
   if (d === o || d.startsWith(`${o}/`)) {
     throw new AppError(400, "No puedes copiar una carpeta dentro de sí misma");
+  }
+  if (!(await carpetaExiste(usuarioId, o))) {
+    throw new AppError(404, `No existe ninguna carpeta "${o}".`);
   }
   const archivosRepo = AppDataSource.getRepository(Archivo);
   const archivos = await archivosRepo
