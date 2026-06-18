@@ -56,9 +56,16 @@ const unirRuta = (padre: string, nombre: string): string =>
 // Extrae una ruta de carpeta válida de los args. El modelo a veces omite "ruta"
 // o la pone bajo otra clave; sin esto, String(undefined) === "undefined" creaba
 // carpetas literales "/undefined".
-const extraerRuta = (args: Record<string, unknown>): string | undefined => {
-  const candidato = args.ruta ?? args.carpeta ?? args.nombre ?? args.path;
-  return typeof candidato === "string" && candidato.trim() ? candidato : undefined;
+const extraerRuta = (
+  args: Record<string, unknown>,
+  ...claves: string[]
+): string | undefined => {
+  const alias = claves.length ? claves : ["ruta", "carpeta", "nombre", "path"];
+  for (const clave of alias) {
+    const candidato = args[clave];
+    if (typeof candidato === "string" && candidato.trim()) return candidato;
+  }
+  return undefined;
 };
 
 // --- Tipos del API de Ollama (/api/chat) ---
@@ -96,6 +103,7 @@ Cómo actuar:
 - Papelera: "listar_papelera", "restaurar_archivo" (recuperar), "borrar_permanente" (definitivo, irreversible) y "vaciar_papelera". OJO: "borra/elimina X de la papelera" significa BORRAR DEFINITIVAMENTE ese archivo (usa "borrar_permanente"), NO recuperarlo. Solo uses "restaurar_archivo" si el usuario dice explícitamente "restaura"/"recupera"/"saca X de la papelera".
 - Para responder sobre el contenido de un archivo CONCRETO (sabes su nombre) usa "leer_archivo". Para cifras de uso, "estadisticas".
 - Para preguntas sobre el CONTENIDO sin saber en qué archivo está (ej: "¿qué documento habla de X?", "¿dónde dice algo sobre Y?", "resume lo que tengo sobre Z") usa "buscar_semantica": busca por significado dentro de todos los documentos y devuelve los más relevantes con un fragmento. Responde basándote en esos fragmentos y di de qué archivo salen.
+- Una factura es un ARCHIVO normal (un PDF/imagen). Para copiarla/moverla/renombrarla/eliminarla usa SIEMPRE "copiar_archivo"/"mover_archivo"/"renombrar_archivo"/"eliminar_archivo" con su nombre — NO existen herramientas como "mover_factura" ni similares; nunca te inventes nombres de herramienta que no estén en la lista.
 - FACTURAS — elige la herramienta correcta:
   • Si el usuario pide VER o RESUMIR una factura específica YA escaneada → usa "obtener_factura" (lee de BD, rápido, sin re-procesar el PDF).
   • Si el usuario pide ESCANEAR/PROCESAR una o varias facturas concretas por nombre → usa "escanear_factura" UNA VEZ POR CADA archivo mencionado (nunca uses "escanear_todas_facturas" si el usuario nombró archivos específicos).
@@ -648,10 +656,10 @@ const ejecutarTool = async (
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
-        const r = await actualizarArchivo(res.archivo!.id, usuarioId, {
-          carpeta: String(args.carpeta),
-        });
-        acciones.push(`Movido "${r.nombre}" a ${args.carpeta}`);
+        const carpetaArg = extraerRuta(args, "carpeta", "carpeta_destino", "destino", "ruta");
+        if (!carpetaArg) return { error: "Falta indicar la carpeta destino." };
+        const r = await actualizarArchivo(res.archivo!.id, usuarioId, { carpeta: carpetaArg });
+        acciones.push(`Movido "${r.nombre}" a ${r.carpeta}`);
         return { ok: true, nombre: r.nombre, resumen: "Hecho." };
       }
       case "renombrar_archivo": {
@@ -966,6 +974,20 @@ const extraerToolCallsDeTexto = (content: string): OllamaToolCall[] => {
   return calls;
 };
 
+// Detecta si el texto parece un intento de tool call (objeto JSON con "name")
+// que extraerToolCallsDeTexto descartó por no ser una herramienta real (el
+// modelo se inventó un nombre, ej. "mover_factura"). Sirve para no mostrarle
+// al usuario el JSON crudo como si fuera la respuesta del asistente.
+const pareceIntentoToolCallInvalido = (content: string): boolean =>
+  extraerObjetosJSON(content).some((obj) => {
+    try {
+      const parsed = JSON.parse(obj) as { name?: unknown };
+      return typeof parsed.name === "string";
+    } catch {
+      return false;
+    }
+  });
+
 // Llama a Ollama /api/chat (sin streaming).
 const llamarOllama = async (messages: OllamaMessage[]): Promise<OllamaMessage> => {
   let res: Response;
@@ -1162,6 +1184,12 @@ export const chatear = async (
       toolCalls = extraerToolCallsDeTexto(respuesta.content);
     }
     if (toolCalls.length === 0) {
+      if (respuesta.content && pareceIntentoToolCallInvalido(respuesta.content)) {
+        return {
+          respuesta: "No he podido completar esa acción. ¿Puedes reformular la petición?",
+          acciones,
+        };
+      }
       return { respuesta: respuesta.content || "Hecho.", acciones };
     }
 
