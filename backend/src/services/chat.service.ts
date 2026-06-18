@@ -54,6 +54,26 @@ const hojaRuta = (r: string): string => {
 const unirRuta = (padre: string, nombre: string): string =>
   padre === "/" ? `/${nombre}` : `${padre}/${nombre}`;
 
+// Quita tildes (á→a, é→e...) para que los pre-flights de intención reconozcan
+// verbos con pronombre enclítico pegado ("bórralo", "elimínala", "vacíalas"),
+// que desplazan el acento y no casan con los patrones normales ni con \b
+// (no hay límite de palabra entre "borra" y "lo" en "borralo").
+const quitarTildes = (s: string): string =>
+  s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// quitarTildes no cambia la longitud de la cadena (cada letra con tilde se
+// queda en una sola letra sin tilde), así que los índices de un match hecho
+// sobre el texto sin tildes coinciden 1 a 1 con el texto original. Esto deja
+// recuperar el grupo capturado CON sus tildes/mayúsculas originales (para que
+// un nombre de archivo acentuado, ej. "Tecnología.pdf", no se busque luego sin
+// tilde) aunque el verbo se haya detectado sobre la versión sin tildes.
+const grupoOriginal = (original: string, m: RegExpMatchArray, grupo = 1): string => {
+  const capturado = m[grupo] ?? "";
+  const offset = m[0].indexOf(capturado);
+  const inicio = (m.index ?? 0) + Math.max(offset, 0);
+  return original.slice(inicio, inicio + capturado.length);
+};
+
 // Extrae una ruta de carpeta válida de los args. El modelo a veces omite "ruta"
 // o la pone bajo otra clave; sin esto, String(undefined) === "undefined" creaba
 // carpetas literales "/undefined".
@@ -1221,6 +1241,27 @@ export const chatear = async (
   // "borra todos los archivos/ficheros" (archivos, carpetas intactas).
   const ultimoMensaje = mensajes[mensajes.length - 1]?.contenido ?? "";
   const msgLower = ultimoMensaje.toLowerCase();
+  // Sin tildes, para los pre-flights de verbos de acción: así "bórralo todo" /
+  // "elimínalo" / "vacíalas" casan igual que "borra todo" / "elimina" / "vacia".
+  const msgSinTildes = quitarTildes(msgLower);
+  // Patrones de verbo reutilizados por los pre-flights de borrado/restaurar:
+  // admiten el pronombre enclítico pegado ("bórralo", "elimínala", "sácalos")
+  // ya que sin él "borra"/"elimina" no aparecen como palabra completa dentro
+  // de "borralo"/"eliminala" (no hay límite de palabra ahí para \b).
+  const VERBO_BORRAR = "(?:borra(?:r|lo|la|los|las)?|elimina(?:r|lo|la|los|las)?|quita(?:r|lo|la|los|las)?)";
+  const VERBO_RESTAURAR = "(?:restaura(?:r|lo|la|los|las)?|recupera(?:r|lo|la|los|las)?|saca(?:r|lo|la|los|las)?)";
+  // Mismo tratamiento (pronombre enclítico + sin tildes) para el resto de
+  // verbos de acción usados en los pre-flights de abrir/mostrar, buscar,
+  // crear, listar, y las listas de exclusión de otras acciones (mover/copiar/
+  // renombrar/escanear) que antes solo reconocían la forma sin pronombre.
+  const VERBO_ABRIR =
+    "(?:abre(?:lo|la|los|las)?|abrir|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?)";
+  const VERBO_BUSCAR = "(?:busca(?:r|lo|la|los|las)?)";
+  const VERBO_CREAR = "(?:crea(?:me)?(?:lo|la|los|las)?)";
+  const VERBO_LISTAR =
+    "(?:pasa(?:me)?(?:lo|la|los|las)?|dame|envia(?:me)?(?:lo|la|los|las)?|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?|lista(?:r|lo|la|los|las)?)";
+  const VERBO_OTRAS_ACCIONES =
+    "mueve(?:lo|la|los|las)?|mover|copia(?:lo|la|los|las)?|copiar|renombra(?:lo|la|los|las)?|cambia(?:lo|la|los|las)?|escane[ao](?:lo|la|los|las)?";
 
   // Pre-flight: si en el turno anterior se pidió aclarar entre varias
   // coincidencias y este mensaje es justo la opción elegida (el usuario copia/
@@ -1282,7 +1323,7 @@ export const chatear = async (
   const esListarPapelera =
     /papelera/.test(msgLower) &&
     /(qu[eé]\s+hay|lista(r)?|dame|mu[eé]stra(me)?|ense[ñn]a(me)?|p[aá]sa(me)?|ver)/.test(msgLower) &&
-    !/borra|elimina|restaura|recupera|vac[ií]a/.test(msgLower);
+    !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes);
   if (esListarPapelera) {
     const lista = await listarPapelera(usuarioId);
     if (lista.length === 0) return { respuesta: "La papelera está vacía.", acciones };
@@ -1295,14 +1336,14 @@ export const chatear = async (
   // modelo confunde a pesar de la instrucción explícita del prompt sobre esto
   // -se ha visto "borra X de la papelera" ejecutar un restaurar_archivo, justo
   // lo contrario de lo pedido-, así que se resuelven aquí de forma determinista.
-  if (/papelera/.test(msgLower)) {
-    const tieneIntencionRestaurar = /\b(restaura(?:r)?|recupera(?:r)?|saca(?:r)?)\b/.test(msgLower);
-    const tieneIntencionBorrarDef = /\b(borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b/.test(msgLower);
-    const matchNombrePapelera = msgLower.match(
-      /\b(?:restaura(?:r)?|recupera(?:r)?|saca(?:r)?|borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+(?:el\s+archivo\s+)?["']?([\wÀ-ÿ.-]+)/,
+  if (/papelera/.test(msgSinTildes)) {
+    const tieneIntencionRestaurar = new RegExp(`\\b${VERBO_RESTAURAR}\\b`).test(msgSinTildes);
+    const tieneIntencionBorrarDef = new RegExp(`\\b${VERBO_BORRAR}\\b`).test(msgSinTildes);
+    const matchNombrePapelera = msgSinTildes.match(
+      new RegExp(`\\b(?:${VERBO_RESTAURAR}|${VERBO_BORRAR})\\b\\s+(?:el\\s+archivo\\s+)?["']?([\\wÀ-ÿ.-]+)`),
     );
     if (matchNombrePapelera && (tieneIntencionRestaurar || tieneIntencionBorrarDef)) {
-      const res = await resolverEnPapelera(usuarioId, matchNombrePapelera[1]);
+      const res = await resolverEnPapelera(usuarioId, grupoOriginal(msgLower, matchNombrePapelera));
       if (res.error) return { respuesta: res.error, acciones };
       if (res.opciones) {
         const tool = tieneIntencionRestaurar ? "restaurar_archivo" : "borrar_permanente";
@@ -1330,12 +1371,12 @@ export const chatear = async (
   // funciona" cuando en realidad solo está tardando mucho). Se resuelve aquí
   // sin pasar por Ollama; si no está escaneada, se dice al instante en vez de
   // escanearla sin que el usuario lo pidiera.
-  const tieneIntencionAbrirFactura = /\b(abre|abrir|mu[eé]stra(me)?|ense[ñn]a(me)?)\b/.test(msgLower);
+  const tieneIntencionAbrirFactura = new RegExp(`\\b${VERBO_ABRIR}\\b`).test(msgSinTildes);
   const matchNombreFactura = msgLower.match(/\bfactura[\w.-]*\b/);
   const esAbrirFactura =
     tieneIntencionAbrirFactura &&
     !!matchNombreFactura &&
-    !/borra|elimina|mueve|mover|copia|copiar|renombra|cambia|escane[ao]/.test(msgLower);
+    !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes);
   if (esAbrirFactura && matchNombreFactura) {
     const res = await resolverArchivo(usuarioId, matchNombreFactura[0]);
     if (res.error) return { respuesta: res.error, acciones };
@@ -1370,7 +1411,9 @@ export const chatear = async (
   const esTotalesMultiple =
     pideTotales &&
     nombresFactura.length >= 2 &&
-    !/escane[ao]|abre|abrir|mu[eé]stra|vendid|ranking/.test(msgLower);
+    !new RegExp(`escane[ao](?:lo|la|los|las)?|abre(?:lo|la|los|las)?|abrir|muestra(?:me)?(?:lo|la|los|las)?|vendid|ranking`).test(
+      msgSinTildes,
+    );
   if (esTotalesMultiple) {
     const resultado = (await ejecutarTool(
       "totales_facturas",
@@ -1390,16 +1433,20 @@ export const chatear = async (
   // (tengo/hay/existe/busca/dónde, en cualquier parte de la frase) del
   // nombre (lo que sigue a "archivo"/"fichero"), para no depender de que no
   // haya palabras de más en medio (ej. "existe EL archivo X").
-  const tieneIntencionExistencia = /\b(tengo|hay|existe|busca(r)?|d[oó]nde)\b/.test(msgLower);
-  const matchNombreArchivoBuscado = msgLower.match(
+  const tieneIntencionExistencia = new RegExp(`\\b(tengo|hay|existe|${VERBO_BUSCAR}|donde)\\b`).test(
+    msgSinTildes,
+  );
+  const matchNombreArchivoBuscado = msgSinTildes.match(
     /(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)/,
   );
   const matchExisteArchivo =
     tieneIntencionExistencia &&
     matchNombreArchivoBuscado &&
-    !/borra|elimina|mueve|mover|copia|copiar|renombra|cambia|escane[ao]|muestra|abre/.test(msgLower);
+    !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES + "|muestra(?:me)?(?:lo|la|los|las)?|abre(?:lo|la|los|las)?").test(
+      msgSinTildes,
+    );
   if (matchExisteArchivo && matchNombreArchivoBuscado) {
-    const nombreBuscado = matchNombreArchivoBuscado[1];
+    const nombreBuscado = grupoOriginal(msgLower, matchNombreArchivoBuscado);
     const lista = await buscarArchivos(usuarioId, nombreBuscado);
     if (lista.length === 0) {
       return { respuesta: `No, no tienes ningún archivo llamado "${nombreBuscado}".`, acciones };
@@ -1411,19 +1458,19 @@ export const chatear = async (
   }
 
   const esBorrarTodoCompleto =
-    /borra(r)?\s+todo\b|vac[ií]a(r)?\s+todo\b|elimina(r)?\s+todo\b|empeza(r)?\s+de\s+cero/.test(
-      msgLower,
+    /borra(?:r|lo|la|los|las)?\s+todo\b|vacia(?:r|lo|la|los|las)?\s+todo\b|elimina(?:r|lo|la|los|las)?\s+todo\b|empeza(?:r)?\s+de\s+cero/.test(
+      msgSinTildes,
     );
   const esBorrarSoloCarpetas =
     !esBorrarTodoCompleto &&
-    !/archivo|fichero/.test(msgLower) &&
-    /(borra(r)?|vac[ií]a(r)?|elimina(r)?|quita(r)?)\s+todas?\s+(las\s+)?carpetas?/.test(msgLower);
+    !/archivo|fichero/.test(msgSinTildes) &&
+    /(borra(?:r|lo|la|los|las)?|vacia(?:r|lo|la|los|las)?|elimina(?:r|lo|la|los|las)?|quita(?:r|lo|la|los|las)?)\s+todas?\s+(las\s+)?carpetas?/.test(msgSinTildes);
   const esBorrarSoloArchivos =
     !esBorrarTodoCompleto &&
     !esBorrarSoloCarpetas &&
-    !/carpeta/.test(msgLower) &&
-    /(borra(r)?|vac[ií]a(r)?|elimina(r)?|quita(r)?)\s+todos?\s+(los\s+)?(archivos?|ficheros?)/.test(
-      msgLower,
+    !/carpeta/.test(msgSinTildes) &&
+    /(borra(?:r|lo|la|los|las)?|vacia(?:r|lo|la|los|las)?|elimina(?:r|lo|la|los|las)?|quita(?:r|lo|la|los|las)?)\s+todos?\s+(los\s+)?(archivos?|ficheros?)/.test(
+      msgSinTildes,
     );
 
   if (esBorrarTodoCompleto || esBorrarSoloCarpetas || esBorrarSoloArchivos) {
@@ -1455,19 +1502,17 @@ export const chatear = async (
     "este", "todo", "toda", "algo", "uno", "una", "ese", "esa",
   ]);
   const matchNombreArchivoABorrar =
-    msgLower.match(
-      /\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b.*?(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)/,
-    ) ||
-    msgLower.match(/\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+["']?([\wÀ-ÿ-]+\.[a-z0-9]{1,5})\b/) ||
+    msgSinTildes.match(new RegExp(`\\b${VERBO_BORRAR}\\b.*?(?:archivo|fichero)\\s+(?:llamado\\s+)?["']?([\\wÀ-ÿ.-]+)`)) ||
+    msgSinTildes.match(new RegExp(`\\b${VERBO_BORRAR}\\b\\s+["']?([\\wÀ-ÿ-]+\\.[a-z0-9]{1,5})\\b`)) ||
     (() => {
       // Sin extensión ni la palabra "archivo" (ej. "borra factura_F2026-101"):
       // solo se acepta si NO es una palabra suelta de la lista de arriba.
-      const m = msgLower.match(/\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+["']?([\wÀ-ÿ-]{4,})\b/);
-      return m && !STOPWORDS_BORRAR.has(m[1]) ? m : null;
+      const m = msgSinTildes.match(new RegExp(`\\b${VERBO_BORRAR}\\b\\s+["']?([\\wÀ-ÿ-]{4,})\\b`));
+      return m && !STOPWORDS_BORRAR.has(m[1]!) ? m : null;
     })();
-  const esBorrarUnArchivo = !!matchNombreArchivoABorrar && !/carpeta|papelera/.test(msgLower);
+  const esBorrarUnArchivo = !!matchNombreArchivoABorrar && !/carpeta|papelera/.test(msgSinTildes);
   if (esBorrarUnArchivo && matchNombreArchivoABorrar) {
-    const res = await resolverArchivo(usuarioId, matchNombreArchivoABorrar[1]);
+    const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchNombreArchivoABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
       registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", res.opciones);
@@ -1484,12 +1529,12 @@ export const chatear = async (
   // Pre-flight: "borra/elimina la carpeta X" (una carpeta concreta, ni archivo
   // ni borrado masivo). Igual que con archivos, el modelo no llama de forma
   // fiable a "eliminar_carpeta" para esta frase tan directa.
-  const matchNombreCarpetaABorrar = msgLower.match(
-    /\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b.*?carpeta\s+(?:llamada\s+)?["']?([\wÀ-ÿ/-]+)/,
+  const matchNombreCarpetaABorrar = msgSinTildes.match(
+    new RegExp(`\\b${VERBO_BORRAR}\\b.*?carpeta\\s+(?:llamada\\s+)?["']?([\\wÀ-ÿ/-]+)`),
   );
-  const esBorrarUnaCarpeta = !!matchNombreCarpetaABorrar && !/papelera/.test(msgLower);
+  const esBorrarUnaCarpeta = !!matchNombreCarpetaABorrar && !/papelera/.test(msgSinTildes);
   if (esBorrarUnaCarpeta && matchNombreCarpetaABorrar) {
-    const res = await resolverCarpeta(usuarioId, matchNombreCarpetaABorrar[1]);
+    const res = await resolverCarpeta(usuarioId, grupoOriginal(msgLower, matchNombreCarpetaABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
       registrarAclaracion(usuarioId, "eliminar_carpeta", {}, "ruta", res.opciones);
@@ -1507,7 +1552,8 @@ export const chatear = async (
   // archivo que todavía no existe y responde que no lo encuentra, en vez de
   // crearlo. No aplica a carpetas (esas sí funcionan bien con el modelo).
   const esCrearNota =
-    /\bcr[eé]a(?:me)?\b/.test(msgLower) && /\b(nota|archivo|documento|fichero)\b/.test(msgLower);
+    new RegExp(`\\b${VERBO_CREAR}\\b`).test(msgSinTildes) &&
+    /\b(nota|archivo|documento|fichero)\b/.test(msgLower);
   if (esCrearNota) {
     const matchNombreExt = ultimoMensaje.match(/\b([\wÀ-ÿ-]+\.(?:md|txt))\b/i);
     const matchLlamado = ultimoMensaje.match(/llamad[oa]\s+["']?([\wÀ-ÿ.-]+)/i);
@@ -1527,7 +1573,7 @@ export const chatear = async (
   // búsqueda semántica por tema. El modelo a veces no llama a "buscar_semantica"
   // para esta frase y en su lugar pide más detalles al usuario en vez de buscar.
   const matchResumenTema = ultimoMensaje.match(
-    /(?:resum[ei](?:me)?|qu[eé]\s+tengo|qu[eé]\s+(?:documento|archivo)s?\s+habla(?:n)?)\s+(?:lo\s+que\s+tengo\s+)?(?:sobre|acerca\s+de|de)\s+(.+)$/i,
+    /(?:resum[eéi](?:me)?(?:lo|la|los|las)?|qu[eé]\s+tengo|qu[eé]\s+(?:documento|archivo)s?\s+habla(?:n)?)\s+(?:lo\s+que\s+tengo\s+)?(?:sobre|acerca\s+de|de)\s+(.+)$/i,
   );
   if (matchResumenTema) {
     const tema = matchResumenTema[1].trim().replace(/[?.!]+$/, "");
@@ -1546,19 +1592,18 @@ export const chatear = async (
   // que el modelo a veces no llama a ninguna herramienta (responde "no recibí
   // respuesta de las funciones..."). Se detecta aquí y se construye la lista
   // directamente, sin depender del modelo.
-  const verboListar = "p[aá]sa(me)?|dame|env[ií]a(me)?|mu[eé]stra(me)?|ense[ñn]a(me)?|lista(r)?";
   // El lookahead negativo evita que "resume LO QUE TENGO sobre el proyecto X"
   // (una búsqueda semántica por tema, no un listado) dispare esto solo por
   // contener la subcadena "que tengo".
   const pideTodoGenerico =
-    new RegExp(`(${verboListar})\\s+todo\\b`).test(msgLower) ||
+    new RegExp(`(${VERBO_LISTAR})\\s+todo\\b`).test(msgSinTildes) ||
     /qu[eé]\s+tengo\b(?!\s+(sobre|de|acerca|relacionado))/.test(msgLower);
   const pideArchivos =
-    new RegExp(`(${verboListar})\\s+(todos\\s+)?(mis\\s+)?(los\\s+)?(archivos?|ficheros?)\\b`).test(
-      msgLower,
+    new RegExp(`(${VERBO_LISTAR})\\s+(todos\\s+)?(mis\\s+)?(los\\s+)?(archivos?|ficheros?)\\b`).test(
+      msgSinTildes,
     ) || /qu[eé]\s+(archivos?|ficheros?)\s+tengo/.test(msgLower);
   const pideCarpetas =
-    new RegExp(`(${verboListar})\\s+(todas\\s+)?(mis\\s+)?(las\\s+)?carpetas?\\b`).test(msgLower) ||
+    new RegExp(`(${VERBO_LISTAR})\\s+(todas\\s+)?(mis\\s+)?(las\\s+)?carpetas?\\b`).test(msgSinTildes) ||
     /qu[eé]\s+carpetas?\s+tengo/.test(msgLower);
   // Si el mensaje nombra ambos tipos (ej: "carpetas y ficheros") pero solo uno
   // coincide exactamente con el patrón verbo+sustantivo, se cuenta como ambos.
