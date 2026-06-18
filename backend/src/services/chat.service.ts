@@ -969,6 +969,18 @@ const ejecutarTool = async (
 
 const NOMBRES_TOOLS = new Set(TOOLS.map((t) => t.function.name));
 
+// El modelo a veces inventa nombres de tool con el patrón "<verbo>_factura"
+// (ej. "mover_factura", "copiar_factura") en vez de usar las tools reales de
+// archivo (una factura es un archivo normal). Se remapea al nombre real en
+// vez de fallar la acción.
+const remapearNombreTool = (nombre: string): string | undefined => {
+  if (NOMBRES_TOOLS.has(nombre)) return nombre;
+  const m = nombre.match(/^(copiar|mover|renombrar|eliminar|borrar)_facturas?$/);
+  if (!m) return undefined;
+  const verbo = m[1] === "borrar" ? "eliminar" : m[1];
+  return `${verbo}_archivo`;
+};
+
 // Extrae todos los objetos JSON de nivel superior `{...}` de un texto, respetando
 // el anidamiento y las comillas. Maneja varios objetos pegados o dentro de prosa.
 const extraerObjetosJSON = (texto: string): string[] => {
@@ -1012,10 +1024,11 @@ const extraerToolCallsDeTexto = (content: string): OllamaToolCall[] => {
   for (const obj of extraerObjetosJSON(content)) {
     try {
       const parsed = JSON.parse(obj) as { name?: unknown; arguments?: unknown };
-      if (parsed && typeof parsed.name === "string" && NOMBRES_TOOLS.has(parsed.name)) {
+      const nombreReal = typeof parsed.name === "string" ? remapearNombreTool(parsed.name) : undefined;
+      if (nombreReal) {
         calls.push({
           function: {
-            name: parsed.name,
+            name: nombreReal,
             arguments: (parsed.arguments as Record<string, unknown>) ?? {},
           },
         });
@@ -1100,6 +1113,29 @@ export const chatear = async (
   // "borra todos los archivos/ficheros" (archivos, carpetas intactas).
   const ultimoMensaje = mensajes[mensajes.length - 1]?.contenido ?? "";
   const msgLower = ultimoMensaje.toLowerCase();
+
+  // Pre-flight: "¿tengo/hay/existe un archivo llamado X?" o "busca el archivo
+  // X" es una simple comprobación de existencia que debería ser instantánea.
+  // El modelo a veces decide "comprobar" escaneando la factura (OCR, lento)
+  // en vez de simplemente buscar por nombre, así que se resuelve aquí
+  // directamente sin pasar por Ollama.
+  const matchExisteArchivo =
+    !/borra|elimina|mueve|mover|copia|copiar|renombra|cambia|escane[ao]/.test(msgLower) &&
+    msgLower.match(
+      /(?:tengo|hay|existe)\s+(?:un\s+|alg[uú]n\s+)?(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)|busca(?:r)?\s+(?:el\s+)?(?:archivo|fichero)\s+["']?([\wÀ-ÿ.-]+)/,
+    );
+  if (matchExisteArchivo) {
+    const nombreBuscado = matchExisteArchivo[1] ?? matchExisteArchivo[2];
+    const lista = await buscarArchivos(usuarioId, nombreBuscado);
+    if (lista.length === 0) {
+      return { respuesta: `No, no tienes ningún archivo llamado "${nombreBuscado}".`, acciones };
+    }
+    const detalle = lista
+      .map((a) => `- ${a.nombre}${a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`)
+      .join("\n");
+    return { respuesta: `Sí, tienes:\n\n${detalle}`, acciones };
+  }
+
   const esBorrarTodoCompleto =
     /borra(r)?\s+todo\b|vac[ií]a(r)?\s+todo\b|elimina(r)?\s+todo\b|empeza(r)?\s+de\s+cero/.test(
       msgLower,
@@ -1230,7 +1266,12 @@ export const chatear = async (
     const respuesta = await llamarOllama(messages);
     messages.push(respuesta);
 
-    let toolCalls = respuesta.tool_calls ?? [];
+    // Corrige nombres de tool inventados pero reconocibles (ej. "copiar_factura"
+    // -> "copiar_archivo") incluso cuando vienen en el campo tool_calls real.
+    let toolCalls = (respuesta.tool_calls ?? []).flatMap((tc) => {
+      const nombreReal = remapearNombreTool(tc.function.name);
+      return nombreReal ? [{ ...tc, function: { ...tc.function, name: nombreReal } }] : [];
+    });
     // Respaldo: si el modelo no usó el campo tool_calls pero escribió las
     // llamadas como texto JSON en content, las extraemos y ejecutamos.
     if (toolCalls.length === 0 && respuesta.content) {
