@@ -154,8 +154,9 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   (listar/restaurar/borrar/vaciar), `leer_archivo`, `estadisticas`, `buscar_semantica`,
   borrados masivos (`borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`), y
   **facturas**: `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`,
-  `ventas_top` y `totales_facturas` (analítica filtrable por factura, cliente, emisor,
-  producto y periodo). Cuando se resuelve un archivo concreto (p. ej. `obtener_factura`),
+  `ventas_top`, `totales_facturas` y `clientes_top` (ranking de clientes por gasto
+  total) — todas filtrables por factura, cliente, emisor, producto (solo `ventas_top`)
+  y periodo. Cuando se resuelve un archivo concreto (p. ej. `obtener_factura`),
   la respuesta del chat incluye `archivo: {id, nombre}` y el frontend muestra un botón
   para abrirlo en una pestaña nueva, igual que en el explorador.
 
@@ -212,6 +213,7 @@ con ejemplos reales de frases que entiende:
   - "¿qué producto vendí más?" / "ranking de lo menos vendido"
   - "¿cuánto le he facturado a Ferretería Sánchez?"
   - "total facturado en 2026" / "totales de factura_01 y factura_02"
+  - "top clientes por gasto total" / "¿qué cliente me ha comprado menos?" / "¿quién es mi mejor cliente?"
 - **Imágenes** — ver qué contienen, buscarlas por contenido, o tratarlas como factura:
   - "qué dice foto.jpg" / "muéstrame foto.jpg" (la descripción que se generó al
     subirla: la escrita a mano en el modal, o la automática — OCR si tenía texto
@@ -321,4 +323,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 1 — Drive básico:** auth JWT, subir/descargar/listar/carpetas, papelera, tests
 - [x] **Fase 2 — Chatbot:** Ollama + tool calling sobre archivos y carpetas
 - [x] **Fase 3 — RAG:** extracción de texto (PDF/Word/texto), embeddings (bge-m3 + pgvector), búsqueda híbrida
-- [x] **Fase 4 — Facturas:** OCR con visión (deepseek-ocr), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`), descripción de fotos sin texto (llava)
+- [x] **Fase 4 — Facturas:** OCR con visión (deepseek-ocr), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción de fotos sin texto (llava)
