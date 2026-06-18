@@ -318,20 +318,11 @@ ${lineas}
 // Lee los datos de una factura YA ESCANEADA desde la BD (sin re-procesar el PDF).
 export const obtenerFactura = async (
   usuarioId: string,
-  nombreArchivo: string,
+  archivoId: string,
 ): Promise<{ encontrada: boolean; resumen?: string; numero?: string }> => {
-  const archivoRepo = AppDataSource.getRepository(Archivo);
-  const archivos = await archivoRepo
-    .createQueryBuilder("a")
-    .where("a.propietarioId = :uid", { uid: usuarioId })
-    .andWhere("a.nombre ILIKE :n", { n: `%${nombreArchivo}%` })
-    .andWhere("a.eliminadoEn IS NULL")
-    .getMany();
-  if (archivos.length === 0) return { encontrada: false };
-
   const facturaRepo = AppDataSource.getRepository(Factura);
   const factura = await facturaRepo.findOne({
-    where: { archivo: { id: archivos[0].id }, propietario: { id: usuarioId } },
+    where: { archivo: { id: archivoId }, propietario: { id: usuarioId } },
     relations: { lineas: true },
   });
   if (!factura) return { encontrada: false };

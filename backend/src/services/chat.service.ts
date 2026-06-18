@@ -919,9 +919,14 @@ const ejecutarTool = async (
         return { ok: true, escaneadas: ok, errores };
       }
       case "obtener_factura": {
-        const r = await obtenerFactura(usuarioId, String(args.nombre));
+        const res = await resolverArchivo(usuarioId, String(args.nombre));
+        if (res.error) return { error: res.error };
+        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        const r = await obtenerFactura(usuarioId, res.archivo!.id);
         if (!r.encontrada) {
-          return { error: `No encontré una factura escaneada para "${args.nombre}". Primero escanéala con escanear_factura.` };
+          return {
+            error: `"${res.archivo!.nombre}" no tiene una factura escaneada. Primero escanéala con escanear_factura.`,
+          };
         }
         return { ok: true, resumen: r.resumen, numero: r.numero };
       }
@@ -1113,6 +1118,21 @@ export const chatear = async (
   // "borra todos los archivos/ficheros" (archivos, carpetas intactas).
   const ultimoMensaje = mensajes[mensajes.length - 1]?.contenido ?? "";
   const msgLower = ultimoMensaje.toLowerCase();
+
+  // Pre-flight: "¿qué hay en la papelera?" es una consulta directa y frecuente
+  // que el modelo a veces desvía hacia herramientas de facturas (el prompt de
+  // facturas es grande y le hace sesgo), devolviendo contenido random no
+  // relacionado. Se resuelve aquí sin pasar por el modelo.
+  const esListarPapelera =
+    /papelera/.test(msgLower) &&
+    /(qu[eé]\s+hay|lista(r)?|dame|mu[eé]stra(me)?|ense[ñn]a(me)?|p[aá]sa(me)?|ver)/.test(msgLower) &&
+    !/borra|elimina|restaura|recupera|vac[ií]a/.test(msgLower);
+  if (esListarPapelera) {
+    const lista = await listarPapelera(usuarioId);
+    if (lista.length === 0) return { respuesta: "La papelera está vacía.", acciones };
+    const detalle = lista.map((a) => `- ${a.nombre}${a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`).join("\n");
+    return { respuesta: `En la papelera tienes ${lista.length} archivo(s):\n\n${detalle}`, acciones };
+  }
 
   // Pre-flight: "¿tengo/hay/existe un archivo llamado X?" o "busca el archivo
   // X" es una simple comprobación de existencia que debería ser instantánea.
