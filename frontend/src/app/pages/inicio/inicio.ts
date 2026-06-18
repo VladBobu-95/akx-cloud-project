@@ -2,6 +2,8 @@ import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../core/auth.service';
 import { ChatService } from '../../core/chat.service';
+import { ArchivosService } from '../../core/archivos.service';
+import { ToastService } from '../../core/toast.service';
 import { mensajeError } from '../../shared/errores';
 
 @Component({
@@ -29,6 +31,13 @@ import { mensajeError } from '../../shared/errores';
           @for (m of mensajes(); track $index) {
             <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
               {{ m.texto }}
+              @if (m.archivo) {
+                <div class="abrir-archivo">
+                  <button class="btn btn-outline btn-sm" (click)="abrirArchivo(m.archivo)">
+                    📂 Abrir {{ m.archivo.nombre }}
+                  </button>
+                </div>
+              }
             </div>
           }
           @if (pensando()) {
@@ -126,6 +135,12 @@ import { mensajeError } from '../../shared/errores';
         opacity: 0.6;
         font-style: italic;
       }
+      .abrir-archivo {
+        margin-top: 8px;
+      }
+      .abrir-archivo .btn {
+        font-size: 0.85rem;
+      }
       .barra {
         display: flex;
         gap: 8px;
@@ -141,6 +156,8 @@ import { mensajeError } from '../../shared/errores';
 export class InicioPage {
   protected auth = inject(AuthService);
   private chat = inject(ChatService);
+  private archivosSvc = inject(ArchivosService);
+  private toast = inject(ToastService);
 
   // El historial vive en el servicio (persiste al cambiar de página y al recargar).
   protected mensajes = this.chat.mensajes;
@@ -173,12 +190,70 @@ export class InicioPage {
     this.chat.enviar(historial).subscribe({
       next: (r) => {
         const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
-        this.chat.añadir({ de: 'bot', texto: r.respuesta + extra });
+        this.chat.añadir({ de: 'bot', texto: r.respuesta + extra, archivo: r.archivo });
         this.pensando.set(false);
       },
       error: (err) => {
         this.chat.añadir({ de: 'bot', texto: mensajeError(err) });
         this.pensando.set(false);
+      },
+    });
+  }
+
+  // Abre el archivo igual que en el explorador: PDF/imagen/texto en una pestaña
+  // nueva, el resto se descarga. La ventana se abre en blanco YA (en el gesto
+  // del clic) para que el navegador no la bloquee como pop-up, y se rellena
+  // cuando llega el blob.
+  abrirArchivo(archivo: { id: string; nombre: string }) {
+    const win = window.open('', '_blank');
+    this.archivosSvc.obtener(archivo.id).subscribe({
+      next: (a) => {
+        const previsualizable = /^(application\/pdf|image\/|text\/)/.test(a.mimeType ?? '');
+        if (!previsualizable) {
+          win?.close();
+          this.archivosSvc.descargar(a.id).subscribe({
+            next: (blob) => {
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = a.nombre;
+              link.click();
+              setTimeout(() => URL.revokeObjectURL(url), 60000);
+            },
+            error: (err) => this.toast.error(mensajeError(err)),
+          });
+          return;
+        }
+        this.archivosSvc.descargar(a.id).subscribe({
+          next: (blob) => {
+            const url = URL.createObjectURL(blob);
+            if (win) {
+              const esc = (s: string) =>
+                s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              const esImagen = /^image\//.test(a.mimeType);
+              const cuerpo = esImagen ? `<img src="${url}">` : `<iframe src="${url}"></iframe>`;
+              const estilos = esImagen
+                ? `body{margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;}img{max-width:100%;max-height:100vh;object-fit:contain;}`
+                : `html,body{height:100%;margin:0;padding:0;overflow:hidden;}iframe{width:100%;height:100%;border:none;}`;
+              win.document.write(
+                `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(a.nombre)}</title>` +
+                  `<style>${estilos}</style></head><body>${cuerpo}</body></html>`,
+              );
+              win.document.close();
+            } else {
+              window.open(url, '_blank');
+            }
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+          },
+          error: (err) => {
+            win?.close();
+            this.toast.error(mensajeError(err));
+          },
+        });
+      },
+      error: (err) => {
+        win?.close();
+        this.toast.error(mensajeError(err));
       },
     });
   }

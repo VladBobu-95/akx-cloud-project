@@ -90,6 +90,7 @@ const leerContenidoFactura = async (archivo: Archivo, pista?: string): Promise<s
 // --- Extracción estructurada con la IA ---
 interface DatosFactura {
   numero?: string;
+  archivoNombre?: string;
   fecha?: string;
   emisor?: string;
   cliente?: string;
@@ -212,6 +213,7 @@ export const escanearFactura = async (
 
   const contenido = await leerContenidoFactura(archivo, opts.pista);
   const datos = await extraerDatosFactura(contenido);
+  datos.archivoNombre = archivo.nombre;
 
   // Auto-escaneo: si no parece una factura, no ensuciamos la BD.
   if (opts.soloSiFactura) {
@@ -299,7 +301,8 @@ const resumenFacturaMd = (d: DatosFactura): string => {
   const lineas = (d.lineas ?? [])
     .map((l) => `| ${l.descripcion} | ${l.cantidad ?? 0} | ${eur(l.precioUnit ?? 0)} | ${eur(l.total ?? 0)} |`)
     .join("\n");
-  return `# Resumen factura ${d.numero ?? ""}
+  const titulo = [d.numero, d.archivoNombre].filter(Boolean).join(" — ");
+  return `## Factura ${titulo || "sin número"}
 
 - **Fecha:** ${d.fecha ?? "—"}
 - **Emisor:** ${d.emisor ?? "—"}
@@ -319,6 +322,7 @@ ${lineas}
 export const obtenerFactura = async (
   usuarioId: string,
   archivoId: string,
+  archivoNombre?: string,
 ): Promise<{ encontrada: boolean; resumen?: string; numero?: string }> => {
   const facturaRepo = AppDataSource.getRepository(Factura);
   const factura = await facturaRepo.findOne({
@@ -329,6 +333,7 @@ export const obtenerFactura = async (
 
   const datos: DatosFactura = {
     numero: factura.numero,
+    archivoNombre,
     fecha: factura.fecha ?? undefined,
     emisor: factura.emisor,
     cliente: factura.cliente,

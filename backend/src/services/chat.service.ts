@@ -922,13 +922,19 @@ const ejecutarTool = async (
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
-        const r = await obtenerFactura(usuarioId, res.archivo!.id);
+        const r = await obtenerFactura(usuarioId, res.archivo!.id, res.archivo!.nombre);
         if (!r.encontrada) {
           return {
             error: `"${res.archivo!.nombre}" no tiene una factura escaneada. Primero escanéala con escanear_factura.`,
           };
         }
-        return { ok: true, resumen: r.resumen, numero: r.numero };
+        return {
+          ok: true,
+          resumen: r.resumen,
+          numero: r.numero,
+          archivoId: res.archivo!.id,
+          archivoNombre: res.archivo!.nombre,
+        };
       }
       case "escanear_factura": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
@@ -1095,7 +1101,11 @@ const llamarOllama = async (messages: OllamaMessage[]): Promise<OllamaMessage> =
 export const chatear = async (
   usuarioId: string,
   mensajes: MensajeChat[],
-): Promise<{ respuesta: string; acciones: string[] }> => {
+): Promise<{
+  respuesta: string;
+  acciones: string[];
+  archivo?: { id: string; nombre: string };
+}> => {
   // Solo el último mensaje del usuario. En un asistente de archivos cada orden es
   // independiente; enviar el historial hace que modelos pequeños re-ejecuten
   // acciones de turnos anteriores (p.ej. repetir un "borrar_todo"), lo cual es
@@ -1110,6 +1120,11 @@ export const chatear = async (
   ];
 
   const acciones: string[] = [];
+  // Si una tool resuelve un archivo concreto (ej. obtener_factura), se guarda
+  // aquí para que el front pueda ofrecer un botón "Abrir archivo" (abrir una
+  // pestaña nueva desde el chat sin botón propio choca con el bloqueo de
+  // pop-ups del navegador).
+  let archivoParaAbrir: { id: string; nombre: string } | undefined;
 
   // Pre-flight: el modelo no siempre llama de forma fiable a "borrar_todo" /
   // "borrar_todas_carpetas" / "borrar_todos_archivos" para frases muy directas,
@@ -1346,12 +1361,20 @@ export const chatear = async (
       if (typeof r.resumen === "string") {
         resumenes.push(r.resumen);
       }
+
+      if (typeof r.archivoId === "string" && typeof r.archivoNombre === "string") {
+        archivoParaAbrir = { id: r.archivoId, nombre: r.archivoNombre };
+      }
     }
 
     // Si TODAS las llamadas de esta iteración tienen resumen preconstruido, devolver
     // directamente sin otro turno del modelo (evita que reformatee mal o invente cosas).
     if (resumenes.length === toolCalls.length && resumenes.length > 0) {
-      return { respuesta: [...new Set(resumenes)].join("\n\n---\n\n"), acciones };
+      return {
+        respuesta: [...new Set(resumenes)].join("\n\n---\n\n"),
+        acciones,
+        archivo: archivoParaAbrir,
+      };
     }
   }
 

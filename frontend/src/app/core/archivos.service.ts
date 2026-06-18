@@ -124,4 +124,9 @@ export class ArchivosService {
   descargar(id: string) {
     return this.http.get(`${this.base}/${id}/descargar`, { responseType: 'blob' });
   }
+
+  // Metadatos de un archivo (nombre, mimeType...), sin descargar el binario.
+  obtener(id: string) {
+    return this.http.get<Archivo>(`${this.base}/${id}`);
+  }
 }
