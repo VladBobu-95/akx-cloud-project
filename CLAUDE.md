@@ -83,6 +83,7 @@ MINIO_CONSOLE_HOST=9001
 # API
 API_PORT_HOST=3000
 JWT_SECRET=<mínimo 32 chars aleatorios>
+CORS_ORIGIN=*   # "*" o lista separada por comas; en prod fija el dominio del front
 
 # Ollama (en local lo sobreescribe el override a http://ollama:11434;
 # en el servidor apunta al Ollama externo con GPU vía host.docker.internal)
@@ -203,7 +204,10 @@ mostrar un botón "Abrir archivo" bajo la respuesta.
 ### `usuarios`
 - `id` UUID, `email` unique, `nombre`, `avatar` (data URL base64, nullable)
 - `passwordHash` (bcrypt), `rol` (`"user"` | `"admin"`, default `"user"`) — existe un
-  middleware `soloAdmin` para rutas de admin, pero ninguna ruta lo usa todavía
+  middleware `soloAdmin` para rutas de admin, pero ninguna ruta lo usa todavía. El
+  registro **no acepta `rol` del cliente** (se ignora si se envía y siempre se crea
+  como `"user"`): así nadie puede auto-registrarse como admin. Un admin solo se crea
+  por otra vía controlada (seed/SQL).
 - `creadoEn`
 
 ### `archivos` — metadatos de fichero

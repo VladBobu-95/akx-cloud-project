@@ -19,9 +19,15 @@ export const app = express();
 app.set("trust proxy", 1);
 
 app.use(helmet({ contentSecurityPolicy: false }));
+// "*" = cualquier origen; si no, lista separada por comas (ej.
+// "https://app.midominio.com,https://otro.com"). Ver CORS_ORIGIN en env.
+const origenesCors =
+  env.CORS_ORIGIN.trim() === "*"
+    ? "*"
+    : env.CORS_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean);
 app.use(
   cors({
-    origin: "*",
+    origin: origenesCors,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),

@@ -19,10 +19,18 @@ const envSchema = z.object({
   MINIO_PASSWORD: z.string(),
   MINIO_BUCKET: z.string().default("archivos"),
   JWT_SECRET: z.string().min(16),
+  // Orígenes permitidos por CORS. "*" = cualquiera (cómodo en dev; aceptable con
+  // auth por Bearer token, sin cookies). En producción conviene fijar el dominio
+  // del front (uno o varios separados por coma) para reducir superficie.
+  CORS_ORIGIN: z.string().default("*"),
   OLLAMA_URL: z.string().default("http://localhost:11434"),
-  OLLAMA_MODEL: z.string().default("qwen2.5:3b"),
-  // Modelo de embeddings para la búsqueda semántica (RAG). nomic-embed-text = 768 dims.
-  OLLAMA_EMBED_MODEL: z.string().default("nomic-embed-text"),
+  // Modelo del chat (function calling). Por defecto el de la familia documentada
+  // para el servidor; en máquinas pequeñas se sobreescribe por .env.
+  OLLAMA_MODEL: z.string().default("qwen2.5-coder:14b"),
+  // Modelo de embeddings para la búsqueda semántica (RAG). bge-m3 = 1024 dims,
+  // que es lo que espera la columna "embedding" vector(1024) (migración 1761).
+  // OJO: cambiar a un modelo con otra dimensión rompe el INSERT de fragmentos.
+  OLLAMA_EMBED_MODEL: z.string().default("bge-m3"),
   // Modelo de visión para OCR de imágenes de factura (mejor que Tesseract).
   // Si falla, se usa Tesseract como fallback.
   OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
