@@ -144,6 +144,22 @@ const reemplazarArchivoTexto = async (
 
 const eur = (n: number | string): string => `${Number(n).toFixed(2)} €`;
 
+// Serializa tareas por usuario: las que llegan para el mismo usuario se
+// encadenan en vez de correr a la vez. Necesario porque el front sube varias
+// imágenes EN PARALELO y cada subida acaba regenerando el MISMO archivo
+// "resumen-ventas.md" (borrar+crear): sin serializar, dos ejecuciones a la vez
+// podían dejar dos copias del .md o competir en el borrado.
+// (Estado en memoria: válido para una sola instancia de API, como es el caso.)
+const colaPorUsuario = new Map<string, Promise<unknown>>();
+const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
+  const anterior = colaPorUsuario.get(usuarioId) ?? Promise.resolve();
+  // .then(tarea, tarea): se ejecuta tanto si la anterior fue ok como si falló.
+  const actual = anterior.then(tarea, tarea);
+  // Guardamos una versión "tragada" para que un fallo no rompa la cadena.
+  colaPorUsuario.set(usuarioId, actual.catch(() => {}));
+  return actual;
+};
+
 // --- API pública del servicio ---
 
 // Escanea una factura (PDF/imagen), guarda los datos en BD y genera los resúmenes.
@@ -235,7 +251,9 @@ export const escanearFactura = async (
       CARPETA_FACTURAS,
       resumenFacturaMd(datos),
     );
-    await regenerarResumenVentas(usuarioId);
+    // Serializado por usuario: varias facturas escaneándose a la vez (subida
+    // múltiple / "escanea todas") reescriben el mismo resumen-ventas.md.
+    await enSerie(usuarioId, () => regenerarResumenVentas(usuarioId));
   } catch (err) {
     console.error("[facturas] Error al crear archivos de resumen (no crítico):", err);
   }
