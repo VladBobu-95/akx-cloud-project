@@ -1413,14 +1413,20 @@ export const chatear = async (
     }
   }
 
-  // Pre-flight: "borra/elimina el archivo X" (un archivo concreto, ni carpeta ni
-  // borrado masivo). El modelo no llama de forma fiable a "eliminar_archivo" para
-  // esta frase tan directa: unas veces no emite ninguna tool call válida, otras
-  // confunde "borra X" (sin la palabra "archivo") con "lee X". Se resuelve aquí
-  // sin pasar por Ollama, igual que el resto de pre-flights de borrado.
-  const matchNombreArchivoABorrar = msgLower.match(
-    /\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b.*?(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)/,
-  );
+  // Pre-flight: "borra/elimina el archivo X" o, directamente, "borra/elimina X.ext"
+  // (un archivo concreto, ni carpeta ni borrado masivo). El modelo no llama de
+  // forma fiable a "eliminar_archivo" para esta frase tan directa: unas veces no
+  // emite ninguna tool call válida, otras confunde "borra X" (sin la palabra
+  // "archivo") con "lee X", o con "ábreme/muéstrame X" si X parece una factura.
+  // Se resuelve aquí sin pasar por Ollama, igual que el resto de pre-flights de
+  // borrado. El segundo patrón (sin "archivo") exige una extensión para no
+  // capturar palabras sueltas como "borra **mi** reporte" o "borra **la**
+  // carpeta" (esa además queda excluida por el filtro de "carpeta" de más abajo).
+  const matchNombreArchivoABorrar =
+    msgLower.match(
+      /\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b.*?(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)/,
+    ) ||
+    msgLower.match(/\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+["']?([\wÀ-ÿ-]+\.[a-z0-9]{1,5})\b/);
   const esBorrarUnArchivo = !!matchNombreArchivoABorrar && !/carpeta|papelera/.test(msgLower);
   if (esBorrarUnArchivo && matchNombreArchivoABorrar) {
     const res = await resolverArchivo(usuarioId, matchNombreArchivoABorrar[1]);
