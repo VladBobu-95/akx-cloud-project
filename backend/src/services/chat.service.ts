@@ -26,6 +26,7 @@ import {
   moverCarpetaConContenido,
   copiarCarpetaConContenido,
   normalizarRuta,
+  carpetaExiste,
 } from "./carpetas.service";
 import { buscarSemantica } from "./rag.service";
 import {
@@ -532,16 +533,23 @@ const resolverArchivo = async (
 };
 
 // Localiza una carpeta EXISTENTE por nombre o ruta completa. Si el argumento ya
-// parece una ruta (empieza por "/"), se usa tal cual (los servicios validan que
-// exista). Si es solo un nombre (ej. "tmp"), busca entre TODAS las carpetas del
-// usuario cualquiera cuyo último tramo coincida: así no hace falta dar la ruta
-// completa para operar sobre una carpeta anidada, igual que ya pasa con archivos.
+// parece una ruta (empieza por "/"), se valida que exista (si no, error: así el
+// caller puede intentar resolverlo como archivo en su lugar). Si es solo un
+// nombre (ej. "tmp"), busca entre TODAS las carpetas del usuario cualquiera
+// cuyo último tramo coincida: no hace falta dar la ruta completa, igual que
+// ya pasa con archivos.
 const resolverCarpeta = async (
   usuarioId: string,
   nombreORuta: string,
 ): Promise<{ ruta?: string; error?: string; opciones?: string[] }> => {
   const texto = nombreORuta.trim();
-  if (texto.startsWith("/")) return { ruta: normalizarRuta(texto) };
+  if (texto.startsWith("/")) {
+    const ruta = normalizarRuta(texto);
+    if (!(await carpetaExiste(usuarioId, ruta))) {
+      return { error: `No encontré ninguna carpeta "${ruta}".` };
+    }
+    return { ruta };
+  }
   const todas = await listarTodasCarpetas(usuarioId);
   const buscado = texto.toLowerCase();
   const coincidencias = todas.filter((c) => hojaRuta(c.ruta).toLowerCase() === buscado);
@@ -705,7 +713,7 @@ const ejecutarTool = async (
         if (res.error) {
           // El modelo pudo confundir un archivo con una carpeta (ej. llamó a esta
           // tool para algo que en realidad es un archivo).
-          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          const comoArchivo = await resolverArchivo(usuarioId, hojaRuta(rutaArg));
           if (comoArchivo.archivo) {
             await eliminarArchivo(comoArchivo.archivo.id, usuarioId);
             acciones.push(`Enviado a la papelera "${comoArchivo.archivo.nombre}"`);
@@ -788,7 +796,7 @@ const ejecutarTool = async (
         if (!destinoArg) return { error: "Falta indicar la carpeta destino." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
         if (res.error) {
-          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          const comoArchivo = await resolverArchivo(usuarioId, hojaRuta(rutaArg));
           if (comoArchivo.archivo) {
             const r = await actualizarArchivo(comoArchivo.archivo.id, usuarioId, {
               carpeta: normalizarRuta(destinoArg),
@@ -816,7 +824,7 @@ const ejecutarTool = async (
         if (!nuevoNombre) return { error: "Falta indicar el nuevo nombre de la carpeta." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
         if (res.error) {
-          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          const comoArchivo = await resolverArchivo(usuarioId, hojaRuta(rutaArg));
           if (comoArchivo.archivo) {
             const r = await actualizarArchivo(comoArchivo.archivo.id, usuarioId, {
               nombre: nuevoNombre,
@@ -839,7 +847,7 @@ const ejecutarTool = async (
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a copiar." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
         if (res.error) {
-          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          const comoArchivo = await resolverArchivo(usuarioId, hojaRuta(rutaArg));
           if (comoArchivo.archivo) {
             const r = await copiarArchivo(comoArchivo.archivo.id, usuarioId, {
               carpeta: typeof args.carpeta_destino === "string" ? args.carpeta_destino : undefined,
