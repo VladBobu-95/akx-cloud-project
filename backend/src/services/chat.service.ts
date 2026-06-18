@@ -21,6 +21,7 @@ import {
   eliminarCarpetaConContenido,
   vaciarCarpeta,
   vaciarTodo,
+  eliminarTodasCarpetas,
   moverCarpetaConContenido,
   copiarCarpetaConContenido,
   normalizarRuta,
@@ -88,10 +89,10 @@ Cómo actuar:
 - Para crear una carpeta usa "crear_carpeta" con la "ruta" (ej: "/facturas"). Si el usuario NO indica dónde (solo da un nombre, ej: "creame una carpeta demo"), la ruta es simplemente "/<nombre>" en la RAÍZ; no inventes ni anides una ubicación a partir de carpetas mencionadas antes en la conversación. Para listarlas, "listar_carpetas". NUNCA llames a "crear_carpeta" como paso previo a "renombrar_carpeta", "mover_carpeta" ni ninguna otra operación: si el usuario menciona una carpeta, asume que ya existe y actúa directamente.
 - Para crear un archivo/nota/documento (.md o .txt) DEBES llamar a "crear_archivo" (nombre, carpeta y contenido). Nunca describas que lo creas sin llamar a la herramienta. Si el usuario NO indica carpeta, NO pongas "carpeta" (se creará en la raíz); no te inventes una carpeta a partir del nombre.
 - "eliminar_carpeta" borra la carpeta ENTERA (carpeta + contenido). "vaciar_carpeta" borra SOLO el contenido y deja la carpeta: úsalo si piden "borra el contenido de X" o "vacía X".
-- Si el usuario pide borrar TODAS las carpetas (aunque no mencione archivos), usa "borrar_todo" directamente.
+- Si el usuario pide borrar TODAS las carpetas (ej: "borra todas las carpetas"), usa "borrar_todas_carpetas": borra las carpetas Y su contenido (a la papelera), pero NO toca los archivos que ya estaban en la raíz. Si pide borrar/vaciar TODO (absolutamente todo, incluida la raíz) o "empezar de cero", usa "borrar_todo".
 - Para mover/renombrar/copiar carpetas usa "mover_carpeta"/"renombrar_carpeta"/"copiar_carpeta".
 - Para listar carpetas usa "listar_carpetas" (devuelve TODAS, incluidas las que tienen archivos).
-- Papelera: "listar_papelera", "restaurar_archivo", "borrar_permanente" (definitivo) y "vaciar_papelera".
+- Papelera: "listar_papelera", "restaurar_archivo" (recuperar), "borrar_permanente" (definitivo, irreversible) y "vaciar_papelera". OJO: "borra/elimina X de la papelera" significa BORRAR DEFINITIVAMENTE ese archivo (usa "borrar_permanente"), NO recuperarlo. Solo uses "restaurar_archivo" si el usuario dice explícitamente "restaura"/"recupera"/"saca X de la papelera".
 - Para responder sobre el contenido de un archivo CONCRETO (sabes su nombre) usa "leer_archivo". Para cifras de uso, "estadisticas".
 - Para preguntas sobre el CONTENIDO sin saber en qué archivo está (ej: "¿qué documento habla de X?", "¿dónde dice algo sobre Y?", "resume lo que tengo sobre Z") usa "buscar_semantica": busca por significado dentro de todos los documentos y devuelve los más relevantes con un fragmento. Responde basándote en esos fragmentos y di de qué archivo salen.
 - FACTURAS — elige la herramienta correcta:
@@ -267,7 +268,16 @@ const TOOLS = [
     function: {
       name: "borrar_todo",
       description:
-        "Borra TODO: envía a la papelera todos los archivos del usuario y elimina todas sus carpetas. Úsalo cuando el usuario pida borrar/vaciar todo, empezar de cero, o borrar TODAS las carpetas (con o sin archivos). Los archivos quedan recuperables desde la papelera.",
+        "Borra TODO: envía a la papelera todos los archivos del usuario y elimina todas sus carpetas. Úsalo cuando el usuario pida borrar/vaciar TODO (carpetas Y archivos) o empezar de cero. Si solo pide borrar las carpetas SIN mencionar archivos, usa 'borrar_todas_carpetas' en su lugar. Los archivos quedan recuperables desde la papelera.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "borrar_todas_carpetas",
+      description:
+        "Borra TODAS las carpetas Y su contenido (van a la papelera), pero NO toca los archivos que ya estaban en la raíz fuera de cualquier carpeta. Úsalo cuando el usuario pida borrar/eliminar/quitar TODAS las carpetas (con o sin mencionar sus archivos), pero sin pedir un borrado total de TODO.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -284,7 +294,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "restaurar_archivo",
-      description: "Restaura un archivo de la papelera (por su nombre).",
+      description:
+        "Recupera un archivo de la papelera y lo devuelve a su sitio. Úsalo SOLO si el usuario pide explícitamente 'restaurar' o 'recuperar' un archivo, nunca para 'borrar X de la papelera'.",
       parameters: {
         type: "object",
         properties: { nombre: { type: "string", description: "nombre del archivo en la papelera" } },
@@ -296,7 +307,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "borrar_permanente",
-      description: "Borra DEFINITIVAMENTE un archivo de la papelera (no se puede deshacer).",
+      description:
+        "Borra DEFINITIVAMENTE un archivo de la papelera (no se puede deshacer). Úsalo para 'borra/elimina X de la papelera' o 'borra X definitivamente'.",
       parameters: {
         type: "object",
         properties: { nombre: { type: "string", description: "nombre del archivo en la papelera" } },
@@ -671,6 +683,13 @@ const ejecutarTool = async (
         );
         return { ok: true, archivos: r.archivos, carpetas: r.carpetas, resumen: "Hecho." };
       }
+      case "borrar_todas_carpetas": {
+        const r = await eliminarTodasCarpetas(usuarioId);
+        acciones.push(
+          `Borradas ${r.carpetas} carpeta/s y su contenido a la papelera (${r.borrados} archivo/s). Los archivos en la raíz no se han tocado.`,
+        );
+        return { ok: true, carpetas: r.carpetas, borrados: r.borrados, resumen: "Hecho." };
+      }
       // --- Papelera ---
       case "listar_papelera": {
         const lista = await listarPapelera(usuarioId);
@@ -948,15 +967,28 @@ export const chatear = async (
 
   const acciones: string[] = [];
 
-  // Pre-flight: "borra todo / todas las carpetas / vacía todo / empezar de cero"
-  // El modelo no llama borrar_todo de forma fiable para estas frases.
+  // Pre-flight: el modelo no siempre llama de forma fiable a "borrar_todo" /
+  // "borrar_todas_carpetas" para frases muy directas, así que se detectan aquí.
+  // Distingue "borra TODO" (incluida la raíz) de "borra todas las carpetas"
+  // (carpetas + su contenido, pero la raíz no se toca).
   const ultimoMensaje = mensajes[mensajes.length - 1]?.contenido ?? "";
   const msgLower = ultimoMensaje.toLowerCase();
-  const esBorrarTodo =
-    /borra(r)?\s+(todo|todas?\s+(las\s+)?carpetas?|todo\s+lo)|vac[ií]a(r)?\s+(todo|todas?\s+(las\s+)?carpetas?)|elimina(r)?\s+(todo|todas?\s+(las\s+)?carpetas?)|empeza(r)?\s+de\s+cero/.test(msgLower);
+  const esBorrarTodoCompleto =
+    /borra(r)?\s+todo\b|vac[ií]a(r)?\s+todo\b|elimina(r)?\s+todo\b|empeza(r)?\s+de\s+cero/.test(
+      msgLower,
+    );
+  const esBorrarSoloCarpetas =
+    !esBorrarTodoCompleto &&
+    !/archivo/.test(msgLower) &&
+    /(borra(r)?|vac[ií]a(r)?|elimina(r)?|quita(r)?)\s+todas?\s+(las\s+)?carpetas?/.test(msgLower);
 
-  if (esBorrarTodo) {
-    const resultado = await ejecutarTool("borrar_todo", {}, usuarioId, acciones);
+  if (esBorrarTodoCompleto || esBorrarSoloCarpetas) {
+    const resultado = await ejecutarTool(
+      esBorrarTodoCompleto ? "borrar_todo" : "borrar_todas_carpetas",
+      {},
+      usuarioId,
+      acciones,
+    );
     const r = resultado as Record<string, unknown>;
     if (r.ok) {
       return { respuesta: "Hecho.", acciones };

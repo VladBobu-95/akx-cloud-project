@@ -182,6 +182,28 @@ export const vaciarTodo = async (
   };
 };
 
+// Borra TODAS las carpetas y su contenido, pero NO toca los archivos que ya
+// estaban en la raíz (fuera de cualquier carpeta). Devuelve cuántos archivos
+// fueron a la papelera y cuántas carpetas se eliminaron.
+export const eliminarTodasCarpetas = async (
+  usuarioId: string,
+): Promise<{ borrados: number; carpetas: number }> => {
+  const resArchivos = await AppDataSource.getRepository(Archivo)
+    .createQueryBuilder()
+    .softDelete()
+    .where("propietarioId = :u", { u: usuarioId })
+    .andWhere("eliminadoEn IS NULL")
+    .andWhere("carpeta <> '/'")
+    .execute();
+  const resCarpetas = await repo()
+    .createQueryBuilder()
+    .delete()
+    .from(Carpeta)
+    .where("propietarioId = :u", { u: usuarioId })
+    .execute();
+  return { borrados: resArchivos.affected ?? 0, carpetas: resCarpetas.affected ?? 0 };
+};
+
 // Mueve/renombra una carpeta CON su contenido: re-prefija la carpeta de todos los
 // archivos del subárbol y la metadata de carpetas. Devuelve cuántos archivos movió.
 export const moverCarpetaConContenido = async (
