@@ -12,7 +12,7 @@ export const ctrlEscanear = async (
     const archivoId = String(req.body.archivoId ?? "");
     if (!archivoId) throw new AppError(400, "Falta el archivoId");
     const pista = typeof req.body.pista === "string" ? req.body.pista : undefined;
-    const resultado = await escanearFactura(req.usuario!.id, archivoId, pista);
+    const resultado = await escanearFactura(req.usuario!.id, archivoId, { pista });
     res.json(resultado);
   } catch (error) {
     next(error);

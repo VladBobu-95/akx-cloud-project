@@ -168,25 +168,30 @@ export const escanearFactura = async (
   const datos = await extraerDatosFactura(contenido);
   datos.archivoNombre = archivo.nombre;
 
-  // Auto-escaneo: si no parece una factura, no ensuciamos la BD. Exige TANTO un
-  // importe real (no solo líneas con descripción: el modelo puede inventarse
-  // precios para algo que no es una factura, ej. una lista de la compra) COMO
+  // Si no parece una factura real, no la guardamos. Exige TANTO un importe real
+  // (no solo líneas con descripción: el modelo puede inventarse precios para algo
+  // que no es una factura, ej. una lista de la compra o una foto sin texto) COMO
   // algún dato identificativo (número/fecha/emisor) — las dos cosas a la vez,
-  // para no confundir una imagen cualquiera con una factura real.
-  if (opts.soloSiFactura) {
-    const lineasConImporte = (datos.lineas ?? []).filter(
-      (l) => l.descripcion?.trim() && (Number(l.total) > 0 || Number(l.precioUnit) > 0),
+  // para no confundir una imagen cualquiera con una factura real. Antes esto solo
+  // se aplicaba al auto-escaneo: el escaneo MANUAL nunca lo comprobaba, así que
+  // ante una imagen sin contenido real el modelo igual inventaba una factura
+  // completa (cliente, importes...) de la nada.
+  const lineasConImporte = (datos.lineas ?? []).filter(
+    (l) => l.descripcion?.trim() && (Number(l.total) > 0 || Number(l.precioUnit) > 0),
+  );
+  const tieneImportes =
+    Number(datos.total) > 0 || Number(datos.subtotal) > 0 || lineasConImporte.length > 0;
+  const tieneIdentificacion = !!(
+    datos.numero?.trim() ||
+    datos.fecha?.trim() ||
+    datos.emisor?.trim()
+  );
+  if (!tieneImportes || !tieneIdentificacion) {
+    if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
+    throw new AppError(
+      422,
+      "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica los datos reales en la pista.",
     );
-    const tieneImportes =
-      Number(datos.total) > 0 || Number(datos.subtotal) > 0 || lineasConImporte.length > 0;
-    const tieneIdentificacion = !!(
-      datos.numero?.trim() ||
-      datos.fecha?.trim() ||
-      datos.emisor?.trim()
-    );
-    if (!tieneImportes || !tieneIdentificacion) {
-      return { lineas: 0, resumen: "", omitida: true };
-    }
   }
 
   const facturaRepo = AppDataSource.getRepository(Factura);
