@@ -16,8 +16,8 @@ npm install
 npm start        # ng serve con proxy → http://localhost:4200
 ```
 
-Requiere el backend en `http://localhost:3000` (`docker compose up -d` en el repo del
-backend). El dev server usa `proxy.conf.json` para reenviar `/api/**` al backend (mismo
+Requiere el backend en `http://localhost:3000` (`docker compose up -d` desde la raíz del
+monorepo). El dev server usa `proxy.conf.json` para reenviar `/api/**` al backend (mismo
 origen en el navegador → sin CORS y con las cabeceras de paginación `X-Total-*`).
 
 ## Flujo
@@ -48,19 +48,22 @@ login. Las rutas bajo el Shell están protegidas por el **guard** (sin token →
 Envía la conversación a `/api/chat` y muestra la respuesta. Detalles importantes para
 que el asistente sea fiable:
 
-- Como contexto se envían **solo los mensajes del usuario** (no las respuestas del bot).
-  Reenviar sus propias respuestas narradas le "enseñaba" a fingir acciones sin llamar a
-  las herramientas, y fallaba a partir del 2º mensaje.
-- La **confirmación real** de una acción son las líneas verdes `✓` que añade el backend
-  (solo aparecen cuando una herramienta se ejecutó de verdad); el texto del bot solo
-  acompaña.
+- Como contexto se envían **solo los mensajes del usuario** (no las respuestas del bot,
+  últimos 8). Reenviar sus propias respuestas narradas le "enseñaba" a fingir acciones
+  sin llamar a las herramientas, y fallaba a partir del 2º mensaje. El backend, a su vez,
+  solo usa el **último** mensaje de ese historial (cada orden se trata como independiente).
+- La **confirmación real** de una acción son las líneas `✓` que el componente añade a
+  partir del array `acciones` que devuelve el backend (solo aparecen cuando una
+  herramienta se ejecutó de verdad); el texto del bot solo acompaña.
 
 ### Archivos (`pages/archivos`)
 Vista de carpetas + archivos con navegación por rutas, subida, drag & drop para
 mover/copiar, renombrar y enviar a la papelera. Las carpetas vacías se mantienen como
 metadata en el backend. Incluye un **buscador por contenido** (RAG): llama a
 `GET /api/archivos/buscar?q=` y muestra los documentos relevantes con el fragmento que
-coincide; al hacer clic lleva a la carpeta del archivo.
+coincide; al hacer clic lleva a la carpeta del archivo. El menú contextual de un PDF/
+imagen tiene **"Escanear factura"**, que abre un modal (con pista opcional) y llama a
+`POST /api/facturas/escanear` (OCR + extracción de datos).
 
 ### Tema y UI (`shared/`, `layout/`)
 Tema claro/oscuro con variables CSS, toasts de éxito/error, pipe de tamaño de fichero y
@@ -85,15 +88,17 @@ npm run build    # genera dist/akx-cloud-frontend/browser
 
 ## Despliegue con Docker (recomendado)
 
-El repo incluye un `Dockerfile` (build de Angular → **nginx**) y `nginx.conf` que sirve
-la SPA y hace de **proxy de `/api`** hacia el backend (mismo origen, sin CORS). Está
-integrado en el `docker-compose.yml` del backend como servicio `web` (puerto 80), así que
-`environment.apiUrl` se queda **vacío** (las peticiones van a `/api` y nginx las reenvía).
+Este directorio (`frontend/`) vive dentro del monorepo `akx-cloud-project`, junto a
+`backend/`. Incluye un `Dockerfile` (build de Angular → **nginx**) y `nginx.conf` que
+sirve la SPA y hace de **proxy de `/api`** hacia el backend (mismo origen, sin CORS).
+Está integrado en el `docker-compose.yml` de la raíz del monorepo como servicio `web`
+(puerto 80), así que `environment.apiUrl` se queda **vacío** (las peticiones van a
+`/api` y nginx las reenvía).
 
-Para levantarlo, en el repo del backend (con ambos repos clonados uno al lado del otro):
+Para levantarlo, desde la raíz del monorepo:
 
 ```bash
-docker compose -f docker-compose.yml up -d --build   # incluye el servicio web
+docker compose up -d --build   # db + minio + api + web (incluye este frontend)
 ```
 
 Acceso: `http://IP-del-servidor` (puerto 80). Para desarrollo local del front sigue

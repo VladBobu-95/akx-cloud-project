@@ -58,7 +58,8 @@ En dev/prod el esquema se gestiona con migraciones (`migrationsRun: true`), no c
 `synchronize`. Al arrancar sobre una BD vacía se aplican en orden:
 `InitialSchema` (crea `usuarios` y `archivos`) → `AddPerfilUsuario` → `CrearCarpetas` →
 `AgregarRagFragmentos` (extensión `vector` + tabla `fragmentos`) →
-`MigrarEmbeddingMultilingue` (dimensión del vector a 1024 para bge-m3).
+`MigrarEmbeddingMultilingue` (dimensión del vector a 1024 para bge-m3) →
+`AgregarFacturas` (tablas `facturas` y `lineas_factura`).
 
 ### Autenticación
 Registro/login devuelven un JWT (7 días). Las contraseñas se guardan hasheadas con
@@ -77,8 +78,10 @@ se pueden **descargar carpetas enteras como `.zip`** (generado al vuelo).
 
 ### Carpetas
 Rutas virtuales tipo `/facturas/2026` (solo metadata, sin carpetas reales). Operaciones
-de borrar/vaciar/mover comprueban que la carpeta **exista** antes de actuar (si no,
-devuelven 404 en vez de fingir éxito).
+de borrar/vaciar/mover/copiar comprueban que la carpeta **origen exista** antes de actuar
+(si no, devuelven 404 en vez de fingir éxito y crear el destino vacío). `vaciar_carpeta`
+acepta `/` como ruta especial para vaciar solo los archivos sueltos en la raíz, sin tocar
+el contenido de las carpetas.
 
 ### Chatbot (`services/chat.service.ts`)
 Bucle de *tool calling* contra Ollama: el modelo recibe el mensaje + el catálogo de
@@ -90,19 +93,48 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   debe soportar tool calling). `temperature: 0` y `keep_alive: 30m`.
 - **Solo se envía el último mensaje** al modelo (no el historial): reenviar turnos previos
   hacía que modelos pequeños re-ejecutaran acciones anteriores (p. ej. repetir `borrar_todo`).
-- **Pre-flight de "borrar todo"** por regex (el modelo no lo invocaba fiable para esas frases).
+- **Pre-flight de borrados masivos** por regex: distingue "borra todo" (`borrar_todo`,
+  incluida la raíz) de "borra todas las carpetas" (`borrar_todas_carpetas`, con su
+  contenido pero sin tocar la raíz) y "borra todos los archivos/ficheros"
+  (`borrar_todos_archivos`, sin tocar carpetas) — el modelo no invocaba estas tools de
+  forma fiable para frases tan directas.
 - **Parser de respaldo**: si el modelo emite las tool calls como texto JSON en `content`
   en vez de en `tool_calls`, se extraen (escáner de llaves balanceadas) y se ejecutan igual.
-- **Bypass pattern**: si todas las tools de una iteración devuelven `resumen`, ese markdown
-  (con `€` server-side) se devuelve directo sin otra llamada al modelo.
+- **Bypass pattern**: si todas las tools de una iteración devuelven `resumen`, ese texto/
+  markdown (con `€` server-side en facturas) se devuelve directo sin otra llamada al
+  modelo. Además de en facturas, se usa en **todas** las operaciones de archivos/carpetas/
+  papelera (devuelven `resumen: "Hecho."`) para evitar que el modelo redacte su propia
+  confirmación y a veces invente texto no relacionado con la acción real.
 - Herramientas: buscar/crear/mover/renombrar/copiar/eliminar archivos y carpetas, papelera
-  (listar/restaurar/borrar/vaciar), `leer_archivo`, `estadisticas`, `borrar_todo`,
-  `buscar_semantica`, y **facturas**: `escanear_factura`, `escanear_todas_facturas`,
-  `obtener_factura`, `ventas_top` y `totales_facturas` (analítica filtrable por factura,
-  cliente, emisor, producto y periodo).
+  (listar/restaurar/borrar/vaciar), `leer_archivo`, `estadisticas`, `buscar_semantica`,
+  borrados masivos (`borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`), y
+  **facturas**: `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`,
+  `ventas_top` y `totales_facturas` (analítica filtrable por factura, cliente, emisor,
+  producto y periodo).
 
 **Cambiar de modelo:** edita `OLLAMA_MODEL` en `.env`, haz
 `docker exec clouddrive-ollama ollama pull <modelo>` y `docker compose up -d api`.
+
+#### Qué puede pedirle el usuario al chatbot
+
+No hace falta usar nombres técnicos, basta con pedirlo en lenguaje natural:
+
+- **Archivos:** buscar/listar (por nombre o carpeta), copiar, mover, renombrar, eliminar
+  (a la papelera), crear una nota/archivo de texto (.md o .txt) con contenido, leer el
+  contenido de un archivo.
+- **Carpetas:** crear, eliminar entera (con su contenido, a la papelera), vaciar el
+  contenido de una carpeta (o de la raíz con `/`) dejando la carpeta, mover, renombrar,
+  copiar, listar todas.
+- **Borrados masivos:** borrar TODO (archivos y carpetas, "empezar de cero"), borrar
+  todas las carpetas (con su contenido, sin tocar lo suelto en la raíz), borrar todos los
+  archivos (sin tocar las carpetas).
+- **Papelera:** listar, restaurar un archivo, borrarlo definitivamente (irreversible),
+  vaciar la papelera entera.
+- **Búsqueda e info:** búsqueda semántica por significado ("¿qué documento habla de
+  X?"), estadísticas de uso.
+- **Facturas:** escanear una factura concreta o todas las pendientes, obtener/resumir
+  una ya escaneada, ranking de productos más/menos vendidos y totales facturados
+  (ambos filtrables por factura, cliente, emisor, producto y periodo).
 
 ### Búsqueda semántica / RAG (`services/rag.service.ts` + `extraccion.service.ts`)
 Permite buscar por el **significado del contenido**, no solo por el nombre del archivo:
@@ -126,12 +158,13 @@ Permite buscar por el **significado del contenido**, no solo por el nombre del a
 ```
 backend/src/
   config/       env (Zod), database (TypeORM), minio (bucket)
-  entities/     Usuario, Archivo, Carpeta
-  migrations/   InitialSchema → AddPerfilUsuario → CrearCarpetas → AgregarRagFragmentos → MigrarEmbeddingMultilingue
+  entities/     Usuario, Archivo, Carpeta, Factura, LineaFactura
+  migrations/   InitialSchema → AddPerfilUsuario → CrearCarpetas → AgregarRagFragmentos →
+                 MigrarEmbeddingMultilingue → AgregarFacturas
   middlewares/  auth (JWT), validarUUID, errorHandler
-  routes/       auth, archivos (+carpetas, +buscar), chat
-  controllers/  auth, archivos, chat
-  services/     auth, archivos, carpetas, chat, extraccion (texto), rag (embeddings/búsqueda)
+  routes/       auth, archivos (+carpetas, +buscar), chat, facturas
+  controllers/  auth, archivos, chat, facturas
+  services/     auth, archivos, carpetas, chat, extraccion (texto), rag (embeddings/búsqueda), facturas
 docker-compose.yml          db + minio + api + web (frontend nginx)
 docker-compose.override.yml ollama + adminer (solo en local)
 ```
@@ -145,6 +178,7 @@ docker-compose.override.yml ollama + adminer (solo en local)
   papelera: `GET /papelera`, `PATCH /:id/restaurar`, `DELETE /papelera`
 - **Carpetas** (`/api/archivos/carpetas`) 🔒: crear/listar/mover/eliminar
 - **Chat** (`/api/chat`) 🔒: conversación con el asistente
+- **Facturas** (`/api/facturas`) 🔒: `POST /escanear` (OCR + extracción de datos de una factura)
 - `GET /health`: estado de la API y conexión a BD
 
 ## Tests
@@ -157,15 +191,27 @@ Requiere Postgres y MinIO levantados; la BD de test se crea sola (usa `synchroni
 
 ## Despliegue (servidor, acceso por IP, todo en Docker)
 
-Requiere clonar **los dos repos uno al lado del otro** (`cloud-project` y
-`akx-cloud-frontend`), porque el servicio `web` se construye desde `../akx-cloud-frontend`.
+Monorepo: un único clon en el servidor (`backend/` y `frontend/` ya están dentro). El
+servicio `web` del `docker-compose.yml` construye el frontend desde `./frontend`.
 
 ```bash
-cp .env.example .env        # editar OLLAMA_URL al Ollama existente del servidor
-docker compose -f docker-compose.yml up -d --build   # db + minio + api + web (sin override)
-docker exec clouddrive-ollama ollama pull qwen2.5:7b   # o usar el Ollama del servidor
-docker exec clouddrive-ollama ollama pull bge-m3
+cp .env.example .env        # editar OLLAMA_URL al Ollama externo del servidor (con GPU)
+rm docker-compose.override.yml   # en el servidor NO se usa Ollama en contenedor
+docker compose up -d --build     # db + minio + api + web
+docker exec <ollama-del-servidor> ollama pull qwen2.5-coder:14b   # o el modelo que toque
+docker exec <ollama-del-servidor> ollama pull bge-m3
 ```
+
+La API apunta al Ollama externo vía `OLLAMA_URL=http://host.docker.internal:11434`
+(el servicio `api` ya define `extra_hosts: host.docker.internal:host-gateway` para
+poder alcanzarlo en Linux). Está detrás de nginx (servicio `web`), por eso
+`app.set("trust proxy", 1)` en `app.ts` — necesario para que `express-rate-limit` lea
+bien la IP real (`X-Forwarded-For`). Los puertos del host son configurables por `.env`
+(`WEB_PORT_HOST`, `API_PORT_HOST`, `MINIO_PORT_HOST`, etc.) para evitar choques con
+otros servicios. **No editar archivos a mano en el servidor**: el flujo es local →
+commit → push → `git pull` en el servidor (evita conflictos de merge), luego
+`docker compose build api && docker compose up -d api` para aplicar cambios de código,
+o solo `docker compose up -d api` si solo cambió el `.env` (no recarga código).
 
 El servicio `web` (nginx) sirve el frontend en el **puerto 80** y hace de proxy de
 `/api` hacia la API (mismo origen, sin CORS). Abrir solo el 80 (y el 3000 si se quiere la
@@ -176,4 +222,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 1 — Drive básico:** auth JWT, subir/descargar/listar/carpetas, papelera, tests
 - [x] **Fase 2 — Chatbot:** Ollama + tool calling sobre archivos y carpetas
 - [x] **Fase 3 — RAG:** extracción de texto (PDF/Word/texto), embeddings (bge-m3 + pgvector), búsqueda híbrida
-- [ ] **Fase 4 — Facturas:** visión/OCR, analítica vía tools
+- [x] **Fase 4 — Facturas:** OCR con visión (deepseek-ocr), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`)
