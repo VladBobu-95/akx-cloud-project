@@ -11,8 +11,8 @@ buscar por el **contenido** de los documentos (RAG con embeddings en pgvector).
 | Servidor HTTP / rutas | Express 5 + TypeScript (ts-node en dev, `tsc` en build) |
 | ORM / base de datos | TypeORM + PostgreSQL 16 (imagen **pgvector**) |
 | Almacenamiento de archivos | **MinIO** (S3-compatible), descarga por streaming desde la API |
-| IA / asistente | **Ollama**: chat `qwen2.5-coder:14b` (*tool calling*) + embeddings `bge-m3` (RAG) + OCR `deepseek-ocr` (facturas) |
-| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; OCR de imágenes con deepseek-ocr (fallback Tesseract) |
+| IA / asistente | **Ollama**: chat `qwen2.5-coder:14b` (*tool calling*) + embeddings `bge-m3` (RAG) + OCR `deepseek-ocr` (facturas) + descripción de fotos `llava` |
+| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: OCR con deepseek-ocr → si no hay texto real, descripción con llava → Tesseract de último recurso |
 | Subida de ficheros | Multer (en memoria, filtro MIME, límite 50 MB) |
 | Auth | JWT (`jsonwebtoken`) + bcrypt |
 | Validación | Zod (entrada y variables de entorno) |
@@ -39,6 +39,7 @@ docker compose up -d         # db + minio + api + web + ollama (en casa, vía ov
 docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # chatbot (o qwen2.5:3b en máquinas pequeñas)
 docker exec clouddrive-ollama ollama pull bge-m3             # embeddings (búsqueda)
 docker exec clouddrive-ollama ollama pull deepseek-ocr       # OCR de facturas (opcional, hay fallback)
+docker exec clouddrive-ollama ollama pull llava              # describe fotos sin texto (opcional, hay fallback)
 ```
 
 Desarrollo con hot-reload (fuera de Docker): `cd backend && npm install && npm run dev`
@@ -118,6 +119,11 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   modelo a veces "comprobaba" la existencia de un archivo escaneándolo con OCR
   (lento, y podía tirar el proceso en servidores sin GPU), o devolvía contenido de
   facturas no relacionado.
+- **Verbos con pronombre pegado**: "borra todo" funcionaba pero "bórralo todo" no
+  (el pronombre enclítico desplaza la tilde y rompe el límite de palabra). Todos los
+  verbos de los pre-flights anteriores se comparan ahora sobre el mensaje sin tildes
+  y aceptan el pronombre pegado (borra/bórralo, restaura/restáuralo, abre/ábrelo,
+  busca/búscalo, crea/créalo, lista/lístalo...).
 - **Resolución flexible de archivos/carpetas** (`resolverArchivo`/`resolverCarpeta`):
   busca por nombre (no la ruta completa) en todas las carpetas, con fallback
   archivo↔carpeta si una operación de carpeta en realidad apunta a un archivo, y
@@ -206,6 +212,17 @@ con ejemplos reales de frases que entiende:
   - "¿qué producto vendí más?" / "ranking de lo menos vendido"
   - "¿cuánto le he facturado a Ferretería Sánchez?"
   - "total facturado en 2026" / "totales de factura_01 y factura_02"
+- **Imágenes** — ver qué contienen, buscarlas por contenido, o tratarlas como factura:
+  - "qué dice foto.jpg" / "muéstrame foto.jpg" (la descripción que se generó al
+    subirla: la escrita a mano en el modal, o la automática — OCR si tenía texto
+    real, descripción de llava si era una foto sin texto)
+  - "resume lo que tengo sobre velas" / "qué imágenes hablan de X" (búsqueda
+    semántica, igual que con documentos)
+  - "escanea la factura foto.jpg" (con pista opcional si es difícil de leer; si no
+    hay datos reales de una factura, ya no se inventa una)
+  - Para que la descripción sea exacta sin esperar el OCR automático (puede tardar
+    varios minutos en máquinas sin GPU potente), conviene escribirla a mano en el
+    modal "¿Qué es esta imagen?" que aparece justo al subir una foto.
 
 **Limitaciones conocidas del chatbot** (verificadas probando todas las frases de
 arriba contra el modelo real): copiar/mover con la frase exacta "a **la carpeta**
@@ -252,12 +269,15 @@ docker-compose.override.yml ollama + adminer (solo en local)
 
 - **Auth** (`/api/auth`): `POST /registro`, `POST /login`, `GET /perfil` 🔒, `PATCH /perfil` 🔒
 - **Archivos** (`/api/archivos`) 🔒: `POST /subir`, `GET /` (paginado, `?carpeta=`),
-  `GET /buscar?q=` (búsqueda semántica/RAG), `GET /:id`, `GET /:id/descargar`,
-  `PATCH /:id`, `DELETE /:id` (papelera), `DELETE /:id/permanente`;
-  papelera: `GET /papelera`, `PATCH /:id/restaurar`, `DELETE /papelera`
+  `GET /buscar?q=` (búsqueda semántica/RAG), `GET /:id`, `GET /:id/descargar` (streaming
+  del binario a través de la API), `PATCH /:id`, `PATCH /:id/descripcion` (describir a
+  mano una imagen sin texto legible, se indexa para RAG), `DELETE /:id` (papelera),
+  `DELETE /:id/permanente`; papelera: `GET /papelera`, `PATCH /:id/restaurar` (si ya
+  hay un activo con el mismo nombre, le pone sufijo "(restaurado)"), `DELETE /papelera`
 - **Carpetas** (`/api/archivos/carpetas`) 🔒: crear/listar/mover/eliminar
 - **Chat** (`/api/chat`) 🔒: conversación con el asistente → `{respuesta, acciones[], archivo?: {id, nombre}}`
-- **Facturas** (`/api/facturas`) 🔒: `POST /escanear` (OCR + extracción de datos de una factura)
+- **Facturas** (`/api/facturas`) 🔒: `POST /escanear` (OCR + extracción de datos; rechaza
+  con 422 si no hay datos reales de factura, en vez de inventarlos)
 - `GET /health`: estado de la API y conexión a BD
 
 ## Tests
@@ -301,4 +321,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 1 — Drive básico:** auth JWT, subir/descargar/listar/carpetas, papelera, tests
 - [x] **Fase 2 — Chatbot:** Ollama + tool calling sobre archivos y carpetas
 - [x] **Fase 3 — RAG:** extracción de texto (PDF/Word/texto), embeddings (bge-m3 + pgvector), búsqueda híbrida
-- [x] **Fase 4 — Facturas:** OCR con visión (deepseek-ocr), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`)
+- [x] **Fase 4 — Facturas:** OCR con visión (deepseek-ocr), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`), descripción de fotos sin texto (llava)

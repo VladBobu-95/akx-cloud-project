@@ -69,11 +69,21 @@ que el asistente sea fiable:
 ### Archivos (`pages/archivos`)
 Vista de carpetas + archivos con navegación por rutas, subida, drag & drop para
 mover/copiar, renombrar y enviar a la papelera. Las carpetas vacías se mantienen como
-metadata en el backend. Incluye un **buscador por contenido** (RAG): llama a
+metadata en el backend. Al borrar una selección que mezcla carpetas y archivos sueltos,
+se espera a que el borrado de las carpetas termine en el servidor antes de refrescar la
+lista (si no, una carpeta podía "reaparecer" hasta repetir la acción una segunda vez). Incluye un **buscador por contenido** (RAG): llama a
 `GET /api/archivos/buscar?q=` y muestra los documentos relevantes con el fragmento que
 coincide; al hacer clic lleva a la carpeta del archivo. El menú contextual de un PDF/
 imagen tiene **"Escanear factura"**, que abre un modal (con pista opcional) y llama a
-`POST /api/facturas/escanear` (OCR + extracción de datos).
+`POST /api/facturas/escanear` (OCR + extracción de datos; rechaza si no hay datos reales
+de factura en vez de inventarlos).
+
+Tras subir una o varias **imágenes**, aparece un modal "¿Qué es esta imagen?" (omitible,
+una por foto): lo que se escriba se guarda como el contenido del archivo
+(`PATCH /:id/descripcion`) para que el chat y la búsqueda semántica lo encuentren al
+instante, sin esperar al pipeline automático en segundo plano (OCR con deepseek-ocr y,
+si la foto no tiene texto real, descripción con llava — puede tardar varios minutos en
+máquinas sin GPU potente).
 
 ### Perfil (`pages/perfil`)
 Editar nombre, avatar y contraseña. El avatar se procesa en el cliente: se recorta a

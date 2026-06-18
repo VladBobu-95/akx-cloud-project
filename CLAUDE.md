@@ -27,7 +27,8 @@ akx-cloud-project/
 | Objetos | MinIO (S3-compatible) |
 | IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5:3b/7b` como fallback en máquinas pequeñas |
 | IA embeddings | Ollama — `bge-m3` (1024 dims, multilingüe) |
-| OCR facturas | Ollama visión — `deepseek-ocr` (`OLLAMA_OCR_MODEL`); Tesseract.js como fallback |
+| OCR facturas | Ollama visión — `deepseek-ocr` (`OLLAMA_OCR_MODEL`); Tesseract.js como último fallback |
+| Descripción de fotos | Ollama visión — `llava` (`OLLAMA_CAPTION_MODEL`); fotos sin texto (deepseek-ocr es solo-OCR y alucina si no hay texto) |
 | Extracción PDF | pdf-parse v2 |
 | Extracción DOCX | mammoth |
 | Auth | JWT + bcrypt |
@@ -51,6 +52,7 @@ docker compose up -d
 docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # o qwen2.5:3b en máquinas pequeñas
 docker exec clouddrive-ollama ollama pull bge-m3
 docker exec clouddrive-ollama ollama pull deepseek-ocr        # OCR de facturas (opcional, hay fallback)
+docker exec clouddrive-ollama ollama pull llava               # describe fotos sin texto (opcional, hay fallback)
 ```
 
 | URL | Servicio |
@@ -88,6 +90,7 @@ OLLAMA_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5-coder:14b
 OLLAMA_EMBED_MODEL=bge-m3
 OLLAMA_OCR_MODEL=deepseek-ocr
+OLLAMA_CAPTION_MODEL=llava
 ```
 
 > El servicio `api` del `docker-compose.yml` incluye `extra_hosts: host.docker.internal:host-gateway`
@@ -173,8 +176,9 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 | GET | `/:id` | Metadata del archivo (sin descargar el binario) |
 | PATCH | `/:id` | `{nombre?, carpeta?}` |
 | POST | `/:id/copiar` | `{carpeta?, nombre?}` |
-| PATCH | `/:id/restaurar` | Restaurar de papelera |
-| GET | `/:id/descargar` | 302 a URL firmada MinIO |
+| PATCH | `/:id/restaurar` | Restaurar de papelera (si ya hay un activo con el mismo nombre, le pone sufijo "(restaurado)") |
+| PATCH | `/:id/descripcion` | `{descripcion}` — describe a mano una imagen sin texto legible; se indexa como su contenido (RAG) |
+| GET | `/:id/descargar` | Streaming del binario a través de la API (no es un redirect a MinIO) |
 | DELETE | `/:id/permanente` | Borrado definitivo |
 | DELETE | `/:id` | Soft delete (papelera) |
 
@@ -190,7 +194,7 @@ mostrar un botón "Abrir archivo" bajo la respuesta.
 ### `/api/facturas`
 | Método | Ruta | Body |
 |---|---|---|
-| POST | `/escanear` | `{archivoId, pista?}` |
+| POST | `/escanear` | `{archivoId, pista?}` — rechaza con 422 si no hay datos reales de factura (ni importes ni número/fecha/emisor), en vez de guardar una inventada |
 
 ---
 
@@ -244,6 +248,7 @@ mostrar un botón "Abrir archivo" bajo la respuesta.
    - **Crear una nota/archivo de texto** ("créame una nota llamada X.md con esto: ..."): el modelo intentaba *buscar/leer* un archivo que aún no existía en vez de llamar a `crear_archivo`. Extrae nombre (con extensión, o por "llamado X" con `.md` por defecto) y contenido (tras "con esto"/"que diga"/etc.) y llama a `crearArchivoTexto` directamente.
    - **Restaurar vs. borrar definitivamente de la papelera**: son acciones opuestas que el modelo confundía pese a la instrucción explícita de más abajo en el prompt — se llegó a ver "borra X de la papelera" *restaurando* el archivo en vez de borrarlo para siempre. Se distingue por verbo (restaura/recupera/saca → `restaurar_archivo`; borra/elimina/quita + mención de "papelera" → `borrar_permanente`) y se resuelve sin pasar por el modelo.
    - **Búsqueda semántica por tema** ("resume lo que tengo sobre X", "qué documento(s) habla(n) de X"): el modelo a veces pedía más detalles al usuario en vez de llamar a `buscar_semantica`; se detecta el tema tras "sobre"/"de"/"acerca de" y se construye la respuesta con los fragmentos encontrados.
+   - **Verbos con pronombre enclítico pegado y tildes**: "borra todo" funcionaba pero "bórralo todo" no — ni el patrón literal con tilde casaba ("bórralo" desplaza el acento respecto a "borra"), ni había límite de palabra (`\b`) entre "borra" y el "lo" pegado. Todos los verbos de los pre-flights anteriores (borrar, restaurar/borrar-permanente, abrir/mostrar, buscar, crear, listar, resumir) se comparan sobre una versión del mensaje **sin tildes** (`quitarTildes`, NFD + strip de marcas diacríticas) con patrones que aceptan el pronombre pegado (`borra(?:r|lo|la|los|las)?`, etc.); el nombre de archivo/carpeta capturado después conserva sus tildes originales (`grupoOriginal`, recupera el rango del match original a partir de los índices del match sobre el texto sin tildes).
 
 3. **Bucle de herramientas** (máx 15 iter): llama Ollama → si hay `tool_calls` → ejecuta → repite. Varios refuerzos:
    - **Parser de respaldo de tool calls**: si el modelo escribe las llamadas como **texto JSON** en `content` (en vez de en `tool_calls`), se extraen con un escáner de llaves balanceadas (admite varias pegadas) y se ejecutan igual.
@@ -258,18 +263,21 @@ mostrar un botón "Abrir archivo" bajo la respuesta.
 `buscar_archivos`, `copiar_archivo`, `mover_archivo`, `renombrar_archivo`, `eliminar_archivo`, `crear_archivo`, `crear_carpeta`, `listar_carpetas`, `eliminar_carpeta`, `vaciar_carpeta`, `mover_carpeta`, `renombrar_carpeta`, `copiar_carpeta`, `borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`, `listar_papelera`, `restaurar_archivo`, `borrar_permanente`, `vaciar_papelera`, `leer_archivo`, `estadisticas`, `buscar_semantica`, `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`, `ventas_top`, `totales_facturas`
 
 ### Analítica de facturas (`ventas_top`, `totales_facturas`)
-Ambas aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre de archivo; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo ranking), `mes`/`anio` o `desde`/`hasta`, `orden` (más/menos vendido). Si se nombran facturas concretas que aún **no están escaneadas**, se **escanean al vuelo** (`asegurarFacturasEscaneadas`) antes de agregar. Los filtros de texto (`cliente`/`emisor`/`producto`) usan `unaccent()` de Postgres en ambos lados del `ILIKE` para que "Tecnologias" (sin tilde) encuentre igual "Tecnologías" — requiere la extensión `unaccent` (migración `HabilitarUnaccent`).
+Ambas aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre de archivo; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo ranking), `mes`/`anio` o `desde`/`hasta`, `orden` (más/menos vendido). Si se nombran facturas concretas que aún **no están escaneadas**, se **escanean al vuelo** (`asegurarFacturasEscaneadas`) antes de agregar. Los filtros de texto (`cliente`/`emisor`/`producto`) usan `unaccent()` de Postgres en ambos lados del `ILIKE` para que "Tecnologias" (sin tilde) encuentre igual "Tecnologías" — requiere la extensión `unaccent` (migración `HabilitarUnaccent`). El filtro base excluye facturas cuyo archivo está en la papelera (`a."eliminadoEn" IS NULL`) — antes una factura borrada seguía contando en los totales porque el registro de `Factura` en BD no depende del archivo para "existir" en estas consultas.
 
 ### Leer el contenido de un archivo (`leer_archivo`)
 `leerTextoArchivo` (`archivos.service.ts`) acepta texto plano directamente, y para
-PDF/DOCX **reutiliza `archivo.textoExtraido`** (el mismo texto que ya se extrajo al
-subir el archivo para indexarlo en el RAG, vía `pdf-parse`/`mammoth`) en vez de
-intentar decodificar el binario como UTF-8. Antes rechazaba cualquier archivo que no
-fuera `text/*`/json/xml/markdown con "el archivo no es de texto, no puedo leer su
-contenido" — rompía "¿qué dice el contrato.docx?"/"qué dice factura_01.pdf".
+PDF/DOCX/imágenes **reutiliza `archivo.textoExtraido`** (el mismo texto que ya se
+extrajo al subir el archivo para indexarlo en el RAG, vía `pdf-parse`/`mammoth`/OCR)
+en vez de intentar decodificar el binario como UTF-8. Antes rechazaba cualquier
+archivo que no fuera `text/*`/json/xml/markdown con "el archivo no es de texto, no
+puedo leer su contenido" — rompía "¿qué dice el contrato.docx?"/"qué dice
+factura_01.pdf". Para imágenes, el contenido que se lee aquí es la descripción que
+se generó al subir (OCR si tenía texto real, o la descripción de llava/manual si no
+— ver "OCR y descripción de imágenes" más abajo).
 
 ### Tools con bypass (devuelven markdown preconstruido, con € server-side)
-- `escanear_factura` → OCR (deepseek-ocr) + extracción JSON forzada con Ollama → guarda en BD → markdown
+- `escanear_factura` → OCR (deepseek-ocr) + extracción JSON forzada con Ollama → guarda en BD → markdown. Rechaza con error (422) en vez de inventar datos si no hay importes ni número/fecha/emisor reales en el contenido — antes esta comprobación (`soloSiFactura`) solo se aplicaba al auto-escaneo; el escaneo manual con una pista vacía o una imagen sin contenido real podía acabar guardando una factura completa inventada (cliente, importes...) de la nada.
 - `obtener_factura` → resuelve el archivo con `resolverArchivo` (mismo buscador que el resto de tools, con manejo de ambigüedad/no-encontrado) y lee de BD directamente, sin re-escanear el PDF. Antes buscaba con `ILIKE %nombre%` sin validar nombre vacío/ambiguo y se podía quedar con un archivo arbitrario (devolvía la factura de **otro** archivo); ahora no puede pasar.
 - `ventas_top` → ranking de productos (SQL GROUP BY sobre `lineas_factura`)
 - `totales_facturas` → totales (nº facturas, subtotal, IVA, total) filtrados
@@ -291,10 +299,42 @@ bloquee como pop-up — abrir una pestaña fuera de un gesto de clic directo se 
 
 ---
 
+## OCR y descripción de imágenes (`backend/src/services/extraccion.service.ts`)
+
+`ocrImagen()` prueba en cascada, de más a menos específico:
+
+1. **deepseek-ocr** (`OLLAMA_OCR_MODEL`): transcribe el texto tal cual aparece — el
+   mejor para documentos/facturas reales con texto/tablas/importes.
+2. **llava** (`OLLAMA_CAPTION_MODEL`): si el paso anterior no encontró texto real, describe
+   la foto en 1-2 frases en español. deepseek-ocr es un modelo **solo de OCR**: ante una
+   foto sin texto (un objeto, una persona...) no sabe decir "no hay texto" — a veces entra
+   en un **bucle degenerado** repitiendo la misma etiqueta cientos de veces (ej.
+   `<table:tr><td>...</table>`) hasta agotar el límite de tokens (~115s), o devuelve algo
+   corto pero igual de falso (`None`, etiquetas HTML sueltas). `pareceBucleDegenerado()`
+   detecta ambos casos (señal corta: contiene `None` o `<table`/`<td`; señal larga: muy
+   baja variedad de palabras en un texto de 30+ palabras) y descarta el resultado en vez
+   de guardarlo.
+3. **Tesseract.js**: último recurso si Ollama no responde a ninguno de los dos modelos.
+
+En una GPU de 8GB, deepseek-ocr no entra entero (corre parcialmente en CPU, ~2 min);
+si cae a llava (que sí entra 100% en GPU) se suma otro minuto — una foto sin texto puede
+tardar varios minutos en quedar descrita. Es en segundo plano, no bloquea la subida.
+
+### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
+El explorador (`pages/archivos/archivos.ts`) muestra, justo después de subir una o
+varias imágenes, un modal "¿Qué es esta imagen?" (omitible) para cada una. Lo que se
+escriba se guarda como si fuera el texto extraído del archivo y se reindexa para RAG
+(`indexarTexto`, en `rag.service.ts` — la misma función que usa el indexado automático,
+extraída para poder indexar un texto ya dado sin volver a invocar OCR). Sirve tanto para
+corregir una descripción automática como para evitar esperar los minutos del pipeline
+anterior en fotos normales.
+
+---
+
 ## Pipeline RAG (`backend/src/services/rag.service.ts`)
 
 Al subir un archivo se indexa en background:
-1. Extrae texto (`extraccion.service.ts`: pdf-parse / mammoth / Tesseract OCR)
+1. Extrae texto (`extraccion.service.ts`: pdf-parse / mammoth / OCR-o-descripción de imágenes en cascada, ver arriba)
 2. Trocea en chunks de **1000 chars con solape de 150**
 3. Genera embeddings con **bge-m3** (1024 dims) vía `POST /api/embed` de Ollama
 4. Guarda en tabla `fragmentos` con columna `embedding vector(1024)`
@@ -389,6 +429,7 @@ npm start    # ng serve → http://localhost:4200
 - **"Lee X" con contenido muy corto**: a veces el modelo solo confirma "lo he leído" en vez de mostrar el contenido cuando este es trivial (una sola frase corta); con contenido más rico (una factura completa) sí lo resume bien. Se intentó un ajuste de prompt sin éxito total.
 - **PDFs escaneados (sin capa de texto)**: se leen con `pdf-parse`, que no hace OCR; solo las **imágenes** pasan por deepseek-ocr. Si una factura es un PDF puramente escaneado, habría que rasterizar las páginas a imagen antes del OCR (pendiente).
 - **Auto-escaneo al subir**: se ejecuta para todo PDF/imagen subido; con la guardia `soloSiFactura` no guarda los que no parecen factura, pero igualmente consume cómputo de OCR+IA por cada uno.
+- **GPU pequeña (8GB) + dos modelos de visión**: deepseek-ocr (6.7GB) no entra entero y corre parcial en CPU (~2 min por imagen); si además cae a llava (4.7GB, sí entra 100% en GPU) se suma otro minuto. Una foto sin texto puede tardar varios minutos en quedar descrita — no bloquea la subida (es en segundo plano), pero conviene saberlo al probar en máquinas sin una GPU más grande.
 - **Tipos de archivo permitidos**: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máximo 50 MB.
 - **Subida**: un archivo por petición HTTP; múltiples archivos → peticiones paralelas en el frontend.
 - El chat no renderiza markdown (los `resumen`/`acciones` se muestran como texto plano con `white-space: pre-wrap`, no como HTML); los `#`/`**`/tablas se ven tal cual en vez de formateados.

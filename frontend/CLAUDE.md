@@ -43,7 +43,7 @@ Para que funcione hay que tener el backend corriendo (`docker compose up -d` en 
 src/
   app/
     core/
-      archivos.service.ts   ← CRUD archivos, carpetas, búsqueda semántica, escanear factura
+      archivos.service.ts   ← CRUD archivos, carpetas, búsqueda semántica, escanear factura, describir imagen
       auth.service.ts       ← Login, registro, token en localStorage, signal usuario
       auth.guard.ts         ← Redirige a /login si no hay token
       auth.interceptor.ts   ← Añade Authorization: Bearer <token> a todas las peticiones
@@ -94,9 +94,17 @@ Componente más complejo. Características:
 - **Drag & drop** propio (eventos `pointer`, no HTML5 DnD) para mover archivos/carpetas
 - **Menú contextual** (clic derecho): abrir, escanear factura, descargar, copiar, renombrar, mover, borrar
 - **Visor de .md**: renderiza markdown con `marked` en un modal inline
-- **Selección múltiple**: checkbox por fila + barra de acciones bulk (copiar/mover/borrar)
+- **Selección múltiple**: checkbox por fila + barra de acciones bulk (copiar/mover/borrar);
+  al borrar carpeta+archivos seleccionados a la vez, se espera a que el borrado de la
+  carpeta termine en el servidor antes de refrescar (si no, podía "reaparecer" hasta
+  repetir la acción una segunda vez)
 - **Búsqueda semántica RAG**: campo + botón que llama `/api/archivos/buscar`
-- **Modal escanear factura**: botón "Escanear factura" en el menú contextual de archivos PDF/imagen
+- **Modal escanear factura**: botón "Escanear factura" en el menú contextual de archivos
+  PDF/imagen, con pista opcional (ya se envía correctamente al backend)
+- **Modal describir imagen**: tras subir una o varias imágenes, pregunta "¿Qué es esta
+  imagen?" (omitible) una por una; lo escrito se guarda como el contenido del archivo
+  (`describirArchivo`) para que "muéstrame"/la búsqueda semántica lo encuentren sin
+  esperar al OCR automático en segundo plano
 
 ### `/papelera`
 - Lista archivos eliminados con fecha de borrado
@@ -114,9 +122,10 @@ Componente más complejo. Características:
 - `listarCarpetas()`: lista carpetas persistidas en BD
 - `crearCarpetaApi(ruta)`, `reubicarCarpetaApi(origen, destino)`, `eliminarCarpetaApi(ruta)`
 - `subir(file, carpeta)`: multipart a `/api/archivos/subir`
-- `descargar(id)`: GET con `responseType: 'blob'` (sigue el 302 a URL firmada MinIO)
+- `descargar(id)`: GET con `responseType: 'blob'` (la API hace streaming del binario, no es un redirect a MinIO)
 - `descargarCarpeta(ruta)`: descarga .zip
 - `escanearFactura(archivoId, pista?)`: POST a `/api/facturas/escanear`
+- `describirArchivo(archivoId, descripcion)`: PATCH a `/api/archivos/:id/descripcion`
 - `buscarSemantica(q)`: GET a `/api/archivos/buscar?q=...`
 
 ### `ChatService`
