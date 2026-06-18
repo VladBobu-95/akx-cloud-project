@@ -153,9 +153,10 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 ### `/api/auth`
 | Método | Ruta | Body |
 |---|---|---|
-| POST | `/registro` | `{email, password, nombre}` |
-| POST | `/login` | `{email, password}` → `{usuario, token}` |
-| PATCH | `/perfil` | `{nombre?, avatar?}` |
+| POST | `/registro` | `{email, password, nombre}` — máx. 5/hora por IP (solo en producción) |
+| POST | `/login` | `{email, password}` → `{usuario, token}` — máx. 10/15min por IP (solo en producción) |
+| GET | `/perfil` 🔒 | → `{usuario}` |
+| PATCH | `/perfil` 🔒 | `{nombre?, avatar?, password?}` — `avatar` es un data URL base64 (`""` para quitarlo); `password` min. 8 chars |
 
 ### `/api/archivos`
 | Método | Ruta | Notas |
@@ -169,6 +170,7 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 | GET/POST | `/carpetas` | Listar / Crear `{ruta}` |
 | PATCH | `/carpetas` | Mover/renombrar `{origen, destino}` |
 | DELETE | `/carpetas` | query: `ruta` |
+| GET | `/:id` | Metadata del archivo (sin descargar el binario) |
 | PATCH | `/:id` | `{nombre?, carpeta?}` |
 | POST | `/:id/copiar` | `{carpeta?, nombre?}` |
 | PATCH | `/:id/restaurar` | Restaurar de papelera |
@@ -179,7 +181,11 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 ### `/api/chat`
 | Método | Ruta | Body |
 |---|---|---|
-| POST | `/` | `{mensajes: [{rol: "usuario"\|"bot", contenido}]}` → `{respuesta, acciones[]}` |
+| POST | `/` | `{mensajes: [{rol: "usuario"\|"bot", contenido}]}` → `{respuesta, acciones[], archivo?: {id, nombre}}` |
+
+`archivo` solo viene cuando la respuesta se resolvió sobre un archivo concreto (p. ej.
+`obtener_factura` o el pre-flight de "abre/muestra factura X"): el frontend lo usa para
+mostrar un botón "Abrir archivo" bajo la respuesta.
 
 ### `/api/facturas`
 | Método | Ruta | Body |
@@ -189,6 +195,12 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 ---
 
 ## Schema de BD
+
+### `usuarios`
+- `id` UUID, `email` unique, `nombre`, `avatar` (data URL base64, nullable)
+- `passwordHash` (bcrypt), `rol` (`"user"` | `"admin"`, default `"user"`) — existe un
+  middleware `soloAdmin` para rutas de admin, pero ninguna ruta lo usa todavía
+- `creadoEn`
 
 ### `archivos` — metadatos de fichero
 - `id` UUID, `nombre`, `carpeta` (ruta `/facturas/2026`), `mimeType`
@@ -221,25 +233,48 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 
 1. **Solo el último mensaje**: al modelo se le envía únicamente el último mensaje del usuario (no el historial). Reenviar turnos previos hacía que modelos pequeños **re-ejecutaran** acciones anteriores (p. ej. repetir `borrar_todo` al pedir cualquier cosa). Cada orden de archivos es independiente.
 
-2. **Pre-flight de "borrar todo"**: regex que detecta "borra todo / todas las carpetas / empezar de cero" y llama `borrar_todo` directamente (el modelo no lo invocaba de forma fiable para esas frases).
+2. **Pre-flights deterministas por regex**: para frases muy comunes, no se confía en que el modelo elija la tool correcta — se resuelven directamente contra la BD, sin llamar a Ollama:
+   - **Borrados masivos**: distingue "borra todo" (`borrar_todo`, incluida la raíz), "borra todas las carpetas" (`borrar_todas_carpetas`, con su contenido, sin tocar lo suelto en la raíz) y "borra todos los archivos/ficheros" (`borrar_todos_archivos`, sin tocar carpetas).
+   - **Listado combinado**: "lista/pásame todo lo que tengo" (archivos + carpetas), con soporte para acotar a una carpeta concreta o solo la raíz.
+   - **¿Qué hay en la papelera?**: el prompt de facturas es grande y sesgaba al modelo hacia esas tools para esta pregunta (devolvía contenido random no relacionado); se resuelve aquí con `listar_papelera`.
+   - **Existencia/ubicación de un archivo** ("¿tengo/hay/existe... archivo X?", "dónde está/busca el archivo X"): comprobación instantánea con `buscar_archivos`. Sin esto, el modelo a veces decidía "comprobar" escaneando con OCR (lento, y en servidores sin GPU puede acabar tirando el proceso — se ve como "no se puede conectar con el servidor" en el front).
+   - **Abrir/mostrar una factura** ("abre/muéstrame factura_X"): lee siempre de BD vía `obtener_factura`, nunca relanza un escaneo OCR. Si la factura no se ha escaneado, lo dice al instante en vez de escanearla sin que se pida (antes parecía que la petición "no funcionaba" cuando en realidad el modelo se había puesto a escanear por su cuenta).
 
-3. **Bucle de herramientas** (máx 15 iter): llama Ollama → si hay `tool_calls` → ejecuta → repite. Dos refuerzos:
-   - **Parser de respaldo de tool calls**: si el modelo escribe las llamadas como **texto JSON** en `content` (en vez de en `tool_calls`), se extraen con un escáner de llaves balanceadas (admite varias pegadas) y se ejecutan igual. Solo acepta nombres de herramientas reales.
-   - **Bypass pattern**: si TODAS las herramientas de una iteración devuelven `resumen: string`, se retorna ese markdown directamente sin otra llamada al modelo (evita que reformatee mal, use `$` en vez de `€`, o invente datos).
+3. **Bucle de herramientas** (máx 15 iter): llama Ollama → si hay `tool_calls` → ejecuta → repite. Varios refuerzos:
+   - **Parser de respaldo de tool calls**: si el modelo escribe las llamadas como **texto JSON** en `content` (en vez de en `tool_calls`), se extraen con un escáner de llaves balanceadas (admite varias pegadas) y se ejecutan igual.
+   - **Remapeo de nombres alucinados** (`remapearNombreTool`): el modelo a veces se inventa nombres como `mover_factura`/`copiar_factura` en vez de los reales `mover_archivo`/`copiar_archivo` (una factura es un archivo normal, no hay tools específicas). Se remapea por regex (`<verbo>_facturas?` → `<verbo>_archivo`, `borrar` → `eliminar`) tanto en el parser de texto como en `tool_calls` reales, así la acción se ejecuta de verdad en vez de devolver un error genérico.
+   - **Resolución flexible de nombres** (`resolverArchivo`/`resolverCarpeta`): búsqueda por nombre/leaf-name (no hace falta la ruta completa) en **todas las carpetas**, con fallback archivo↔carpeta cuando una operación de carpeta en realidad apunta a un archivo (y viceversa). Si hay varias coincidencias, la tool devuelve `necesita_aclaracion` con las opciones reales.
+   - **Bypass de aclaración**: cuando una tool devuelve `necesita_aclaracion` con `opciones`, la lista se construye **en el servidor** y se devuelve directa — dejarlo en manos del modelo a veces resultaba en "¿cuál quieres?" sin listar ninguna opción real.
+   - **Bypass de resumen**: si TODAS las herramientas de una iteración devuelven `resumen: string`, se retorna ese markdown directamente sin otra llamada al modelo (evita que reformatee mal, use `$` en vez de `€`, o invente datos). Se usa en facturas y en **todas** las operaciones de archivos/carpetas/papelera (`resumen: "Hecho."`).
 
 `temperature: 0` y `keep_alive: 30m`.
 
 ### Herramientas disponibles al modelo
-`buscar_archivos`, `copiar_archivo`, `mover_archivo`, `renombrar_archivo`, `eliminar_archivo`, `crear_archivo`, `crear_carpeta`, `listar_carpetas`, `eliminar_carpeta`, `vaciar_carpeta`, `mover_carpeta`, `renombrar_carpeta`, `copiar_carpeta`, `borrar_todo`, `listar_papelera`, `restaurar_archivo`, `borrar_permanente`, `vaciar_papelera`, `leer_archivo`, `estadisticas`, `buscar_semantica`, `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`, `ventas_top`, `totales_facturas`
+`buscar_archivos`, `copiar_archivo`, `mover_archivo`, `renombrar_archivo`, `eliminar_archivo`, `crear_archivo`, `crear_carpeta`, `listar_carpetas`, `eliminar_carpeta`, `vaciar_carpeta`, `mover_carpeta`, `renombrar_carpeta`, `copiar_carpeta`, `borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`, `listar_papelera`, `restaurar_archivo`, `borrar_permanente`, `vaciar_papelera`, `leer_archivo`, `estadisticas`, `buscar_semantica`, `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`, `ventas_top`, `totales_facturas`
 
 ### Analítica de facturas (`ventas_top`, `totales_facturas`)
 Ambas aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre de archivo; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo ranking), `mes`/`anio` o `desde`/`hasta`, `orden` (más/menos vendido). Si se nombran facturas concretas que aún **no están escaneadas**, se **escanean al vuelo** (`asegurarFacturasEscaneadas`) antes de agregar.
 
 ### Tools con bypass (devuelven markdown preconstruido, con € server-side)
 - `escanear_factura` → OCR (deepseek-ocr) + extracción JSON forzada con Ollama → guarda en BD → markdown
-- `obtener_factura` → lee de BD directamente, sin re-escanear el PDF
+- `obtener_factura` → resuelve el archivo con `resolverArchivo` (mismo buscador que el resto de tools, con manejo de ambigüedad/no-encontrado) y lee de BD directamente, sin re-escanear el PDF. Antes buscaba con `ILIKE %nombre%` sin validar nombre vacío/ambiguo y se podía quedar con un archivo arbitrario (devolvía la factura de **otro** archivo); ahora no puede pasar.
 - `ventas_top` → ranking de productos (SQL GROUP BY sobre `lineas_factura`)
 - `totales_facturas` → totales (nº facturas, subtotal, IVA, total) filtrados
+
+El markdown de una factura (`resumenFacturaMd`, usado tanto en el chat como en el
+`.md` de resumen que se genera al escanear) usa `##` igual que `ventas_top`/
+`totales_facturas`, y el título incluye el nombre del archivo junto al número de
+factura (`## Factura 2026-2003 — factura_03.pdf`) para que no haya desconexión entre
+lo que se pidió y lo que aparece.
+
+### Abrir archivo desde el chat
+Cuando `obtener_factura` (o el pre-flight de "abre/muestra factura") resuelve un
+archivo concreto, `chatear()` devuelve `archivo: {id, nombre}` además de la respuesta.
+El frontend (`pages/inicio/inicio.ts`) muestra un botón "Abrir `<nombre>`" bajo el
+mensaje; al pulsarlo abre el archivo en una pestaña nueva igual que en el explorador
+(PDF/imagen/texto se previsualizan, el resto se descarga). La ventana se abre en
+blanco **en el momento del clic** (antes de pedir el blob) para que el navegador no la
+bloquee como pop-up — abrir una pestaña fuera de un gesto de clic directo se bloquea.
 
 ---
 
@@ -280,7 +315,7 @@ auto-escanean al consultarlas).
 src/
   app/
     core/
-      archivos.service.ts   ← CRUD archivos, carpetas, escanear factura, búsqueda RAG
+      archivos.service.ts   ← CRUD archivos, carpetas, escanear factura, búsqueda RAG, obtener metadata
       auth.service.ts       ← Login/registro, token en localStorage, signal usuario
       auth.guard.ts         ← Redirige a /login si no hay token
       auth.interceptor.ts   ← Añade Authorization: Bearer a todas las peticiones
@@ -292,7 +327,7 @@ src/
       shell.ts              ← Navbar: logo, nav links, avatar, cerrar sesión
     pages/
       login/login.ts        ← Login + registro en tabs
-      inicio/inicio.ts      ← Chat con el asistente IA
+      inicio/inicio.ts      ← Chat con el asistente IA; botón "Abrir archivo" cuando la respuesta resuelve uno
       archivos/archivos.ts  ← Explorador: tabla, carpetas, drag&drop, menú contextual, RAG
       papelera/papelera.ts  ← Restaurar / borrar permanente / vaciar
       perfil/perfil.ts      ← Editar nombre y avatar
@@ -341,7 +376,7 @@ npm start    # ng serve → http://localhost:4200
 - **Auto-escaneo al subir**: se ejecuta para todo PDF/imagen subido; con la guardia `soloSiFactura` no guarda los que no parecen factura, pero igualmente consume cómputo de OCR+IA por cada uno.
 - **Tipos de archivo permitidos**: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máximo 50 MB.
 - **Subida**: un archivo por petición HTTP; múltiples archivos → peticiones paralelas en el frontend.
-- **`acciones[]`** que devuelve el chat (ej: "Factura escaneada: 3 líneas") no se muestran en la UI actualmente.
+- El chat no renderiza markdown (los `resumen`/`acciones` se muestran como texto plano con `white-space: pre-wrap`, no como HTML); los `#`/`**`/tablas se ven tal cual en vez de formateados.
 
 ## Despliegue (servidor)
 

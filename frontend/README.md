@@ -55,6 +55,16 @@ que el asistente sea fiable:
 - La **confirmación real** de una acción son las líneas `✓` que el componente añade a
   partir del array `acciones` que devuelve el backend (solo aparecen cuando una
   herramienta se ejecutó de verdad); el texto del bot solo acompaña.
+- El texto se muestra **tal cual** (sin renderizar markdown): `marked` solo se usa en el
+  visor de `.md` del explorador, no en el chat.
+- Cuando la respuesta resuelve un archivo concreto (p. ej. pedir "muéstrame factura_X"),
+  el backend devuelve `archivo: {id, nombre}` y el componente muestra un botón
+  **"Abrir `<nombre>`"** bajo el mensaje. Al pulsarlo abre el archivo en una pestaña
+  nueva igual que en el explorador (`ArchivosService.obtener()` para el `mimeType` +
+  `descargar()` para el blob): PDF/imagen/texto se previsualizan, el resto se descarga.
+  La ventana se abre en blanco **en el momento del clic**, antes de pedir el blob, para
+  que el navegador no la bloquee como pop-up (abrir una pestaña fuera de un gesto de
+  clic directo se bloquea).
 
 ### Archivos (`pages/archivos`)
 Vista de carpetas + archivos con navegación por rutas, subida, drag & drop para
@@ -64,6 +74,13 @@ metadata en el backend. Incluye un **buscador por contenido** (RAG): llama a
 coincide; al hacer clic lleva a la carpeta del archivo. El menú contextual de un PDF/
 imagen tiene **"Escanear factura"**, que abre un modal (con pista opcional) y llama a
 `POST /api/facturas/escanear` (OCR + extracción de datos).
+
+### Perfil (`pages/perfil`)
+Editar nombre, avatar y contraseña. El avatar se procesa en el cliente: se recorta a
+cuadrado centrado, se redimensiona a 128px con `<canvas>` y se envía como data URL JPEG
+(calidad 0.85) — el backend lo guarda tal cual en la columna `avatar` (texto), no hay
+endpoint de subida de ficheros para esto. La contraseña nueva (mín. 8 caracteres) se
+envía en el mismo `PATCH /api/auth/perfil`.
 
 ### Tema y UI (`shared/`, `layout/`)
 Tema claro/oscuro con variables CSS, toasts de éxito/error, pipe de tamaño de fichero y

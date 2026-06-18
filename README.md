@@ -64,7 +64,11 @@ En dev/prod el esquema se gestiona con migraciones (`migrationsRun: true`), no c
 ### Autenticación
 Registro/login devuelven un JWT (7 días). Las contraseñas se guardan hasheadas con
 bcrypt. El middleware `auth` protege las rutas y deja el `usuarioId` disponible para
-que cada servicio filtre **solo los datos de ese usuario**. Rate limiting en login/registro.
+que cada servicio filtre **solo los datos de ese usuario**. Rate limiting (solo en
+producción): login máx. 10 intentos/15min por IP, registro máx. 5/hora por IP. El
+perfil (`GET`/`PATCH /api/auth/perfil`) permite cambiar nombre, avatar (data URL
+base64) y contraseña (mín. 8 caracteres) en la misma petición. Existe un campo `rol`
+(`"user"`/`"admin"`) y un middleware `soloAdmin`, pero todavía no hay rutas que lo usen.
 
 ### Archivos (metadata + MinIO)
 La subida es **transaccional**: se sube el binario a MinIO y se guarda la metadata en
@@ -93,13 +97,23 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   debe soportar tool calling). `temperature: 0` y `keep_alive: 30m`.
 - **Solo se envía el último mensaje** al modelo (no el historial): reenviar turnos previos
   hacía que modelos pequeños re-ejecutaran acciones anteriores (p. ej. repetir `borrar_todo`).
-- **Pre-flight de borrados masivos** por regex: distingue "borra todo" (`borrar_todo`,
-  incluida la raíz) de "borra todas las carpetas" (`borrar_todas_carpetas`, con su
-  contenido pero sin tocar la raíz) y "borra todos los archivos/ficheros"
-  (`borrar_todos_archivos`, sin tocar carpetas) — el modelo no invocaba estas tools de
-  forma fiable para frases tan directas.
+- **Pre-flights deterministas** por regex para frases muy comunes que el modelo no
+  invocaba de forma fiable: borrados masivos ("borra todo" / "borra todas las carpetas"
+  / "borra todos los archivos", cada uno con un alcance distinto), listar todo
+  (archivos + carpetas, con o sin acotar a una carpeta), "¿qué hay en la papelera?",
+  comprobar si existe/dónde está un archivo, y "abre/muéstrame factura X" (lee siempre
+  de BD, nunca relanza un escaneo OCR). Sin esto el modelo a veces "comprobaba" la
+  existencia de un archivo escaneándolo con OCR (lento, y podía tirar el proceso en
+  servidores sin GPU), o devolvía contenido de facturas no relacionado.
+- **Resolución flexible de archivos/carpetas** (`resolverArchivo`/`resolverCarpeta`):
+  busca por nombre (no la ruta completa) en todas las carpetas, con fallback
+  archivo↔carpeta si una operación de carpeta en realidad apunta a un archivo. Si hay
+  varias coincidencias, la pregunta de aclaración con las opciones reales se construye
+  **en el servidor** (el modelo a veces preguntaba "¿cuál quieres?" sin listar ninguna).
 - **Parser de respaldo**: si el modelo emite las tool calls como texto JSON en `content`
-  en vez de en `tool_calls`, se extraen (escáner de llaves balanceadas) y se ejecutan igual.
+  en vez de en `tool_calls`, se extraen (escáner de llaves balanceadas) y se ejecutan
+  igual. Además, los nombres de tool alucinados (`mover_factura` en vez de
+  `mover_archivo`) se remapean por regex en vez de descartarse.
 - **Bypass pattern**: si todas las tools de una iteración devuelven `resumen`, ese texto/
   markdown (con `€` server-side en facturas) se devuelve directo sin otra llamada al
   modelo. Además de en facturas, se usa en **todas** las operaciones de archivos/carpetas/
@@ -110,31 +124,62 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   borrados masivos (`borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`), y
   **facturas**: `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`,
   `ventas_top` y `totales_facturas` (analítica filtrable por factura, cliente, emisor,
-  producto y periodo).
+  producto y periodo). Cuando se resuelve un archivo concreto (p. ej. `obtener_factura`),
+  la respuesta del chat incluye `archivo: {id, nombre}` y el frontend muestra un botón
+  para abrirlo en una pestaña nueva, igual que en el explorador.
 
 **Cambiar de modelo:** edita `OLLAMA_MODEL` en `.env`, haz
 `docker exec clouddrive-ollama ollama pull <modelo>` y `docker compose up -d api`.
 
 #### Qué puede pedirle el usuario al chatbot
 
-No hace falta usar nombres técnicos, basta con pedirlo en lenguaje natural:
+No hace falta usar nombres técnicos ni dar la ruta completa de nada: basta con
+mencionar el nombre del archivo/carpeta y pedirlo en lenguaje natural. Por categoría,
+con ejemplos reales de frases que entiende:
 
-- **Archivos:** buscar/listar (por nombre o carpeta), copiar, mover, renombrar, eliminar
-  (a la papelera), crear una nota/archivo de texto (.md o .txt) con contenido, leer el
-  contenido de un archivo.
-- **Carpetas:** crear, eliminar entera (con su contenido, a la papelera), vaciar el
-  contenido de una carpeta (o de la raíz con `/`) dejando la carpeta, mover, renombrar,
-  copiar, listar todas.
-- **Borrados masivos:** borrar TODO (archivos y carpetas, "empezar de cero"), borrar
-  todas las carpetas (con su contenido, sin tocar lo suelto en la raíz), borrar todos los
-  archivos (sin tocar las carpetas).
-- **Papelera:** listar, restaurar un archivo, borrarlo definitivamente (irreversible),
-  vaciar la papelera entera.
-- **Búsqueda e info:** búsqueda semántica por significado ("¿qué documento habla de
-  X?"), estadísticas de uso.
-- **Facturas:** escanear una factura concreta o todas las pendientes, obtener/resumir
-  una ya escaneada, ranking de productos más/menos vendidos y totales facturados
-  (ambos filtrables por factura, cliente, emisor, producto y periodo).
+- **Archivos** — buscar/listar, copiar, mover, renombrar, enviar a la papelera, crear
+  una nota/documento de texto (.md o .txt) con contenido, leer su contenido:
+  - "¿tengo un archivo llamado factura_01?" / "busca el archivo presupuesto.pdf"
+  - "¿dónde está el archivo contrato.docx?"
+  - "lista mis archivos" / "qué archivos tengo en /facturas"
+  - "copia factura_03 a la carpeta 2026"
+  - "mueve presupuesto.pdf a /clientes"
+  - "cambia el nombre de factura_03 a factura_033"
+  - "borra el archivo viejo.txt"
+  - "créame una nota llamada notas.md con esto: ..."
+  - "lee el archivo notas.md" / "¿qué dice el contrato.docx?"
+- **Carpetas** — crear, eliminar entera (con su contenido), vaciar dejando la carpeta,
+  mover, renombrar, copiar, listar todas. No hace falta dar la ruta completa para
+  operar sobre una que ya existe, solo su nombre:
+  - "créame una carpeta llamada demo" (si no dices dónde, se crea en la raíz)
+  - "crea la carpeta /facturas/2026"
+  - "lista todas las carpetas"
+  - "borra la carpeta tmp" (carpeta + contenido, a la papelera)
+  - "vacía la carpeta tmp" (borra el contenido, la carpeta se queda)
+  - "mueve la carpeta tmp dentro de demo"
+  - "cambia el nombre de la carpeta tmp a temporal"
+  - "lista todo lo que tengo dentro de demo11" / "pásame todo lo que tengo en la raíz"
+- **Borrados masivos** — cada uno con un alcance distinto:
+  - "borra todo, quiero empezar de cero" (archivos y carpetas, todo)
+  - "borra todas las carpetas" (con su contenido; lo suelto en la raíz no se toca)
+  - "borra todos los ficheros" (archivos; las carpetas se quedan vacías)
+- **Papelera** — listar, restaurar, borrar definitivamente (irreversible), vaciar entera:
+  - "¿qué hay en la papelera?"
+  - "restaura factura_01" / "recupera factura_01"
+  - "borra factura_01 de la papelera" (borrado definitivo, no restaura)
+  - "vacía la papelera"
+- **Búsqueda e info** — por significado del contenido (no solo por nombre), y uso de la cuenta:
+  - "¿qué documento habla de impuestos?" / "¿dónde dice algo sobre el proyecto X?"
+  - "resume lo que tengo sobre Y"
+  - "estadísticas" / "¿cuánto espacio uso?"
+- **Facturas** — escanear, ver/abrir una ya escaneada, y analítica filtrable:
+  - "escanea factura_01" / "escanea todas las facturas"
+  - "muéstrame factura_03" / "abre factura_03" (lee de BD al instante; si no está
+    escaneada te lo dice en vez de escanearla sola, y aparece un botón para abrirla
+    tal cual en una pestaña nueva)
+  - "¿qué producto vendí más?" / "ranking de lo menos vendido"
+  - "¿cuánto le he facturado a Ferretería Sánchez?"
+  - "total facturado en 2026" / "totales de factura_01 y factura_02"
 
 ### Búsqueda semántica / RAG (`services/rag.service.ts` + `extraccion.service.ts`)
 Permite buscar por el **significado del contenido**, no solo por el nombre del archivo:
@@ -177,7 +222,7 @@ docker-compose.override.yml ollama + adminer (solo en local)
   `PATCH /:id`, `DELETE /:id` (papelera), `DELETE /:id/permanente`;
   papelera: `GET /papelera`, `PATCH /:id/restaurar`, `DELETE /papelera`
 - **Carpetas** (`/api/archivos/carpetas`) 🔒: crear/listar/mover/eliminar
-- **Chat** (`/api/chat`) 🔒: conversación con el asistente
+- **Chat** (`/api/chat`) 🔒: conversación con el asistente → `{respuesta, acciones[], archivo?: {id, nombre}}`
 - **Facturas** (`/api/facturas`) 🔒: `POST /escanear` (OCR + extracción de datos de una factura)
 - `GET /health`: estado de la API y conexión a BD
 
