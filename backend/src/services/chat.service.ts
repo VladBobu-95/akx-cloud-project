@@ -51,6 +51,14 @@ const hojaRuta = (r: string): string => {
 const unirRuta = (padre: string, nombre: string): string =>
   padre === "/" ? `/${nombre}` : `${padre}/${nombre}`;
 
+// Extrae una ruta de carpeta válida de los args. El modelo a veces omite "ruta"
+// o la pone bajo otra clave; sin esto, String(undefined) === "undefined" creaba
+// carpetas literales "/undefined".
+const extraerRuta = (args: Record<string, unknown>): string | undefined => {
+  const candidato = args.ruta ?? args.carpeta ?? args.nombre ?? args.path;
+  return typeof candidato === "string" && candidato.trim() ? candidato : undefined;
+};
+
 // --- Tipos del API de Ollama (/api/chat) ---
 interface OllamaToolCall {
   function: { name: string; arguments: Record<string, unknown> | string };
@@ -77,7 +85,7 @@ Gestionas los archivos y carpetas del usuario USANDO SIEMPRE las herramientas; n
 Cómo actuar:
 - Las acciones sobre archivos (copiar/mover/renombrar/borrar) se hacen indicando el NOMBRE del archivo; el sistema lo localiza solo. No necesitas ids.
 - Si quieres ver qué hay, usa "buscar_archivos" (con "texto" para filtrar por nombre, o "carpeta" para listar una carpeta; sin nada lista los más recientes).
-- Para crear una carpeta usa "crear_carpeta" con la "ruta" (ej: "/facturas"). Para listarlas, "listar_carpetas". NUNCA llames a "crear_carpeta" como paso previo a "renombrar_carpeta", "mover_carpeta" ni ninguna otra operación: si el usuario menciona una carpeta, asume que ya existe y actúa directamente.
+- Para crear una carpeta usa "crear_carpeta" con la "ruta" (ej: "/facturas"). Si el usuario NO indica dónde (solo da un nombre, ej: "creame una carpeta demo"), la ruta es simplemente "/<nombre>" en la RAÍZ; no inventes ni anides una ubicación a partir de carpetas mencionadas antes en la conversación. Para listarlas, "listar_carpetas". NUNCA llames a "crear_carpeta" como paso previo a "renombrar_carpeta", "mover_carpeta" ni ninguna otra operación: si el usuario menciona una carpeta, asume que ya existe y actúa directamente.
 - Para crear un archivo/nota/documento (.md o .txt) DEBES llamar a "crear_archivo" (nombre, carpeta y contenido). Nunca describas que lo creas sin llamar a la herramienta. Si el usuario NO indica carpeta, NO pongas "carpeta" (se creará en la raíz); no te inventes una carpeta a partir del nombre.
 - "eliminar_carpeta" borra la carpeta ENTERA (carpeta + contenido). "vaciar_carpeta" borra SOLO el contenido y deja la carpeta: úsalo si piden "borra el contenido de X" o "vacía X".
 - Si el usuario pide borrar TODAS las carpetas (aunque no mencione archivos), usa "borrar_todo" directamente.
@@ -194,7 +202,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "crear_carpeta",
-      description: "Crea una carpeta. Indica la ruta completa, ej: /facturas o /facturas/2026.",
+      description:
+        "Crea una carpeta. Indica la ruta completa, ej: /facturas o /facturas/2026. Si el usuario no indica ubicación, usa solo \"/<nombre>\" (raíz).",
       parameters: {
         type: "object",
         properties: { ruta: { type: "string", description: "ruta de la carpeta a crear" } },
@@ -621,7 +630,9 @@ const ejecutarTool = async (
         return { ok: true, nombre: res.archivo!.nombre };
       }
       case "crear_carpeta": {
-        const ruta = await crearCarpeta(usuarioId, String(args.ruta));
+        const rutaArg = extraerRuta(args);
+        if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a crear." };
+        const ruta = await crearCarpeta(usuarioId, rutaArg);
         acciones.push(`Carpeta creada: ${ruta}`);
         return { ok: true, ruta };
       }
@@ -637,13 +648,17 @@ const ejecutarTool = async (
         return { ok: true, nombre: r.nombre, carpeta: r.carpeta };
       }
       case "eliminar_carpeta": {
-        const r = await eliminarCarpetaConContenido(usuarioId, String(args.ruta));
-        acciones.push(`Carpeta enviada a la papelera: ${args.ruta} (${r.borrados} archivo/s)`);
+        const rutaArg = extraerRuta(args);
+        if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a borrar." };
+        const r = await eliminarCarpetaConContenido(usuarioId, rutaArg);
+        acciones.push(`Carpeta enviada a la papelera: ${rutaArg} (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados };
       }
       case "vaciar_carpeta": {
-        const r = await vaciarCarpeta(usuarioId, String(args.ruta));
-        acciones.push(`Contenido de ${args.ruta} enviado a la papelera (${r.borrados} archivo/s)`);
+        const rutaArg = extraerRuta(args);
+        if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a vaciar." };
+        const r = await vaciarCarpeta(usuarioId, rutaArg);
+        acciones.push(`Contenido de ${rutaArg} enviado a la papelera (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados };
       }
       case "listar_carpetas": {
@@ -684,21 +699,37 @@ const ejecutarTool = async (
       }
       // --- Operaciones de carpeta ---
       case "mover_carpeta": {
-        const origen = normalizarRuta(String(args.ruta));
-        const destino = unirRuta(normalizarRuta(String(args.carpeta_destino)), hojaRuta(origen));
+        const rutaArg = extraerRuta(args);
+        if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a mover." };
+        const destinoArg =
+          typeof args.carpeta_destino === "string" && args.carpeta_destino.trim()
+            ? args.carpeta_destino
+            : undefined;
+        if (!destinoArg) return { error: "Falta indicar la carpeta destino." };
+        const origen = normalizarRuta(rutaArg);
+        const destino = unirRuta(normalizarRuta(destinoArg), hojaRuta(origen));
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta movida a ${destino} (${r.movidos} archivo/s)`);
         return { ok: true, destino, movidos: r.movidos };
       }
       case "renombrar_carpeta": {
-        const origen = normalizarRuta(String(args.ruta));
-        const destino = unirRuta(padreRuta(origen), String(args.nuevo_nombre));
+        const rutaArg = extraerRuta(args);
+        if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a renombrar." };
+        const nuevoNombre =
+          typeof args.nuevo_nombre === "string" && args.nuevo_nombre.trim()
+            ? args.nuevo_nombre
+            : undefined;
+        if (!nuevoNombre) return { error: "Falta indicar el nuevo nombre de la carpeta." };
+        const origen = normalizarRuta(rutaArg);
+        const destino = unirRuta(padreRuta(origen), nuevoNombre);
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta renombrada a ${destino}`);
         return { ok: true, destino, movidos: r.movidos };
       }
       case "copiar_carpeta": {
-        const origen = normalizarRuta(String(args.ruta));
+        const rutaArg = extraerRuta(args);
+        if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a copiar." };
+        const origen = normalizarRuta(rutaArg);
         const destino =
           typeof args.carpeta_destino === "string" && args.carpeta_destino
             ? unirRuta(normalizarRuta(args.carpeta_destino), hojaRuta(origen))
