@@ -7,6 +7,7 @@ import { minioClient } from "../config/minio";
 import { AppError } from "../utils/errors";
 import { env } from "../config/env";
 import { z } from "zod";
+import { crearCarpeta, normalizarRuta } from "./carpetas.service";
 
 const repo = () => AppDataSource.getRepository(Archivo);
 
@@ -20,6 +21,7 @@ export const subirArchivo = async (
 ): Promise<Archivo> => {
   // Normalizamos la carpeta: quitamos barras al inicio y al final
   const carpetaLimpia = carpeta.replace(/^\/|\/$/g, "") || "raiz";
+  const carpetaFinal = carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`;
 
   // Generamos una clave única para el objeto en MinIO.
   // Estructura: usuarioId/carpeta/uuid  (así cada usuario tiene su "directorio")
@@ -39,7 +41,7 @@ export const subirArchivo = async (
   // aparezcan en la raíz del explorador; "raiz" solo se usa en la clave MinIO.
   const archivo = repo().create({
     nombre: file.originalname,
-    carpeta: carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`,
+    carpeta: carpetaFinal,
     mimeType: file.mimetype,
     tamanoBytes: String(file.size),
     claveMinio: clave,
@@ -49,7 +51,12 @@ export const subirArchivo = async (
   // Si el guardado en Postgres falla, borramos el objeto que ya subimos a MinIO
   // para no dejar un binario huérfano (sin metadata que lo referencie).
   try {
-    return await repo().save(archivo);
+    const guardado = await repo().save(archivo);
+    // Persiste la carpeta como metadata explícita: si no, al borrar/mover este
+    // archivo (el único que "creaba" la carpeta) la carpeta desaparecería de
+    // los listados aunque el usuario la siga viendo como existente.
+    if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal);
+    return guardado;
   } catch (err) {
     await minioClient.removeObject(env.MINIO_BUCKET, clave).catch(() => {});
     throw err;
@@ -143,6 +150,7 @@ export const crearArchivoTexto = async (
   contenido: string,
 ): Promise<Archivo> => {
   const carpetaLimpia = (carpeta ?? "").replace(/^\/|\/$/g, "") || "raiz";
+  const carpetaFinal = carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`;
   const clave = `${usuarioId}/${carpetaLimpia}/${randomUUID()}`;
   const buffer = Buffer.from(contenido ?? "", "utf8");
   const mimeType = nombre.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain";
@@ -153,7 +161,7 @@ export const crearArchivoTexto = async (
 
   const archivo = repo().create({
     nombre,
-    carpeta: carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`,
+    carpeta: carpetaFinal,
     mimeType,
     tamanoBytes: String(buffer.length),
     claveMinio: clave,
@@ -161,7 +169,9 @@ export const crearArchivoTexto = async (
   });
 
   try {
-    return await repo().save(archivo);
+    const guardado = await repo().save(archivo);
+    if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal);
+    return guardado;
   } catch (err) {
     await minioClient.removeObject(env.MINIO_BUCKET, clave).catch(() => {});
     throw err;
@@ -415,9 +425,15 @@ export const actualizarArchivo = async (
 
   // Solo actualizamos los campos que llegan — si no llega nombre, no lo tocamos
   if (datos.nombre) archivo.nombre = datos.nombre;
-  if (datos.carpeta) archivo.carpeta = datos.carpeta;
+  // Normalizamos la carpeta (sin esto, "test" sin barra se guardaba literal
+  // en vez de "/test", inconsistente con el resto del sistema).
+  if (datos.carpeta) archivo.carpeta = normalizarRuta(datos.carpeta);
 
   const guardado = await repo().save(archivo);
+  // Persiste la carpeta como metadata explícita: si no, al mover el único
+  // archivo de una carpeta nueva y luego borrarlo, la carpeta desaparecería
+  // de los listados (nunca existió como fila propia en "carpetas").
+  if (archivo.carpeta !== "/") await crearCarpeta(usuarioId, archivo.carpeta);
 
   // Igual que en obtenerArchivo: no devolvemos el propietario (lleva passwordHash).
   delete (guardado as Partial<Archivo>).propietario;
@@ -452,6 +468,7 @@ export const copiarArchivo = async (
   // al subir (sin barras al inicio/fin); "" → raíz.
   const carpetaDestino = datos.carpeta ?? original.carpeta;
   const carpetaLimpia = carpetaDestino.replace(/^\/|\/$/g, "") || "raiz";
+  const carpetaFinal = carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`;
   const nuevaClave = `${usuarioId}/${carpetaLimpia}/${randomUUID()}`;
 
   // Duplicamos el objeto en MinIO. La fuente se indica como "/bucket/clave".
@@ -463,7 +480,7 @@ export const copiarArchivo = async (
 
   const copia = repo().create({
     nombre: datos.nombre ?? original.nombre,
-    carpeta: carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`,
+    carpeta: carpetaFinal,
     mimeType: original.mimeType,
     tamanoBytes: original.tamanoBytes,
     claveMinio: nuevaClave,
@@ -476,6 +493,7 @@ export const copiarArchivo = async (
   // un objeto huérfano en MinIO.
   try {
     const guardado = await repo().save(copia);
+    if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal);
     delete (guardado as Partial<Archivo>).propietario;
     return guardado;
   } catch (err) {

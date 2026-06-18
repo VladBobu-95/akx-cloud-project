@@ -106,6 +106,7 @@ Cómo actuar:
 - Para preguntas sobre el CONTENIDO sin saber en qué archivo está (ej: "¿qué documento habla de X?", "¿dónde dice algo sobre Y?", "resume lo que tengo sobre Z") usa "buscar_semantica": busca por significado dentro de todos los documentos y devuelve los más relevantes con un fragmento. Responde basándote en esos fragmentos y di de qué archivo salen.
 - Una factura es un ARCHIVO normal (un PDF/imagen). Para copiarla/moverla/renombrarla/eliminarla usa SIEMPRE "copiar_archivo"/"mover_archivo"/"renombrar_archivo"/"eliminar_archivo" con su nombre — NO existen herramientas como "mover_factura" ni similares; nunca te inventes nombres de herramienta que no estén en la lista.
 - FACTURAS — elige la herramienta correcta:
+  • Si solo pregunta si EXISTE/TIENE un archivo (ej: "¿tengo un archivo llamado factura_01?", "busca factura_033") → usa "buscar_archivos", igual que con cualquier otro archivo. NUNCA escanees ni abras una factura solo para comprobar que existe (el OCR tarda mucho y aquí no hace falta).
   • Si el usuario pide VER o RESUMIR una factura específica YA escaneada → usa "obtener_factura" (lee de BD, rápido, sin re-procesar el PDF).
   • Si el usuario pide ESCANEAR/PROCESAR una o varias facturas concretas por nombre → usa "escanear_factura" UNA VEZ POR CADA archivo mencionado (nunca uses "escanear_todas_facturas" si el usuario nombró archivos específicos).
   • Si el usuario pide escanear/procesar TODAS sus facturas sin nombrarlas → usa "escanear_todas_facturas".
@@ -655,9 +656,9 @@ const ejecutarTool = async (
         if (res.error) return { error: res.error };
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
         const r = await copiarArchivo(res.archivo!.id, usuarioId, {
-          carpeta: typeof args.carpeta === "string" ? args.carpeta : undefined,
+          carpeta: extraerRuta(args, "carpeta", "carpeta_destino", "destino", "ruta"),
         });
-        acciones.push(`Copiado "${r.nombre}"`);
+        acciones.push(`Copiado "${r.nombre}" en ${r.carpeta}`);
         return { ok: true, nombre: r.nombre, resumen: "Hecho." };
       }
       case "mover_archivo": {
