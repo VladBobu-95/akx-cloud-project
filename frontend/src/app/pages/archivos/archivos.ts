@@ -301,6 +301,34 @@ interface Arrastre {
       </div>
     }
 
+    <!-- Modal describir imagen (tras subir una foto sin texto legible) -->
+    @if (describirModal(); as di) {
+      <div class="modal-backdrop" (click)="omitirDescripcion()">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>¿Qué es esta imagen?</h2>
+          <p class="muted" style="margin-bottom: 10px;">
+            {{ di.nombre }} — así podrás encontrarla luego buscando o pidiendo "muéstrame".
+          </p>
+          <div class="field">
+            <input
+              class="input"
+              [(ngModel)]="descripcionImagen"
+              placeholder="Ej: foto de una vela aromática blanca"
+              autocomplete="off"
+            />
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" [disabled]="guardandoDescripcion()" (click)="omitirDescripcion()">
+              Omitir
+            </button>
+            <button class="btn btn-primary" [disabled]="guardandoDescripcion()" (click)="confirmarDescripcion()">
+              {{ guardandoDescripcion() ? 'Guardando…' : 'Guardar' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+
     <!-- Modal escanear factura -->
     @if (escanearModal(); as ef) {
       <div class="modal-backdrop" (click)="escanearModal.set(null)">
@@ -895,8 +923,8 @@ export class ArchivosPage {
     const carpeta = this.rutaActual();
     const subidas = files.map((f) =>
       this.svc.subir(f, carpeta).pipe(
-        map(() => ({ ok: true })),
-        catchError(() => of({ ok: false })),
+        map((archivo) => ({ ok: true as const, archivo })),
+        catchError(() => of({ ok: false as const, archivo: null })),
         finalize(() => this.subidaRestantes.update((n) => n - 1)),
       ),
     );
@@ -911,7 +939,50 @@ export class ArchivosPage {
         this.toast.error(`${ok} subido(s), ${fallidos} fallaron`);
       }
       this.cargar();
+      // Las fotos sin texto (deepseek-ocr no sabe describirlas, solo transcribir)
+      // no se pueden buscar/mostrar bien luego; se le pregunta al usuario qué son
+      // justo despues de subirlas, una a una, para guardarlo como su contenido.
+      const imagenes = resultados
+        .filter((r) => r.ok && /^image\//.test(r.archivo!.mimeType))
+        .map((r) => r.archivo!);
+      if (imagenes.length) this.colaDescribirImagenes.set(imagenes);
+      this.siguienteImagenADescribir();
     });
+  }
+  protected colaDescribirImagenes = signal<Archivo[]>([]);
+  protected describirModal = signal<{ id: string; nombre: string } | null>(null);
+  protected descripcionImagen = '';
+  protected guardandoDescripcion = signal(false);
+  private siguienteImagenADescribir() {
+    const [siguiente, ...resto] = this.colaDescribirImagenes();
+    this.colaDescribirImagenes.set(resto);
+    this.descripcionImagen = '';
+    this.describirModal.set(siguiente ? { id: siguiente.id, nombre: siguiente.nombre } : null);
+  }
+  confirmarDescripcion() {
+    const di = this.describirModal();
+    if (!di || this.guardandoDescripcion()) return;
+    const texto = this.descripcionImagen.trim();
+    if (!texto) {
+      this.siguienteImagenADescribir();
+      return;
+    }
+    this.guardandoDescripcion.set(true);
+    this.svc.describirArchivo(di.id, texto).subscribe({
+      next: () => {
+        this.guardandoDescripcion.set(false);
+        this.toast.exito('Descripción guardada');
+        this.siguienteImagenADescribir();
+      },
+      error: (err) => {
+        this.guardandoDescripcion.set(false);
+        this.toast.error(mensajeError(err));
+      },
+    });
+  }
+  omitirDescripcion() {
+    if (this.guardandoDescripcion()) return;
+    this.siguienteImagenADescribir();
   }
 
   // --- Acciones de archivo ---

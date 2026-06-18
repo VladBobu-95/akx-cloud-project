@@ -20,6 +20,7 @@ import {
   ctrlReubicarCarpeta,
   ctrlEliminarCarpeta,
   ctrlBuscarSemantica,
+  ctrlDescribir,
 } from "../controllers/archivos.controller";
 import { AppError } from "../utils/errors";
 
@@ -80,6 +81,7 @@ router.delete("/papelera", verificarToken, ctrlVaciarPapelera);
 router.patch("/:id", verificarToken, validarUUID, ctrlActualizar);
 router.post("/:id/copiar", verificarToken, validarUUID, ctrlCopiar);
 router.patch("/:id/restaurar", verificarToken, validarUUID, ctrlRestaurar);
+router.patch("/:id/descripcion", verificarToken, validarUUID, ctrlDescribir);
 router.get("/:id", verificarToken, validarUUID, ctrlObtener);
 router.get("/:id/descargar", verificarToken, validarUUID, ctrlDescargar);
 router.delete("/:id/permanente", verificarToken, validarUUID, ctrlBorrarPermanente);

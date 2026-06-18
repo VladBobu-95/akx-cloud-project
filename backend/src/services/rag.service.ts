@@ -72,6 +72,32 @@ const vecLiteral = (v: number[]): string => `[${v.join(",")}]`;
 // Indexa un archivo: extrae su texto, lo trocea, genera embeddings y guarda los
 // fragmentos. Devuelve cuántos fragmentos creó. Pensado para llamarse en segundo
 // plano tras la subida (los embeddings en CPU pueden tardar).
+// Indexa un texto ya disponible (extraído o escrito a mano por el usuario):
+// lo guarda en archivo.textoExtraido y regenera sus fragmentos para RAG.
+export const indexarTexto = async (
+  archivoId: string,
+  texto: string,
+  usuarioId: string,
+): Promise<number> => {
+  await archivoRepo().update(archivoId, { textoExtraido: texto.slice(0, 20000) });
+
+  // Borra fragmentos previos de este archivo (por si se reindexa) antes de insertar.
+  await AppDataSource.query(`DELETE FROM "fragmentos" WHERE "archivoId" = $1`, [archivoId]);
+
+  const trozos = trocear(texto);
+  if (trozos.length === 0) return 0;
+
+  const vectores = await embeddings(trozos, "documento");
+  for (let i = 0; i < trozos.length; i++) {
+    await AppDataSource.query(
+      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "indice", "texto", "embedding")
+       VALUES ($1, $2, $3, $4, $5::vector)`,
+      [archivoId, usuarioId, i, trozos[i], vecLiteral(vectores[i])],
+    );
+  }
+  return trozos.length;
+};
+
 export const indexarArchivo = async (
   archivo: Archivo,
   buffer: Buffer,
@@ -79,25 +105,7 @@ export const indexarArchivo = async (
 ): Promise<number> => {
   const texto = await extraerTexto(buffer, archivo.mimeType, archivo.nombre);
   if (!texto) return 0;
-
-  // Guardamos el texto extraído (recortado) en el propio archivo.
-  await archivoRepo().update(archivo.id, { textoExtraido: texto.slice(0, 20000) });
-
-  const trozos = trocear(texto);
-  if (trozos.length === 0) return 0;
-
-  const vectores = await embeddings(trozos, "documento");
-
-  // Borra fragmentos previos de este archivo (por si se reindexa) e inserta los nuevos.
-  await AppDataSource.query(`DELETE FROM "fragmentos" WHERE "archivoId" = $1`, [archivo.id]);
-  for (let i = 0; i < trozos.length; i++) {
-    await AppDataSource.query(
-      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "indice", "texto", "embedding")
-       VALUES ($1, $2, $3, $4, $5::vector)`,
-      [archivo.id, usuarioId, i, trozos[i], vecLiteral(vectores[i])],
-    );
-  }
-  return trozos.length;
+  return indexarTexto(archivo.id, texto, usuarioId);
 };
 
 export interface ResultadoSemantico {

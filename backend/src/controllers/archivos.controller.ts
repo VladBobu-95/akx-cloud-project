@@ -23,7 +23,7 @@ import {
   eliminarCarpetaConContenido,
   reubicarCarpeta,
 } from "../services/carpetas.service";
-import { indexarArchivo, buscarSemantica } from "../services/rag.service";
+import { indexarArchivo, indexarTexto, buscarSemantica } from "../services/rag.service";
 import { autoEscanearArchivo } from "../services/facturas.service";
 import { AppError } from "../utils/errors";
 
@@ -256,6 +256,26 @@ export const ctrlRestaurar = async (
   try {
     await restaurarArchivo(String(req.params.id), req.usuario!.id);
     res.json({ mensaje: "Archivo restaurado correctamente" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PATCH /api/archivos/:id/descripcion  { descripcion }
+// Permite que el usuario describa a mano una imagen sin texto legible (ej. una
+// foto de un producto): se guarda como si fuera el texto extraído del archivo,
+// para que "muéstrame"/la búsqueda semántica tengan algo útil que devolver.
+export const ctrlDescribir = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const descripcion = String(req.body.descripcion ?? "").trim();
+    if (!descripcion) throw new AppError(400, "Falta la descripción");
+    const archivo = await obtenerArchivo(String(req.params.id), req.usuario!.id);
+    await indexarTexto(archivo.id, descripcion, req.usuario!.id);
+    res.json({ mensaje: "Descripción guardada" });
   } catch (error) {
     next(error);
   }

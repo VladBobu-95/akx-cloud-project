@@ -86,6 +86,15 @@ export class ArchivosService {
     );
   }
 
+  // Guarda una descripción manual de una imagen (sin texto legible) para que
+  // se pueda encontrar luego por su contenido al buscar/leer.
+  describirArchivo(archivoId: string, descripcion: string) {
+    return this.http.patch<{ mensaje: string }>(
+      `${this.base}/${archivoId}/descripcion`,
+      { descripcion },
+    );
+  }
+
   subir(file: File, carpeta?: string) {
     const fd = new FormData();
     fd.append('archivo', file);
