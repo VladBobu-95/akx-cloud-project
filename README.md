@@ -99,17 +99,36 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   hacía que modelos pequeños re-ejecutaran acciones anteriores (p. ej. repetir `borrar_todo`).
 - **Pre-flights deterministas** por regex para frases muy comunes que el modelo no
   invocaba de forma fiable: borrados masivos ("borra todo" / "borra todas las carpetas"
-  / "borra todos los archivos", cada uno con un alcance distinto), listar todo
-  (archivos + carpetas, con o sin acotar a una carpeta), "¿qué hay en la papelera?",
-  comprobar si existe/dónde está un archivo, y "abre/muéstrame factura X" (lee siempre
-  de BD, nunca relanza un escaneo OCR). Sin esto el modelo a veces "comprobaba" la
-  existencia de un archivo escaneándolo con OCR (lento, y podía tirar el proceso en
-  servidores sin GPU), o devolvía contenido de facturas no relacionado.
+  / "borra todos los archivos", cada uno con un alcance distinto), borrar **un**
+  archivo o carpeta concretos ("borra el archivo X" / "borra la carpeta X" — el
+  modelo casi nunca llamaba a la tool para esto, a veces ni emitía ninguna llamada
+  válida), crear una nota/archivo de texto ("créame una nota llamada X con esto:
+  ..." — el modelo intentaba *leer* un archivo que aún no existía en vez de
+  crearlo), listar todo (archivos + carpetas, con o sin acotar a una carpeta —
+  admite tanto "de la carpeta X" como "dentro de X" sin la palabra "carpeta"),
+  "¿qué hay en la papelera?", restaurar vs. borrar definitivamente de la papelera
+  (son acciones opuestas que el modelo confundía pese a la instrucción explícita
+  del prompt — se llegó a ver "borra X de la papelera" *restaurando* el archivo),
+  comprobar si existe/dónde está un archivo, "abre/muéstrame factura X" (lee
+  siempre de BD, nunca relanza un escaneo OCR), totales de varias facturas
+  nombradas en la misma frase ("totales de factura_01 y factura_02" sin un verbo
+  claro como "dame" podía interpretarse como abrir solo la primera), y búsqueda
+  semántica por tema ("resume lo que tengo sobre X" / "qué documento habla de X" —
+  el modelo a veces pedía más detalles al usuario en vez de buscar). Sin estos el
+  modelo a veces "comprobaba" la existencia de un archivo escaneándolo con OCR
+  (lento, y podía tirar el proceso en servidores sin GPU), o devolvía contenido de
+  facturas no relacionado.
 - **Resolución flexible de archivos/carpetas** (`resolverArchivo`/`resolverCarpeta`):
   busca por nombre (no la ruta completa) en todas las carpetas, con fallback
-  archivo↔carpeta si una operación de carpeta en realidad apunta a un archivo. Si hay
-  varias coincidencias, la pregunta de aclaración con las opciones reales se construye
-  **en el servidor** (el modelo a veces preguntaba "¿cuál quieres?" sin listar ninguna).
+  archivo↔carpeta si una operación de carpeta en realidad apunta a un archivo, y
+  fallback a búsqueda por nombre suelto si el modelo antepone "/" a un nombre que
+  no es una ruta absoluta real (ej. pasa "/tmp" cuando la carpeta está en
+  "/demo/tmp"). Si hay varias coincidencias, la pregunta de aclaración con las
+  opciones reales se construye **en el servidor** (el modelo a veces preguntaba
+  "¿cuál quieres?" sin listar ninguna), y se recuerda qué se estaba pidiendo
+  (tool + argumentos) para completarlo en el turno siguiente cuando el usuario
+  responde con la opción elegida — antes esa respuesta se trataba como un mensaje
+  nuevo sin contexto y el modelo hacía otra cosa.
 - **Parser de respaldo**: si el modelo emite las tool calls como texto JSON en `content`
   en vez de en `tool_calls`, se extraen (escáner de llaves balanceadas) y se ejecutan
   igual. Además, los nombres de tool alucinados (`mover_factura` en vez de
@@ -119,6 +138,12 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   modelo. Además de en facturas, se usa en **todas** las operaciones de archivos/carpetas/
   papelera (devuelven `resumen: "Hecho."`) para evitar que el modelo redacte su propia
   confirmación y a veces invente texto no relacionado con la acción real.
+- **`leer_archivo` reutiliza el texto ya extraído** (mismo `textoExtraido` que usa el RAG,
+  vía `pdf-parse`/`mammoth`) para PDF y DOCX, no solo texto plano: antes rechazaba
+  cualquier archivo que no fuera `text/*`/json/xml/markdown.
+- **Filtros de cliente/emisor/producto en facturas insensibles a tildes** (extensión
+  `unaccent` de Postgres): "Tecnologias" (sin tilde, lo más común al escribir rápido)
+  encuentra igual "Tecnologías".
 - Herramientas: buscar/crear/mover/renombrar/copiar/eliminar archivos y carpetas, papelera
   (listar/restaurar/borrar/vaciar), `leer_archivo`, `estadisticas`, `buscar_semantica`,
   borrados masivos (`borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`), y
@@ -142,12 +167,13 @@ con ejemplos reales de frases que entiende:
   - "¿tengo un archivo llamado factura_01?" / "busca el archivo presupuesto.pdf"
   - "¿dónde está el archivo contrato.docx?"
   - "lista mis archivos" / "qué archivos tengo en /facturas"
-  - "copia factura_03 a la carpeta 2026"
+  - "copia factura_03 a /2026" (con la ruta destino directa; la variante "a **la
+    carpeta** 2026" es menos fiable con modelos pequeños — ver Limitaciones)
   - "mueve presupuesto.pdf a /clientes"
   - "cambia el nombre de factura_03 a factura_033"
   - "borra el archivo viejo.txt"
   - "créame una nota llamada notas.md con esto: ..."
-  - "lee el archivo notas.md" / "¿qué dice el contrato.docx?"
+  - "lee el archivo notas.md" / "¿qué dice el contrato.docx?" / "qué dice factura_01.pdf"
 - **Carpetas** — crear, eliminar entera (con su contenido), vaciar dejando la carpeta,
   mover, renombrar, copiar, listar todas. No hace falta dar la ruta completa para
   operar sobre una que ya existe, solo su nombre:
@@ -180,6 +206,14 @@ con ejemplos reales de frases que entiende:
   - "¿qué producto vendí más?" / "ranking de lo menos vendido"
   - "¿cuánto le he facturado a Ferretería Sánchez?"
   - "total facturado en 2026" / "totales de factura_01 y factura_02"
+
+**Limitaciones conocidas del chatbot** (verificadas probando todas las frases de
+arriba contra el modelo real): copiar/mover con la frase exacta "a **la carpeta**
+X" (en vez de "a /X" o "a X" directo) falla de forma consistente con modelos
+pequeños como `qwen2.5-coder:7b` — no hay pre-flight para esto todavía. Pedir
+"lee X" sobre un archivo con contenido muy corto/trivial a veces solo confirma
+"lo he leído" en vez de mostrarlo (con contenido más rico, como una factura, sí
+lo muestra bien).
 
 ### Búsqueda semántica / RAG (`services/rag.service.ts` + `extraccion.service.ts`)
 Permite buscar por el **significado del contenido**, no solo por el nombre del archivo:

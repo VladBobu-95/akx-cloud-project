@@ -37,6 +37,8 @@ Totales facturados (totales_facturas), con los mismos filtros
 
 
 -el buscador no funciona error 504
+.donde esta ... donde esta factura_F2026-109.pdf 
+ Lo siento, pero solo puedo leer archivos de texto como .md, .txt, .csv, .json. El archivo que intentaste leer no es de ese tipo. ¿Podrías proporcionar un archivo de texto para que pueda leerlo? 
 - al decire escanea factura y abrela , la escanea ,me envia el texto pero no el archivo para abrir
 - si escribes alg o en el chabox la vista no sigue el texto, deberia
 - pensar en segundo plano(el chatbot) para poder mover 
