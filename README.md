@@ -212,6 +212,7 @@ con ejemplos reales de frases que entiende:
     escaneada te lo dice en vez de escanearla sola, y aparece un botón para abrirla
     tal cual en una pestaña nueva)
   - "¿qué producto vendí más?" / "ranking de lo menos vendido"
+  - "¿qué es lo que más se vende en julio?" / "lo más vendido en 2026" (ranking por periodo; el mes se entiende por su nombre)
   - "¿cuánto le he facturado a Ferretería Sánchez?"
   - "total facturado en 2026" / "totales de factura_01 y factura_02"
   - "top clientes por gasto total" / "¿qué cliente me ha comprado menos?" / "¿quién es mi mejor cliente?"
