@@ -1149,6 +1149,42 @@ export const chatear = async (
     return { respuesta: `En la papelera tienes ${lista.length} archivo(s):\n\n${detalle}`, acciones };
   }
 
+  // Pre-flight: "abre/muéstrame factura_X" debe leer la factura YA escaneada
+  // de la BD (instantáneo). Si se deja en manos del modelo, a veces interpreta
+  // "abrir" como "voy a procesarla yo" y dispara un re-escaneo con OCR (lento,
+  // y si la factura nunca se había escaneado, parece que la petición "no
+  // funciona" cuando en realidad solo está tardando mucho). Se resuelve aquí
+  // sin pasar por Ollama; si no está escaneada, se dice al instante en vez de
+  // escanearla sin que el usuario lo pidiera.
+  const tieneIntencionAbrirFactura = /\b(abre|abrir|mu[eé]stra(me)?|ense[ñn]a(me)?)\b/.test(msgLower);
+  const matchNombreFactura = msgLower.match(/\bfactura[\w.-]*\b/);
+  const esAbrirFactura =
+    tieneIntencionAbrirFactura &&
+    !!matchNombreFactura &&
+    !/borra|elimina|mueve|mover|copia|copiar|renombra|cambia|escane[ao]/.test(msgLower);
+  if (esAbrirFactura && matchNombreFactura) {
+    const res = await resolverArchivo(usuarioId, matchNombreFactura[0]);
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      const lista = res.opciones
+        .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
+        .join("\n");
+      return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+    }
+    const r = await obtenerFactura(usuarioId, res.archivo!.id, res.archivo!.nombre);
+    if (!r.encontrada) {
+      return {
+        respuesta: `"${res.archivo!.nombre}" no tiene una factura escaneada todavía. Pide "escanea ${res.archivo!.nombre}" primero.`,
+        acciones,
+      };
+    }
+    return {
+      respuesta: r.resumen!,
+      acciones,
+      archivo: { id: res.archivo!.id, nombre: res.archivo!.nombre },
+    };
+  }
+
   // Pre-flight: "¿tengo/hay/existe/dónde está... un archivo llamado X?" o
   // "busca el archivo X" es una simple comprobación de existencia/ubicación
   // que debería ser instantánea. El modelo a veces decide "comprobar"
