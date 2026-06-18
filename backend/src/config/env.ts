@@ -26,6 +26,9 @@ const envSchema = z.object({
   // Modelo de visión para OCR de imágenes de factura (mejor que Tesseract).
   // Si falla, se usa Tesseract como fallback.
   OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
+  // Modelo de visión general para describir fotos sin texto (deepseek-ocr es
+  // solo-OCR y no sabe hacerlo: alucina en vez de describir).
+  OLLAMA_CAPTION_MODEL: z.string().default("llava"),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente
