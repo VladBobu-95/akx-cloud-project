@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../core/auth.service';
 import { ChatService } from '../../core/chat.service';
@@ -21,7 +21,7 @@ import { mensajeError } from '../../shared/errores';
     </div>
 
     <div class="card chat-card">
-      <div class="mensajes">
+      <div class="mensajes" #mensajesContainer>
         @if (mensajes().length === 0) {
           <div class="empty">
             <div class="icon">💬</div>
@@ -51,12 +51,13 @@ import { mensajeError } from '../../shared/errores';
           class="input"
           type="text"
           name="entrada"
-          [(ngModel)]="entrada"
+          [ngModel]="chat.borrador()"
+          (ngModelChange)="chat.borrador.set($event)"
           placeholder="Escribe tu mensaje…"
           autocomplete="off"
           [disabled]="pensando()"
         />
-        <button class="btn btn-primary" type="submit" [disabled]="!entrada.trim() || pensando()">
+        <button class="btn btn-primary" type="submit" [disabled]="!chat.borrador().trim() || pensando()">
           Enviar
         </button>
       </form>
@@ -155,25 +156,38 @@ import { mensajeError } from '../../shared/errores';
 })
 export class InicioPage {
   protected auth = inject(AuthService);
-  private chat = inject(ChatService);
+  protected chat = inject(ChatService);
   private archivosSvc = inject(ArchivosService);
   private toast = inject(ToastService);
 
-  // El historial vive en el servicio (persiste al cambiar de página y al recargar).
+  // El historial y el borrador viven en el servicio (persisten al cambiar de
+  // página; el historial sobrevive también a recargar).
   protected mensajes = this.chat.mensajes;
-  protected entrada = '';
   protected pensando = signal(false);
+
+  private mensajesEl = viewChild<ElementRef<HTMLDivElement>>('mensajesContainer');
+
+  // Se llama tras cada cambio en la lista de mensajes (usuario, bot, "pensando…")
+  // para que la vista siga la conversación en vez de quedarse arriba. setTimeout(0)
+  // espera a que Angular pinte el DOM con el mensaje nuevo antes de medir scrollHeight.
+  private scrollAbajo() {
+    setTimeout(() => {
+      const el = this.mensajesEl()?.nativeElement;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }
 
   limpiar() {
     this.chat.limpiar();
   }
 
   enviar() {
-    const texto = this.entrada.trim();
+    const texto = this.chat.borrador().trim();
     if (!texto || this.pensando()) return;
 
     this.chat.añadir({ de: 'usuario', texto });
-    this.entrada = '';
+    this.scrollAbajo();
+    this.chat.borrador.set('');
     this.pensando.set(true);
 
     // Como contexto enviamos SOLO tus mensajes (no las respuestas del bot). Si
@@ -192,10 +206,12 @@ export class InicioPage {
         const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
         this.chat.añadir({ de: 'bot', texto: r.respuesta + extra, archivo: r.archivo });
         this.pensando.set(false);
+        this.scrollAbajo();
       },
       error: (err) => {
         this.chat.añadir({ de: 'bot', texto: mensajeError(err) });
         this.pensando.set(false);
+        this.scrollAbajo();
       },
     });
   }

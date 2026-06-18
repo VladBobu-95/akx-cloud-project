@@ -31,6 +31,11 @@ export class ChatService {
   // página; además se persiste en localStorage para sobrevivir a recargas.
   readonly mensajes = signal<Mensaje[]>(this.cargar());
 
+  // Texto que el usuario está escribiendo antes de enviar. Vive aquí (no en el
+  // componente de la página) para que sobreviva al navegar a /archivos o
+  // /papelera y volver, igual que el historial.
+  readonly borrador = signal('');
+
   añadir(m: Mensaje) {
     this.mensajes.update((arr) => [...arr, m]);
     this.persistir();
