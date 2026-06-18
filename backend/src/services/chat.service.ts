@@ -398,10 +398,16 @@ const TOOLS = [
     function: {
       name: "leer_archivo",
       description:
-        "Lee y devuelve el contenido de un archivo de texto (.md/.txt/csv/json) por su nombre. Úsalo SIEMPRE que el usuario pregunte qué dice / qué pone / qué contiene un archivo, o pida resumirlo o leerlo. NO pidas el contenido al usuario.",
+        "Lee y devuelve el contenido de un archivo (texto, PDF, DOCX o imagen) por su nombre. Úsalo SIEMPRE que el usuario pregunte qué dice / qué pone / qué contiene un archivo, o pida resumirlo o leerlo. NO pidas el contenido al usuario.",
       parameters: {
         type: "object",
-        properties: { nombre: { type: "string", description: "nombre del archivo" } },
+        properties: {
+          nombre: {
+            type: "string",
+            description:
+              "nombre del archivo. Si el usuario no dio la extensión, pasa el nombre TAL CUAL, sin inventarte una (NO añadas .md ni ninguna otra).",
+          },
+        },
         required: ["nombre"],
       },
     },
@@ -527,12 +533,29 @@ const resolverArchivo = async (
   usuarioId: string,
   nombre: string,
 ): Promise<{ archivo?: Archivo; error?: string; opciones?: { nombre: string; carpeta: string }[] }> => {
-  const lista = await buscarArchivos(usuarioId, nombre);
+  let lista = await buscarArchivos(usuarioId, nombre);
+  if (lista.length === 0) {
+    // El modelo a veces adivina una extensión que no es la real (ej. pide
+    // "X.md" para preguntar "qué dice X" sin que el usuario diera extensión,
+    // y el archivo real es "X.pdf"): la búsqueda por substring falla del todo
+    // por la extensión aunque el nombre base sí exista. Reintenta sin ella.
+    const sinExtension = nombre.replace(/\.[a-z0-9]{1,5}$/i, "");
+    if (sinExtension !== nombre) lista = await buscarArchivos(usuarioId, sinExtension);
+  }
   if (lista.length === 0) return { error: `No encontré ningún archivo que coincida con "${nombre}".` };
   const exacto = lista.find((a) => a.nombre.toLowerCase() === nombre.toLowerCase());
   if (exacto) return { archivo: exacto };
   if (lista.length === 1) return { archivo: lista[0] };
-  return { opciones: lista.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
+  // El .md de resumen que se genera automáticamente al escanear una factura
+  // (resumen-factura-X.md, en /facturas) coincide con casi cualquier búsqueda
+  // por el número o nombre de esa factura, generando una ambigüedad constante
+  // con el archivo real. Se descarta de los candidatos salvo que sea la única
+  // coincidencia (pedirlo por su nombre completo ya se resuelve arriba, y
+  // listar la carpeta entera no pasa por aquí, así que sigue mostrándolo).
+  const sinResumenes = lista.filter((a) => !/^resumen-factura-/i.test(a.nombre));
+  if (sinResumenes.length === 1) return { archivo: sinResumenes[0] };
+  const final = sinResumenes.length > 0 ? sinResumenes : lista;
+  return { opciones: final.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
 };
 
 // Localiza una carpeta EXISTENTE por nombre o ruta completa. Si el argumento ya
@@ -1128,7 +1151,10 @@ const pareceIntentoToolCallInvalido = (content: string): boolean =>
   });
 
 // Llama a Ollama /api/chat (sin streaming).
-const llamarOllama = async (messages: OllamaMessage[]): Promise<OllamaMessage> => {
+const llamarOllama = async (
+  messages: OllamaMessage[],
+  sinHerramientas = false,
+): Promise<OllamaMessage> => {
   let res: Response;
   try {
     res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
@@ -1137,7 +1163,7 @@ const llamarOllama = async (messages: OllamaMessage[]): Promise<OllamaMessage> =
       body: JSON.stringify({
         model: env.OLLAMA_MODEL,
         messages,
-        tools: TOOLS,
+        ...(sinHerramientas ? {} : { tools: TOOLS }),
         stream: false,
         keep_alive: "30m",
         options: { temperature: 0 },
@@ -1422,11 +1448,23 @@ export const chatear = async (
   // borrado. El segundo patrón (sin "archivo") exige una extensión para no
   // capturar palabras sueltas como "borra **mi** reporte" o "borra **la**
   // carpeta" (esa además queda excluida por el filtro de "carpeta" de más abajo).
+  // Palabras sueltas que NO deben tratarse como nombre de archivo si aparecen
+  // justo tras el verbo (ej. "borra mi reporte", "borra eso de antes").
+  const STOPWORDS_BORRAR = new Set([
+    "mi", "tu", "su", "lo", "la", "el", "los", "las", "eso", "esto", "esta",
+    "este", "todo", "toda", "algo", "uno", "una", "ese", "esa",
+  ]);
   const matchNombreArchivoABorrar =
     msgLower.match(
       /\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b.*?(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)/,
     ) ||
-    msgLower.match(/\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+["']?([\wÀ-ÿ-]+\.[a-z0-9]{1,5})\b/);
+    msgLower.match(/\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+["']?([\wÀ-ÿ-]+\.[a-z0-9]{1,5})\b/) ||
+    (() => {
+      // Sin extensión ni la palabra "archivo" (ej. "borra factura_F2026-101"):
+      // solo se acepta si NO es una palabra suelta de la lista de arriba.
+      const m = msgLower.match(/\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+["']?([\wÀ-ÿ-]{4,})\b/);
+      return m && !STOPWORDS_BORRAR.has(m[1]) ? m : null;
+    })();
   const esBorrarUnArchivo = !!matchNombreArchivoABorrar && !/carpeta|papelera/.test(msgLower);
   if (esBorrarUnArchivo && matchNombreArchivoABorrar) {
     const res = await resolverArchivo(usuarioId, matchNombreArchivoABorrar[1]);
@@ -1607,6 +1645,13 @@ export const chatear = async (
   }
 
   const MAX_ITER = 15;
+  // Detecta si el modelo llama a la MISMA tool con los MISMOS argumentos otra
+  // vez (visto con leer_archivo en respuestas difíciles de resumir: el modelo
+  // se queda "atascado" repitiendo la llamada en vez de responder, agotando
+  // las 15 iteraciones — varios minutos de espera para nada). Cuando se
+  // detecta, se reutiliza el resultado ya obtenido (sin repetir el trabajo) y
+  // se fuerza una respuesta final sin más herramientas en vez de seguir el bucle.
+  const llamadasVistas = new Map<string, unknown>();
 
   for (let i = 0; i < MAX_ITER; i++) {
     const respuesta = await llamarOllama(messages);
@@ -1635,13 +1680,22 @@ export const chatear = async (
 
     // Resúmenes preconstruidos (markdown listo para mostrar directamente)
     const resumenes: string[] = [];
+    let huboRepetida = false;
 
     for (const tc of toolCalls) {
       const args =
         typeof tc.function.arguments === "string"
           ? (JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>)
           : tc.function.arguments;
-      const resultado = await ejecutarTool(tc.function.name, args, usuarioId, acciones);
+      const firma = `${tc.function.name}:${JSON.stringify(args)}`;
+      let resultado: unknown;
+      if (llamadasVistas.has(firma)) {
+        huboRepetida = true;
+        resultado = llamadasVistas.get(firma);
+      } else {
+        resultado = await ejecutarTool(tc.function.name, args, usuarioId, acciones);
+        llamadasVistas.set(firma, resultado);
+      }
       messages.push({ role: "tool", content: JSON.stringify(resultado) });
 
       const r = resultado as Record<string, unknown>;
@@ -1680,9 +1734,30 @@ export const chatear = async (
         archivo: archivoParaAbrir,
       };
     }
+
+    // El modelo repitió una llamada idéntica a una ya hecha: está atascado (no
+    // sabe qué más hacer con el resultado) en vez de responder. Seguir el bucle
+    // solo quemaría las iteraciones restantes sin ganar nada. Se le pide la
+    // respuesta final YA, sin la opción de volver a llamar a ninguna herramienta
+    // (sin "tools" en la petición, así es imposible que repita).
+    if (huboRepetida) {
+      messages.push({
+        role: "user",
+        content:
+          "Ya tienes los datos reales en el resultado de la herramienta (mensaje anterior, rol \"tool\"). Usa ESOS datos para responder ahora a la pregunta del usuario, en texto. No describas qué herramientas existen ni para qué sirven, y no vuelvas a llamar a ninguna.",
+      });
+      const final = await llamarOllama(messages, true);
+      return { respuesta: final.content || "He realizado las acciones solicitadas.", acciones, archivo: archivoParaAbrir };
+    }
   }
 
-  // Si se agotaron las iteraciones, pedir una respuesta final sin herramientas.
-  const ultima = messages[messages.length - 1];
-  return { respuesta: ultima.content || "He realizado las acciones solicitadas.", acciones };
+  // Si se agotaron las iteraciones sin repetir llamadas, pedir una respuesta
+  // final sin herramientas en vez de devolver el JSON crudo del último mensaje.
+  messages.push({
+    role: "user",
+    content:
+      "Ya tienes los datos reales en el resultado de la herramienta (mensaje anterior, rol \"tool\"). Usa ESOS datos para responder ahora a la pregunta del usuario, en texto. No describas qué herramientas existen ni para qué sirven, y no vuelvas a llamar a ninguna.",
+  });
+  const final = await llamarOllama(messages, true);
+  return { respuesta: final.content || "He realizado las acciones solicitadas.", acciones };
 };
