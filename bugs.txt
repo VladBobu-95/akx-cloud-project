@@ -1,0 +1,69 @@
+Archivos
+
+Buscar / listar archivos (por nombre o por carpeta)
+Copiar, mover, renombrar un archivo
+Eliminar un archivo (va a la papelera)
+Crear un archivo de texto/nota (.md o .txt) con contenido
+Leer el contenido de un archivo concreto
+Carpetas
+
+Crear una carpeta
+Eliminar una carpeta entera (carpeta + contenido, a la papelera)
+Vaciar el contenido de una carpeta (o de la raíz con /) dejando la carpeta
+Mover, renombrar, copiar una carpeta
+Listar todas las carpetas
+Borrados masivos
+
+Borrar TODO (archivos y carpetas, factory reset / "empezar de cero")
+Borrar todas las carpetas (con su contenido, pero sin tocar lo que está suelto en la raíz)
+Borrar todos los archivos (sin tocar las carpetas)
+Papelera
+
+Listar lo que hay en la papelera
+Restaurar un archivo de la papelera
+Borrar un archivo definitivamente (irreversible)
+Vaciar la papelera entera (borrado definitivo de todo)
+Búsqueda e info
+
+Búsqueda semántica por significado ("¿qué documento habla de X?")
+Estadísticas de uso (espacio, nº de archivos, etc.)
+Facturas
+
+Escanear una factura concreta (OCR + extracción de datos)
+Escanear todas las facturas pendientes
+Obtener/resumir una factura ya escaneada
+Ranking de productos más/menos vendidos (ventas_top), con filtros por cliente, emisor, fecha, etc.
+Totales facturados (totales_facturas), con los mismos filtros
+
+
+-el buscador no funciona error 504
+- al decire escanea factura y abrela , la escanea ,me envia el texto pero no el archivo para abrir
+- si escribes alg o en el chabox la vista no sigue el texto, deberia
+- pensar en segundo plano(el chatbot) para poder mover 
+- guardar mensaje del chabot
+- mas flexible muestra factura (abre)/no funciona si no esta en la raiz
+- si le digo muéstrame todas las facturas que me las muestre, o todos los ficheros llamados x.
+- si le digo abre la factura que la abra directamente 
+- cambia el nombre de factura_01 de la raiz a factura_011 
+ ¿Cuál de estas facturas quieres que escanee?  si hay varios llamados igual
+- Si booro un fichero dentro de una carpeta tmb borra la carpeta
+- léeme el contenido de notas.md no va
+-borra factura_01 de la papelera 
+ ¿Cuál de estas facturas quieres escanear? "factura_01.pdf" en la raíz o "factura_01.pdf" en "/facturas"? 
+- Si le digo que copie una fichero me da esto: {
+  "name": "copiar_factura",
+  "arguments": {
+    "nombre": "factura_01"
+  }
+} 
+
+-escanea todas las facturas 
+ Error 504 (supongo pq ya se escanean en segundo plano al subirlas)
+-si le pongo  muestrame la factura_01 me da el resumen:
+ # Resumen factura 2026-2001
+
+- totales facturados toma en cuenta también si una carpeta esta varias veces copiada, no deberia
+ 
+-en la carpeta facturas las facturas escaneadas que tengan el nomre resumen-y el nombre de la factura. tmb en resumen ventas el numero de facturas escaneadas sube siempre auque he borrado facturas o he subido otras (no se actualiza a lo que hay actualmente ,debería solo escanear las facturas qe hay actualmente)
+- En el resumen pnme mas estadísticas ,que podrías poner?
+- Se puede hacer que en el chabot si pudo resumen o estas cosa que me aparezca mas bonito , tipo caundo selecciono algún fichero de facturas(resumen)
