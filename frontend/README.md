@@ -55,8 +55,12 @@ que el asistente sea fiable:
 - La **confirmación real** de una acción son las líneas `✓` que el componente añade a
   partir del array `acciones` que devuelve el backend (solo aparecen cuando una
   herramienta se ejecutó de verdad); el texto del bot solo acompaña.
-- El texto se muestra **tal cual** (sin renderizar markdown): `marked` solo se usa en el
-  visor de `.md` del explorador, no en el chat.
+- La respuesta del **bot** se renderiza como markdown real con `marked` (títulos, tablas,
+  listas, negritas), igual que el visor de `.md` del explorador, en vez de mostrarse como
+  texto plano con `#`/`**`/`|` literales — importante para las tablas de `ventas_top`/
+  `totales_facturas`/`clientes_top`. Se usa `{ breaks: true }` para que un solo salto de
+  línea (ej. entre las líneas `✓ ...` de las acciones) se respete tal cual. Los mensajes
+  del **usuario** se siguen mostrando tal cual (texto plano).
 - Cuando la respuesta resuelve un archivo concreto (p. ej. pedir "muéstrame factura_X"),
   el backend devuelve `archivo: {id, nombre}` y el componente muestra un botón
   **"Abrir `<nombre>`"** bajo el mensaje. Al pulsarlo abre el archivo en una pestaña

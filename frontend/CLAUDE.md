@@ -83,9 +83,13 @@ src/
 
 ### `/inicio` — Chat
 - Historial de mensajes en signal, persistido en `localStorage` (clave `akx_chat`)
-- Envía todo el historial en cada petición (contexto completo)
-- Respuestas del bot en texto plano (`{{ m.texto }}`)
-- El campo `acciones` de la API no se muestra actualmente en la UI
+- Envía solo los mensajes del **usuario** (últimos 8, no las respuestas del bot) como
+  contexto; el backend a su vez solo usa el último de esos
+- Respuestas del bot renderizadas como **markdown real** con `marked` (`renderBot()` →
+  `[innerHTML]`, `breaks: true`), igual que el visor de `.md` del explorador — necesario
+  para que las tablas de `ventas_top`/`totales_facturas`/`clientes_top` se vean
+  formateadas. Los mensajes del usuario se siguen mostrando tal cual (texto plano)
+- El campo `acciones` se concatena al texto de la respuesta como líneas `✓ ...`
 
 ### `/archivos` — Explorador
 Componente más complejo. Características:

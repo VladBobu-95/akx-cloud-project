@@ -432,7 +432,7 @@ npm start    # ng serve → http://localhost:4200
 - **GPU pequeña (8GB) + dos modelos de visión**: deepseek-ocr (6.7GB) no entra entero y corre parcial en CPU (~2 min por imagen); si además cae a llava (4.7GB, sí entra 100% en GPU) se suma otro minuto. Una foto sin texto puede tardar varios minutos en quedar descrita — no bloquea la subida (es en segundo plano), pero conviene saberlo al probar en máquinas sin una GPU más grande.
 - **Tipos de archivo permitidos**: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máximo 50 MB.
 - **Subida**: un archivo por petición HTTP; múltiples archivos → peticiones paralelas en el frontend.
-- El chat no renderiza markdown (los `resumen`/`acciones` se muestran como texto plano con `white-space: pre-wrap`, no como HTML); los `#`/`**`/tablas se ven tal cual en vez de formateados.
+- El chat renderiza la respuesta del bot como markdown real (con `marked`, igual que el visor de `.md` del explorador): títulos, tablas, listas y negritas se ven formateados, no como texto plano con `#`/`**`/`|`. Los mensajes del usuario sí se muestran tal cual (texto plano, `white-space: pre-wrap`). Se usa `breaks: true` para que las líneas `✓ ...` de las acciones respeten el salto de línea simple en vez de fundirse en un párrafo.
 
 ## Despliegue (servidor)
 

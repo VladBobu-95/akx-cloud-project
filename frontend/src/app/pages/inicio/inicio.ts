@@ -1,5 +1,6 @@
 import { Component, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { marked } from 'marked';
 import { AuthService } from '../../core/auth.service';
 import { ChatService } from '../../core/chat.service';
 import { ArchivosService } from '../../core/archivos.service';
@@ -30,7 +31,11 @@ import { mensajeError } from '../../shared/errores';
         } @else {
           @for (m of mensajes(); track $index) {
             <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
-              {{ m.texto }}
+              @if (m.de === 'bot') {
+                <div class="md" [innerHTML]="renderBot(m.texto)"></div>
+              } @else {
+                {{ m.texto }}
+              }
               @if (m.archivo) {
                 <div class="abrir-archivo">
                   <button class="btn btn-outline btn-sm" (click)="abrirArchivo(m.archivo)">
@@ -117,7 +122,6 @@ import { mensajeError } from '../../shared/errores';
         border-radius: 14px;
         font-size: 0.92rem;
         line-height: 1.35;
-        white-space: pre-wrap;
         word-break: break-word;
       }
       .burbuja.usuario {
@@ -125,6 +129,7 @@ import { mensajeError } from '../../shared/errores';
         background: var(--green);
         color: #fff;
         border-bottom-right-radius: 4px;
+        white-space: pre-wrap;
       }
       .burbuja.bot {
         align-self: flex-start;
@@ -135,6 +140,55 @@ import { mensajeError } from '../../shared/errores';
       .burbuja.pensando {
         opacity: 0.6;
         font-style: italic;
+      }
+      /* Markdown de las respuestas del bot (tablas de facturas/estadísticas,
+         títulos ##, listas...). Reutiliza la misma idea que el visor de .md del
+         explorador, pero más compacto para encajar en una burbuja de chat. */
+      .burbuja.bot .md {
+        overflow-x: auto;
+      }
+      .burbuja.bot .md > :first-child {
+        margin-top: 0;
+      }
+      .burbuja.bot .md > :last-child {
+        margin-bottom: 0;
+      }
+      .burbuja.bot .md p {
+        margin: 0 0 8px;
+      }
+      .burbuja.bot .md h1,
+      .burbuja.bot .md h2,
+      .burbuja.bot .md h3 {
+        font-size: 0.98rem;
+        margin: 10px 0 6px;
+      }
+      .burbuja.bot .md ul,
+      .burbuja.bot .md ol {
+        margin: 0 0 8px;
+        padding-left: 20px;
+      }
+      .burbuja.bot .md table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 6px 0 10px;
+        font-size: 0.85rem;
+      }
+      .burbuja.bot .md th,
+      .burbuja.bot .md td {
+        border: 1px solid var(--border);
+        padding: 5px 8px;
+        text-align: left;
+        white-space: nowrap;
+      }
+      .burbuja.bot .md th {
+        background: rgba(0, 0, 0, 0.04);
+        font-weight: 700;
+      }
+      .burbuja.bot .md code {
+        background: rgba(0, 0, 0, 0.06);
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 0.85em;
       }
       .abrir-archivo {
         margin-top: 8px;
@@ -166,6 +220,16 @@ export class InicioPage {
   protected pensando = signal(false);
 
   private mensajesEl = viewChild<ElementRef<HTMLDivElement>>('mensajesContainer');
+
+  // Renderiza la respuesta del bot como markdown (tablas de facturas/estadísticas,
+  // títulos, listas...) en vez de texto plano. `breaks: true` para que un solo
+  // salto de línea (ej. entre las líneas "✓ ..." de las acciones) se respete como
+  // tal, en vez de fundirse en un único párrafo (comportamiento normal de
+  // markdown, pero no el esperado en un chat). Angular sanitiza el HTML del
+  // binding [innerHTML] automáticamente.
+  protected renderBot(texto: string): string {
+    return marked.parse(texto, { breaks: true, async: false });
+  }
 
   // Se llama tras cada cambio en la lista de mensajes (usuario, bot, "pensando…")
   // para que la vista siga la conversación en vez de quedarse arriba. setTimeout(0)
