@@ -456,6 +456,50 @@ export const totalesFacturado = async (
   };
 };
 
+// Ranking de clientes por gasto total. orden 'desc' = quién más gastó (defecto);
+// 'asc' = quién menos. El campo `producto` del filtro no aplica aquí (no hay
+// JOIN con lineas_factura, igual que en totalesFacturado).
+export const clientesTop = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+  opts: { orden?: "desc" | "asc"; limite?: number } = {},
+): Promise<{ cliente: string; numFacturas: number; importe: number }[]> => {
+  const { producto: _producto, ...rest } = filtro;
+  const { where, params } = construirFiltro(usuarioId, rest);
+  const orden = opts.orden === "asc" ? "ASC" : "DESC";
+  const limiteParam = `$${params.length + 1}`;
+  const filas: { cliente: string; numfacturas: string; importe: string }[] =
+    await AppDataSource.query(
+      `SELECT f."cliente" AS cliente,
+              COUNT(*)::int AS numfacturas,
+              SUM(f."total")::float AS importe
+       FROM "facturas" f
+       LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+       WHERE ${where} AND f."cliente" IS NOT NULL AND f."cliente" <> ''
+       GROUP BY f."cliente"
+       ORDER BY importe ${orden}
+       LIMIT ${limiteParam}`,
+      [...params, opts.limite ?? 10],
+    );
+  return filas.map((r) => ({
+    cliente: r.cliente,
+    numFacturas: Number(r.numfacturas),
+    importe: Number(r.importe),
+  }));
+};
+
+// Markdown de un ranking de clientes por gasto total (con € server-side).
+export const clientesTopMd = (
+  filas: { cliente: string; numFacturas: number; importe: number }[],
+  titulo: string,
+): string => {
+  if (filas.length === 0) return "No hay datos de clientes para esa consulta.";
+  const cuerpo = filas
+    .map((c, i) => `| ${i + 1} | ${c.cliente} | ${c.numFacturas} | ${eur(c.importe)} |`)
+    .join("\n");
+  return `## ${titulo}\n\n| # | Cliente | Facturas | Importe |\n|---|---|---|---|\n${cuerpo}`;
+};
+
 // Dado un conjunto de identificadores (nº/nombre de archivo), localiza los ficheros
 // de factura que casan y escanea los que aún NO estén escaneados. Devuelve cuántos
 // escaneó. Sirve para que las consultas analíticas funcionen aunque el usuario no

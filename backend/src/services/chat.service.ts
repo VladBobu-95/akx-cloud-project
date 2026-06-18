@@ -34,9 +34,11 @@ import {
   obtenerFactura,
   ventasTop,
   totalesFacturado,
+  clientesTop,
   asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
+  clientesTopMd,
   type FiltroFacturas,
 } from "./facturas.service";
 
@@ -152,6 +154,7 @@ Cómo actuar:
 - ANALÍTICA DE FACTURAS — llama a la herramienta INMEDIATAMENTE, sin preguntar:
   • Rankings de productos o buscar un producto ("qué vendí más", "lo más/menos vendido", "ranking", "cuánto he vendido de X") → "ventas_top".
   • Totales facturados ("cuánto he facturado", "total gastado", "cuánto le he facturado a X") → "totales_facturas".
+  • Ranking de CLIENTES por gasto ("qué cliente gastó más", "top clientes", "mi mejor cliente", "quién me ha comprado menos") → "clientes_top".
   • Aplica filtros SOLO si el usuario los menciona, extrayéndolos del mensaje:
     - Si nombra facturas concretas (por nº o por nombre de archivo) → ponlas TODAS en "facturas" (array).
     - Si nombra a quién se factura → "cliente"; si nombra el proveedor/quien emite → "emisor".
@@ -559,6 +562,26 @@ const TOOLS = [
           anio: { type: "number", description: "año, solo si lo especifica" },
           desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
           hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "clientes_top",
+      description:
+        "Ranking de CLIENTES por gasto total (importe facturado y nº de facturas). Úsala cuando pregunten qué cliente ha gastado más/menos, el top de clientes, o quién es el mejor cliente. TODOS los filtros son OPCIONALES: úsalos solo si el usuario los menciona.",
+      parameters: {
+        type: "object",
+        properties: {
+          emisor: { type: "string", description: "filtrar por emisor/proveedor (quién emite)" },
+          orden: { type: "string", enum: ["mas", "menos"], description: "'mas' = quién más gastó (defecto), 'menos' = quién menos" },
+          mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
+          anio: { type: "number", description: "año, solo si lo especifica" },
+          desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
+          hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
+          limite: { type: "number", description: "cuántos clientes devolver (defecto 10)" },
         },
       },
     },
@@ -1090,6 +1113,14 @@ const ejecutarTool = async (
         }
         const totales = await totalesFacturado(usuarioId, filtro);
         return { resumen: totalesMd(totales, `Totales facturados (${titulo})`) };
+      }
+      case "clientes_top": {
+        const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        const orden: "asc" | "desc" = args.orden === "menos" ? "asc" : "desc";
+        const limite = typeof args.limite === "number" ? args.limite : 10;
+        const top = await clientesTop(usuarioId, filtro, { orden, limite });
+        const prefijo = orden === "asc" ? "Clientes que menos gastaron" : "Clientes que más gastaron";
+        return { resumen: clientesTopMd(top, `${prefijo} (${titulo})`) };
       }
       default:
         return { error: `herramienta desconocida: ${nombre}` };
