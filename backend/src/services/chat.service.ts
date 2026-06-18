@@ -1457,6 +1457,39 @@ export const chatear = async (
     return { respuesta: `Sí, tienes:\n\n${detalle}`, acciones };
   }
 
+  // Pre-flight: "lee/muestra/qué dice X" SIN nada más en el mensaje (solo verbo +
+  // nombre, anclado al final). El modelo a veces solo confirma "lo he leído" en
+  // vez de mostrar el contenido cuando este es muy corto/trivial, pese a la
+  // instrucción explícita del prompt — se resuelve aquí leyendo de verdad y
+  // devolviendo el contenido tal cual, sin pasar por el modelo. Si el mensaje
+  // tiene algo más (una pregunta concreta sobre el contenido, ej. "qué dice el
+  // contrato sobre los plazos"), el ancla `$` no casa y sigue el flujo normal.
+  const matchLeerSimple = msgSinTildes.match(
+    new RegExp(
+      `^(?:lee(?:me)?|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?|que\\s+dice)\\s+(?:el\\s+archivo\\s+|la\\s+nota\\s+|el\\s+documento\\s+)?["']?([\\wÀ-ÿ.-]+)["']?\\s*\\??\\s*$`,
+    ),
+  );
+  if (matchLeerSimple) {
+    const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchLeerSimple));
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones);
+      const lista2 = res.opciones
+        .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
+        .join("\n");
+      return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista2}`, acciones };
+    }
+    try {
+      const contenido = await leerTextoArchivo(res.archivo!.id, usuarioId);
+      return { respuesta: `**${res.archivo!.nombre}**:\n\n${contenido}`, acciones };
+    } catch (err) {
+      return {
+        respuesta: err instanceof AppError ? err.message : "No pude leer el contenido del archivo.",
+        acciones,
+      };
+    }
+  }
+
   const esBorrarTodoCompleto =
     /borra(?:r|lo|la|los|las)?\s+todo\b|vacia(?:r|lo|la|los|las)?\s+todo\b|elimina(?:r|lo|la|los|las)?\s+todo\b|empeza(?:r)?\s+de\s+cero/.test(
       msgSinTildes,
