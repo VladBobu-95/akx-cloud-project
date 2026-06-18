@@ -1054,35 +1054,59 @@ export const chatear = async (
     }
   }
 
-  // Pre-flight: "pásame/lista/dame todos los archivos/carpetas (que tengo)" es una
-  // petición muy directa y frecuente para la que el modelo a veces no llama a
-  // ninguna herramienta (responde "no recibí respuesta de las funciones..."). Se
-  // detecta aquí y se construye la lista directamente, sin depender del modelo.
-  const esListarArchivos =
-    !/carpeta/.test(msgLower) &&
-    /(p[aá]sa(me)?|dame|env[ií]a(me)?|mu[eé]stra(me)?|ense[ñn]a(me)?|lista(r)?)\s+(todos\s+)?(mis\s+)?(los\s+)?(archivos?|ficheros?)\b|qu[eé]\s+(archivos?|ficheros?)\s+tengo/.test(
+  // Pre-flight: "pásame/lista/dame todo lo que tengo (archivos y/o carpetas,
+  // en la raíz o en general)" es una petición muy directa y frecuente para la
+  // que el modelo a veces no llama a ninguna herramienta (responde "no recibí
+  // respuesta de las funciones..."). Se detecta aquí y se construye la lista
+  // directamente, sin depender del modelo.
+  const verboListar = "p[aá]sa(me)?|dame|env[ií]a(me)?|mu[eé]stra(me)?|ense[ñn]a(me)?|lista(r)?";
+  const pideTodoGenerico =
+    new RegExp(`(${verboListar})\\s+todo\\b`).test(msgLower) || /qu[eé]\s+tengo\b/.test(msgLower);
+  const pideArchivos =
+    new RegExp(`(${verboListar})\\s+(todos\\s+)?(mis\\s+)?(los\\s+)?(archivos?|ficheros?)\\b`).test(
       msgLower,
-    );
-  const esListarCarpetas =
-    /(p[aá]sa(me)?|dame|env[ií]a(me)?|mu[eé]stra(me)?|ense[ñn]a(me)?|lista(r)?)\s+(todas\s+)?(mis\s+)?(las\s+)?carpetas?\b|qu[eé]\s+carpetas?\s+tengo/.test(
-      msgLower,
-    );
+    ) || /qu[eé]\s+(archivos?|ficheros?)\s+tengo/.test(msgLower);
+  const pideCarpetas =
+    new RegExp(`(${verboListar})\\s+(todas\\s+)?(mis\\s+)?(las\\s+)?carpetas?\\b`).test(msgLower) ||
+    /qu[eé]\s+carpetas?\s+tengo/.test(msgLower);
+  // Si el mensaje nombra ambos tipos (ej: "carpetas y ficheros") pero solo uno
+  // coincide exactamente con el patrón verbo+sustantivo, se cuenta como ambos.
+  const mencionaArchivoPalabra = /archivo|fichero/.test(msgLower);
+  const mencionaCarpetaPalabra = /carpeta/.test(msgLower);
+  const esListarAmbos =
+    pideTodoGenerico ||
+    (pideArchivos && pideCarpetas) ||
+    ((pideArchivos || pideCarpetas) && mencionaArchivoPalabra && mencionaCarpetaPalabra);
+  const esListarSoloArchivos = !esListarAmbos && pideArchivos;
+  const esListarSoloCarpetas = !esListarAmbos && !esListarSoloArchivos && pideCarpetas;
+  const soloRaiz = /\bra[ií]z\b/.test(msgLower);
 
-  if (esListarArchivos) {
-    const { archivos, total } = await listarArchivos(usuarioId, undefined, 1, 200);
-    if (archivos.length === 0) return { respuesta: "No tienes ningún archivo.", acciones };
-    const lista = archivos
-      .map((a) => `- ${a.nombre}${a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`)
-      .join("\n");
-    const extra =
-      total > archivos.length ? `\n\n(mostrando los ${archivos.length} más recientes de ${total})` : "";
-    return { respuesta: `Tienes ${total} archivo(s):\n\n${lista}${extra}`, acciones };
-  }
-  if (esListarCarpetas) {
-    const carpetas = await listarTodasCarpetas(usuarioId);
-    if (carpetas.length === 0) return { respuesta: "No tienes ninguna carpeta.", acciones };
-    const lista = carpetas.map((c) => `- ${c.ruta}`).join("\n");
-    return { respuesta: `Tienes ${carpetas.length} carpeta(s):\n\n${lista}`, acciones };
+  if (esListarAmbos || esListarSoloArchivos || esListarSoloCarpetas) {
+    const partes: string[] = [];
+    if (esListarAmbos || esListarSoloCarpetas) {
+      const todas = await listarTodasCarpetas(usuarioId);
+      const carpetas = soloRaiz ? todas.filter((c) => !c.ruta.slice(1).includes("/")) : todas;
+      partes.push(
+        carpetas.length
+          ? `**Carpetas** (${carpetas.length}):\n${carpetas.map((c) => `- ${c.ruta}`).join("\n")}`
+          : `No tienes ninguna carpeta${soloRaiz ? " en la raíz" : ""}.`,
+      );
+    }
+    if (esListarAmbos || esListarSoloArchivos) {
+      const { archivos, total } = await listarArchivos(usuarioId, soloRaiz ? "/" : undefined, 1, 200);
+      const extra =
+        !soloRaiz && total > archivos.length
+          ? `\n\n(mostrando los ${archivos.length} más recientes de ${total})`
+          : "";
+      partes.push(
+        archivos.length
+          ? `**Archivos** (${soloRaiz ? archivos.length : total}):\n${archivos
+              .map((a) => `- ${a.nombre}${!soloRaiz && a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`)
+              .join("\n")}${extra}`
+          : `No tienes ningún archivo${soloRaiz ? " en la raíz" : ""}.`,
+      );
+    }
+    return { respuesta: partes.join("\n\n"), acciones };
   }
 
   const MAX_ITER = 15;
