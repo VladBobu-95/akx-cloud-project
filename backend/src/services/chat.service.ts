@@ -74,6 +74,23 @@ const grupoOriginal = (original: string, m: RegExpMatchArray, grupo = 1): string
   return original.slice(inicio, inicio + capturado.length);
 };
 
+// Recorta un fragmento de RAG (hasta ~1000 chars) a solo el trozo alrededor de
+// donde aparece el término buscado, en vez de devolver el chunk entero — para
+// que "qué documento habla de X" muestre el nombre + una frase corta, no un
+// párrafo completo. Si el término no aparece tal cual (la búsqueda es semántica,
+// puede encontrar contenido relacionado sin la palabra literal), recorta desde
+// el principio.
+const extraerFragmento = (texto: string, tema: string, ventana = 60): string => {
+  const idx = quitarTildes(texto.toLowerCase()).indexOf(quitarTildes(tema.toLowerCase()));
+  if (idx === -1) {
+    return texto.length > 160 ? `${texto.slice(0, 160).trim()}...` : texto;
+  }
+  const inicio = Math.max(0, idx - ventana);
+  const fin = Math.min(texto.length, idx + tema.length + ventana);
+  const recorte = texto.slice(inicio, fin).trim();
+  return `${inicio > 0 ? "..." : ""}${recorte}${fin < texto.length ? "..." : ""}`;
+};
+
 // Extrae una ruta de carpeta válida de los args. El modelo a veces omite "ruta"
 // o la pone bajo otra clave; sin esto, String(undefined) === "undefined" creaba
 // carpetas literales "/undefined".
@@ -1615,7 +1632,7 @@ export const chatear = async (
       return { respuesta: `No encontré nada relevante sobre "${tema}".`, acciones };
     }
     const detalle = resultados
-      .map((r) => `- **${r.nombre}**${r.carpeta !== "/" ? ` (${r.carpeta})` : ""}: ${r.fragmento}`)
+      .map((r) => `- **${r.nombre}**${r.carpeta !== "/" ? ` (${r.carpeta})` : ""}: ${extraerFragmento(r.fragmento, tema)}`)
       .join("\n");
     return { respuesta: `Esto es lo que encontré sobre "${tema}":\n\n${detalle}`, acciones };
   }
