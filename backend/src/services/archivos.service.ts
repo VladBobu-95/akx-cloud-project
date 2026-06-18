@@ -353,6 +353,20 @@ export const vaciarPapelera = async (
   return { borrados: archivos.length };
 };
 
+// Envía a la papelera TODOS los archivos activos del usuario (de cualquier
+// carpeta o de la raíz), pero NO toca las carpetas. Devuelve cuántos archivos afectó.
+export const eliminarTodosLosArchivos = async (
+  usuarioId: string,
+): Promise<{ borrados: number }> => {
+  const res = await repo()
+    .createQueryBuilder()
+    .softDelete()
+    .where("propietarioId = :u", { u: usuarioId })
+    .andWhere("eliminadoEn IS NULL")
+    .execute();
+  return { borrados: res.affected ?? 0 };
+};
+
 // --- OBTENER INFO DE UN ARCHIVO ---
 export const obtenerArchivo = async (
   id: string,

@@ -109,30 +109,37 @@ export const carpetaExiste = async (usuarioId: string, ruta: string): Promise<bo
 
 // Vacía el CONTENIDO de una carpeta (envía sus archivos a la papelera) pero deja
 // la carpeta. Borra la metadata de las subcarpetas. Devuelve cuántos archivos movió.
+// Caso especial r === "/": solo borra los archivos sueltos literalmente en la raíz
+// (no toca lo que hay dentro de subcarpetas, que no son parte de "la raíz").
 export const vaciarCarpeta = async (
   usuarioId: string,
   ruta: string,
 ): Promise<{ borrados: number }> => {
   const r = normalizarRuta(ruta);
-  if (r === "/") throw new AppError(400, "No se puede vaciar la raíz");
-  if (!(await carpetaExiste(usuarioId, r))) {
+  if (r !== "/" && !(await carpetaExiste(usuarioId, r))) {
     throw new AppError(404, `No existe ninguna carpeta "${r}".`);
   }
-  const res = await AppDataSource.getRepository(Archivo)
+  const query = AppDataSource.getRepository(Archivo)
     .createQueryBuilder()
     .softDelete()
-    .where("propietarioId = :u", { u: usuarioId })
-    .andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` })
-    .execute();
-  // Borra la metadata de las subcarpetas (su contenido ya no existe) pero conserva la carpeta.
-  await repo()
-    .createQueryBuilder()
-    .delete()
-    .from(Carpeta)
-    .where("propietarioId = :u", { u: usuarioId })
-    .andWhere("ruta LIKE :p", { p: `${r}/%` })
-    .execute();
-  await crearCarpeta(usuarioId, r); // mantener la carpeta (ahora vacía)
+    .where("propietarioId = :u", { u: usuarioId });
+  if (r === "/") {
+    query.andWhere("carpeta = '/'");
+  } else {
+    query.andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` });
+  }
+  const res = await query.execute();
+  if (r !== "/") {
+    // Borra la metadata de las subcarpetas (su contenido ya no existe) pero conserva la carpeta.
+    await repo()
+      .createQueryBuilder()
+      .delete()
+      .from(Carpeta)
+      .where("propietarioId = :u", { u: usuarioId })
+      .andWhere("ruta LIKE :p", { p: `${r}/%` })
+      .execute();
+    await crearCarpeta(usuarioId, r); // mantener la carpeta (ahora vacía)
+  }
   return { borrados: res.affected ?? 0 };
 };
 
