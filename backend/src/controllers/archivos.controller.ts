@@ -120,20 +120,21 @@ export const ctrlSubir = async (
     const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id);
     res.status(201).json(archivo);
 
-    // Indexado para búsqueda semántica (RAG) EN SEGUNDO PLANO: no esperamos a
-    // que terminen los embeddings para responder (en CPU pueden tardar). Si falla,
-    // solo se loguea: el archivo ya está subido y disponible igualmente.
+    // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO y EN ESTE ORDEN:
+    // no esperamos a que terminen para responder (el OCR/embeddings pueden tardar).
+    // El indexado va primero porque ya hace el OCR de imágenes (vía extraerTexto) y
+    // lo guarda en archivo.textoExtraido; el auto-escaneo lo reutiliza en vez de
+    // repetir el OCR (escanearFactura relee el archivo de BD, así que ya lo ve).
     const buffer = req.file.buffer;
     const usuarioId = req.usuario!.id;
-    void indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
-      console.error(`Error indexando "${archivo.nombre}":`, err),
-    );
-
-    // Auto-escaneo de factura EN SEGUNDO PLANO: si el archivo es PDF/imagen y parece
-    // una factura, se extrae y guarda para que la analítica funcione sin pasos manuales.
-    void autoEscanearArchivo(usuarioId, archivo).catch((err) =>
-      console.error(`Error auto-escaneando "${archivo.nombre}":`, err),
-    );
+    void (async () => {
+      await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
+        console.error(`Error indexando "${archivo.nombre}":`, err),
+      );
+      await autoEscanearArchivo(usuarioId, archivo).catch((err) =>
+        console.error(`Error auto-escaneando "${archivo.nombre}":`, err),
+      );
+    })();
   } catch (error) {
     next(error);
   }

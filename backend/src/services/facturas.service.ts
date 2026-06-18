@@ -1,4 +1,3 @@
-import { createWorker, Worker } from "tesseract.js";
 import { AppDataSource } from "../config/database";
 import { env } from "../config/env";
 import { minioClient } from "../config/minio";
@@ -12,46 +11,6 @@ import { crearArchivoTexto, borrarPermanente } from "./archivos.service";
 
 const CARPETA_FACTURAS = "/facturas";
 
-// --- OCR (Tesseract) ---
-// Worker perezoso: inicializarlo es caro, así que se crea una vez y se reutiliza.
-let workerPromise: Promise<Worker> | null = null;
-const getWorker = (): Promise<Worker> => {
-  if (!workerPromise) workerPromise = createWorker("spa");
-  return workerPromise;
-};
-const ocrImagen = async (buffer: Buffer): Promise<string> => {
-  const worker = await getWorker();
-  const { data } = await worker.recognize(buffer);
-  return data.text ?? "";
-};
-
-// OCR con un modelo de visión de Ollama (deepseek-ocr por defecto). Mucho mejor
-// que Tesseract para facturas. Lanza si Ollama falla (el llamador hace fallback).
-const ocrConOllama = async (buffer: Buffer): Promise<string> => {
-  const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: env.OLLAMA_OCR_MODEL,
-      messages: [
-        {
-          role: "user",
-          content:
-            "Transcribe TODO el texto de esta imagen tal cual aparece (números, importes, fechas, líneas de la tabla). No añadas explicaciones.",
-          images: [buffer.toString("base64")],
-        },
-      ],
-      stream: false,
-      options: { temperature: 0 },
-    }),
-  });
-  const data = (await res.json()) as { message?: { content?: string }; error?: string };
-  if (!res.ok || data.error || !data.message?.content) {
-    throw new Error(`OCR Ollama falló: ${data.error ?? res.status}`);
-  }
-  return data.message.content;
-};
-
 // Lee un objeto de MinIO completo a un Buffer.
 const obtenerBufferMinio = async (archivo: Archivo): Promise<Buffer> => {
   const stream = await minioClient.getObject(env.MINIO_BUCKET, archivo.claveMinio);
@@ -60,20 +19,14 @@ const obtenerBufferMinio = async (archivo: Archivo): Promise<Buffer> => {
   return Buffer.concat(chunks);
 };
 
-// Obtiene el texto de la factura: OCR si es imagen, extracción si es PDF/texto.
+// Obtiene el texto de la factura. Si el archivo ya se indexó para RAG (subida
+// normal: PDF/imagen pasan por extraerTexto, que ya hace OCR de imágenes),
+// reutiliza ese texto en vez de volver a leer el binario y repetir el OCR.
 // Añade la "pista" del usuario si la hay. Lanza si no consigue nada.
 const leerContenidoFactura = async (archivo: Archivo, pista?: string): Promise<string> => {
-  const buffer = await obtenerBufferMinio(archivo);
-  let texto = "";
-  if (/^image\//.test(archivo.mimeType)) {
-    // OCR con modelo de visión de Ollama; si falla, fallback a Tesseract.
-    try {
-      texto = await ocrConOllama(buffer);
-    } catch (err) {
-      console.error("[facturas] OCR Ollama falló, usando Tesseract:", err);
-      texto = await ocrImagen(buffer);
-    }
-  } else {
+  let texto = archivo.textoExtraido ?? "";
+  if (!texto) {
+    const buffer = await obtenerBufferMinio(archivo);
     texto = (await extraerTexto(buffer, archivo.mimeType, archivo.nombre)) ?? "";
   }
   const extra = pista?.trim() ? `\n\nINFO ADICIONAL DEL USUARIO: ${pista.trim()}` : "";
@@ -215,11 +168,23 @@ export const escanearFactura = async (
   const datos = await extraerDatosFactura(contenido);
   datos.archivoNombre = archivo.nombre;
 
-  // Auto-escaneo: si no parece una factura, no ensuciamos la BD.
+  // Auto-escaneo: si no parece una factura, no ensuciamos la BD. Exige TANTO un
+  // importe real (no solo líneas con descripción: el modelo puede inventarse
+  // precios para algo que no es una factura, ej. una lista de la compra) COMO
+  // algún dato identificativo (número/fecha/emisor) — las dos cosas a la vez,
+  // para no confundir una imagen cualquiera con una factura real.
   if (opts.soloSiFactura) {
-    const tieneLineas = (datos.lineas ?? []).some((l) => l.descripcion?.trim());
-    const tieneImportes = Number(datos.total) > 0 || Number(datos.subtotal) > 0;
-    if (!tieneLineas && !tieneImportes) {
+    const lineasConImporte = (datos.lineas ?? []).filter(
+      (l) => l.descripcion?.trim() && (Number(l.total) > 0 || Number(l.precioUnit) > 0),
+    );
+    const tieneImportes =
+      Number(datos.total) > 0 || Number(datos.subtotal) > 0 || lineasConImporte.length > 0;
+    const tieneIdentificacion = !!(
+      datos.numero?.trim() ||
+      datos.fecha?.trim() ||
+      datos.emisor?.trim()
+    );
+    if (!tieneImportes || !tieneIdentificacion) {
       return { lineas: 0, resumen: "", omitida: true };
     }
   }
