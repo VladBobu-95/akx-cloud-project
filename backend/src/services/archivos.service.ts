@@ -233,6 +233,10 @@ export const leerTextoArchivo = async (
   const esTexto = /^(text\/|application\/(json|xml|markdown))/.test(archivo.mimeType);
   if (!esTexto) {
     stream.destroy();
+    // PDF/DOCX no son texto plano, pero ya se extrajo su contenido al subirlos
+    // (mismo pipeline que usa el RAG, guardado en textoExtraido): se reutiliza
+    // en vez de fallar.
+    if (archivo.textoExtraido) return archivo.textoExtraido.slice(0, maxChars);
     throw new AppError(400, "El archivo no es de texto, no puedo leer su contenido.");
   }
   const chunks: Buffer[] = [];

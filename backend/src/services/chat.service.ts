@@ -92,6 +92,8 @@ export interface MensajeChat {
 const SYSTEM_PROMPT = `Eres el asistente de AKX Cloud, una app de almacenamiento de archivos.
 Gestionas los archivos y carpetas del usuario USANDO SIEMPRE las herramientas; nunca respondas de memoria ni inventes.
 
+Si el mensaje es solo conversación (saludo, "qué tal", "gracias", charla trivial sin relación con archivos/carpetas/facturas), responde de forma natural, breve y amable, SIN llamar a ninguna herramienta: ese caso no necesita datos reales, así que la regla de basarte solo en herramientas no aplica.
+
 Cómo actuar:
 - Las acciones sobre archivos (copiar/mover/renombrar/borrar) se hacen indicando el NOMBRE del archivo; el sistema lo localiza solo. No necesitas ids.
 - Si quieres ver qué hay, usa "buscar_archivos" (con "texto" para filtrar por nombre, o "carpeta" para listar una carpeta; sin nada lista los más recientes).
@@ -102,7 +104,7 @@ Cómo actuar:
 - Para mover/renombrar/copiar/eliminar/vaciar una carpeta que YA EXISTE, indica solo su NOMBRE (ej: "tmp"); el sistema la localiza igual que con archivos, sin necesidad de la ruta completa. Solo da la ruta completa (ej: "/proyectos/tmp") si quieres ser explícito o si hay varias carpetas con el mismo nombre y te piden aclarar. La ruta completa SÍ es obligatoria al CREAR una carpeta nueva (no existe nada que localizar) y al indicar el destino de un mover/copiar.
 - Para listar carpetas usa "listar_carpetas" (devuelve TODAS, incluidas las que tienen archivos).
 - Papelera: "listar_papelera", "restaurar_archivo" (recuperar), "borrar_permanente" (definitivo, irreversible) y "vaciar_papelera". OJO: "borra/elimina X de la papelera" significa BORRAR DEFINITIVAMENTE ese archivo (usa "borrar_permanente"), NO recuperarlo. Solo uses "restaurar_archivo" si el usuario dice explícitamente "restaura"/"recupera"/"saca X de la papelera".
-- Para responder sobre el contenido de un archivo CONCRETO (sabes su nombre) usa "leer_archivo". Para cifras de uso, "estadisticas".
+- Para responder sobre el contenido de un archivo CONCRETO (sabes su nombre) usa "leer_archivo". Si el usuario solo pide "lee/muestra/qué contiene X" sin una pregunta concreta sobre ese contenido, MUESTRA el contenido devuelto tal cual (no digas solo "lo he leído"). Para cifras de uso, "estadisticas".
 - Para preguntas sobre el CONTENIDO sin saber en qué archivo está (ej: "¿qué documento habla de X?", "¿dónde dice algo sobre Y?", "resume lo que tengo sobre Z") usa "buscar_semantica": busca por significado dentro de todos los documentos y devuelve los más relevantes con un fragmento. Responde basándote en esos fragmentos y di de qué archivo salen.
 - Una factura es un ARCHIVO normal (un PDF/imagen). Para copiarla/moverla/renombrarla/eliminarla usa SIEMPRE "copiar_archivo"/"mover_archivo"/"renombrar_archivo"/"eliminar_archivo" con su nombre — NO existen herramientas como "mover_factura" ni similares; nunca te inventes nombres de herramienta que no estén en la lista.
 - FACTURAS — elige la herramienta correcta:
@@ -546,13 +548,14 @@ const resolverCarpeta = async (
   const texto = nombreORuta.trim();
   if (texto.startsWith("/")) {
     const ruta = normalizarRuta(texto);
-    if (!(await carpetaExiste(usuarioId, ruta))) {
-      return { error: `No encontré ninguna carpeta "${ruta}".` };
-    }
-    return { ruta };
+    if (await carpetaExiste(usuarioId, ruta)) return { ruta };
+    // El modelo a veces antepone "/" a un nombre suelto (ej. pasa "/tmp" cuando
+    // el usuario solo dijo "tmp" y la carpeta real está en otra ubicación, p.ej.
+    // "/demo/tmp"); si la ruta exacta no existe, se reintenta por nombre suelto
+    // antes de rendirse, en vez de fallar solo porque el modelo añadió la barra.
   }
   const todas = await listarTodasCarpetas(usuarioId);
-  const buscado = texto.toLowerCase();
+  const buscado = hojaRuta(texto).toLowerCase();
   const coincidencias = todas.filter((c) => hojaRuta(c.ruta).toLowerCase() === buscado);
   if (coincidencias.length === 0) {
     return { error: `No encontré ninguna carpeta llamada "${nombreORuta}".` };
@@ -575,6 +578,43 @@ const resolverEnPapelera = async (
   if (exacto) return { archivo: exacto };
   if (lista.length === 1) return { archivo: lista[0] };
   return { opciones: lista.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
+};
+
+// Tipo de las opciones que se ofrecen al pedir aclaración: objeto (archivo,
+// con nombre+carpeta) cuando viene de resolverArchivo/resolverEnPapelera, o
+// string (ruta completa) cuando viene de resolverCarpeta.
+type OpcionAclaracion = { nombre: string; carpeta: string } | string;
+
+// Cuando una tool no puede decidir entre varias coincidencias y pregunta al
+// usuario, se recuerda aquí qué se estaba intentando hacer (tool + argumentos
+// originales) para poder completarlo en el SIGUIENTE mensaje si el usuario
+// responde con una de las opciones ofrecidas. Sin esto, la respuesta de
+// aclaración (ej. "factura_X.pdf (/test)") se trata como un mensaje nuevo sin
+// contexto -el chat solo envía el último mensaje- y el modelo hace otra cosa
+// (ej. escanea la factura en vez de completar el renombrado que se había
+// pedido). Se descarta a los 5 minutos para no aplicar un estado obsoleto a
+// una conversación ya distinta.
+const pendientesAclaracion = new Map<
+  string,
+  {
+    tool: string;
+    args: Record<string, unknown>;
+    clave: "nombre" | "ruta";
+    opciones: OpcionAclaracion[];
+    ts: number;
+  }
+>();
+const TTL_ACLARACION_MS = 5 * 60 * 1000;
+
+const registrarAclaracion = (
+  usuarioId: string,
+  tool: string,
+  args: Record<string, unknown>,
+  clave: "nombre" | "ruta",
+  opciones: OpcionAclaracion[],
+) => {
+  pendientesAclaracion.set(usuarioId, { tool, args, clave, opciones, ts: Date.now() });
+  return { necesita_aclaracion: true, opciones };
 };
 
 // Traduce los argumentos de las tools de analítica (ventas_top, totales_facturas)
@@ -654,7 +694,7 @@ const ejecutarTool = async (
       case "copiar_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         const r = await copiarArchivo(res.archivo!.id, usuarioId, {
           carpeta: extraerRuta(args, "carpeta", "carpeta_destino", "destino", "ruta"),
         });
@@ -664,7 +704,7 @@ const ejecutarTool = async (
       case "mover_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         const carpetaArg = extraerRuta(args, "carpeta", "carpeta_destino", "destino", "ruta");
         if (!carpetaArg) return { error: "Falta indicar la carpeta destino." };
         const r = await actualizarArchivo(res.archivo!.id, usuarioId, { carpeta: carpetaArg });
@@ -674,7 +714,7 @@ const ejecutarTool = async (
       case "renombrar_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         const r = await actualizarArchivo(res.archivo!.id, usuarioId, {
           nombre: String(args.nuevo_nombre),
         });
@@ -684,7 +724,7 @@ const ejecutarTool = async (
       case "eliminar_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         await eliminarArchivo(res.archivo!.id, usuarioId);
         acciones.push(`Enviado a la papelera "${res.archivo!.nombre}"`);
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
@@ -720,10 +760,11 @@ const ejecutarTool = async (
             acciones.push(`Enviado a la papelera "${comoArchivo.archivo.nombre}"`);
             return { ok: true, nombre: comoArchivo.archivo.nombre, resumen: "Hecho." };
           }
-          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          if (comoArchivo.opciones)
+            return registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", comoArchivo.opciones);
           return { error: res.error };
         }
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
         const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
         acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados, resumen: "Hecho." };
@@ -733,7 +774,7 @@ const ejecutarTool = async (
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a vaciar." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
         const r = await vaciarCarpeta(usuarioId, res.ruta!);
         acciones.push(`Contenido de ${res.ruta} enviado a la papelera (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados, resumen: "Hecho." };
@@ -768,7 +809,7 @@ const ejecutarTool = async (
       case "restaurar_archivo": {
         const res = await resolverEnPapelera(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         await restaurarArchivo(res.archivo!.id, usuarioId);
         acciones.push(`Restaurado "${res.archivo!.nombre}"`);
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
@@ -776,7 +817,7 @@ const ejecutarTool = async (
       case "borrar_permanente": {
         const res = await resolverEnPapelera(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         await borrarPermanente(res.archivo!.id, usuarioId);
         acciones.push(`Borrado definitivamente "${res.archivo!.nombre}"`);
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
@@ -805,10 +846,17 @@ const ejecutarTool = async (
             acciones.push(`Movido "${r.nombre}" a ${r.carpeta}`);
             return { ok: true, nombre: r.nombre, resumen: "Hecho." };
           }
-          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          if (comoArchivo.opciones)
+            return registrarAclaracion(
+              usuarioId,
+              "mover_archivo",
+              { carpeta: destinoArg },
+              "nombre",
+              comoArchivo.opciones,
+            );
           return { error: res.error };
         }
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
         const origen = res.ruta!;
         const destino = unirRuta(normalizarRuta(destinoArg), hojaRuta(origen));
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
@@ -833,10 +881,17 @@ const ejecutarTool = async (
             acciones.push(`Renombrado a "${r.nombre}"`);
             return { ok: true, nombre: r.nombre, resumen: "Hecho." };
           }
-          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          if (comoArchivo.opciones)
+            return registrarAclaracion(
+              usuarioId,
+              "renombrar_archivo",
+              { nuevo_nombre: nuevoNombre },
+              "nombre",
+              comoArchivo.opciones,
+            );
           return { error: res.error };
         }
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
         const origen = res.ruta!;
         const destino = unirRuta(padreRuta(origen), nuevoNombre);
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
@@ -856,10 +911,17 @@ const ejecutarTool = async (
             acciones.push(`Copiado "${r.nombre}"`);
             return { ok: true, nombre: r.nombre, resumen: "Hecho." };
           }
-          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          if (comoArchivo.opciones)
+            return registrarAclaracion(
+              usuarioId,
+              "copiar_archivo",
+              { carpeta: typeof args.carpeta_destino === "string" ? args.carpeta_destino : undefined },
+              "nombre",
+              comoArchivo.opciones,
+            );
           return { error: res.error };
         }
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
         const origen = res.ruta!;
         const destino =
           typeof args.carpeta_destino === "string" && args.carpeta_destino
@@ -873,7 +935,7 @@ const ejecutarTool = async (
       case "leer_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         const contenido = await leerTextoArchivo(res.archivo!.id, usuarioId);
         return { nombre: res.archivo!.nombre, contenido };
       }
@@ -921,7 +983,7 @@ const ejecutarTool = async (
       case "obtener_factura": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         const r = await obtenerFactura(usuarioId, res.archivo!.id, res.archivo!.nombre);
         if (!r.encontrada) {
           return {
@@ -939,7 +1001,7 @@ const ejecutarTool = async (
       case "escanear_factura": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
         const pista = typeof args.pista === "string" ? args.pista : undefined;
         const r = await escanearFactura(usuarioId, res.archivo!.id, { pista });
         acciones.push(
@@ -1134,6 +1196,59 @@ export const chatear = async (
   const ultimoMensaje = mensajes[mensajes.length - 1]?.contenido ?? "";
   const msgLower = ultimoMensaje.toLowerCase();
 
+  // Pre-flight: si en el turno anterior se pidió aclarar entre varias
+  // coincidencias y este mensaje es justo la opción elegida (el usuario copia/
+  // escribe el nombre que se le ofreció), se completa AQUÍ la acción original
+  // (tool + argumentos de entonces) en vez de tratarlo como un mensaje nuevo
+  // sin contexto. Si no coincide con ninguna opción, se descarta para no
+  // aplicar un estado obsoleto a una petición distinta.
+  const pendiente = pendientesAclaracion.get(usuarioId);
+  if (pendiente) {
+    pendientesAclaracion.delete(usuarioId);
+    if (Date.now() - pendiente.ts < TTL_ACLARACION_MS) {
+      const normalizado = ultimoMensaje.trim().replace(/^[-•]\s*/, "").toLowerCase();
+      const candidatos = pendiente.opciones.filter((o) => {
+        const texto = (typeof o === "string" ? o : o.nombre).toLowerCase();
+        return normalizado === texto || normalizado.includes(texto);
+      });
+      if (candidatos.length === 1) {
+        const elegido = candidatos[0];
+        const valor = typeof elegido === "string" ? elegido : elegido.nombre;
+        const argsFinal = { ...pendiente.args, [pendiente.clave]: valor };
+        const resultado = (await ejecutarTool(
+          pendiente.tool,
+          argsFinal,
+          usuarioId,
+          acciones,
+        )) as Record<string, unknown>;
+        if (resultado.necesita_aclaracion === true && Array.isArray(resultado.opciones)) {
+          const lista = (resultado.opciones as unknown[])
+            .map((o) =>
+              typeof o === "string"
+                ? `- ${o}`
+                : `- ${(o as { nombre: string }).nombre}${
+                    (o as { carpeta: string }).carpeta !== "/" ? ` (${(o as { carpeta: string }).carpeta})` : ""
+                  }`,
+            )
+            .join("\n");
+          return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+        }
+        if (typeof resultado.error === "string") return { respuesta: resultado.error, acciones };
+        if (typeof resultado.resumen === "string") {
+          return {
+            respuesta: resultado.resumen,
+            acciones,
+            archivo:
+              typeof resultado.archivoId === "string" && typeof resultado.archivoNombre === "string"
+                ? { id: resultado.archivoId, nombre: resultado.archivoNombre }
+                : undefined,
+          };
+        }
+        return { respuesta: "Hecho.", acciones };
+      }
+    }
+  }
+
   // Pre-flight: "¿qué hay en la papelera?" es una consulta directa y frecuente
   // que el modelo a veces desvía hacia herramientas de facturas (el prompt de
   // facturas es grande y le hace sesgo), devolviendo contenido random no
@@ -1147,6 +1262,39 @@ export const chatear = async (
     if (lista.length === 0) return { respuesta: "La papelera está vacía.", acciones };
     const detalle = lista.map((a) => `- ${a.nombre}${a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`).join("\n");
     return { respuesta: `En la papelera tienes ${lista.length} archivo(s):\n\n${detalle}`, acciones };
+  }
+
+  // Pre-flight: "restaura/recupera/saca X de la papelera" (recuperar) vs "borra/
+  // elimina X de la papelera" (borrado DEFINITIVO) son acciones opuestas que el
+  // modelo confunde a pesar de la instrucción explícita del prompt sobre esto
+  // -se ha visto "borra X de la papelera" ejecutar un restaurar_archivo, justo
+  // lo contrario de lo pedido-, así que se resuelven aquí de forma determinista.
+  if (/papelera/.test(msgLower)) {
+    const tieneIntencionRestaurar = /\b(restaura(?:r)?|recupera(?:r)?|saca(?:r)?)\b/.test(msgLower);
+    const tieneIntencionBorrarDef = /\b(borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b/.test(msgLower);
+    const matchNombrePapelera = msgLower.match(
+      /\b(?:restaura(?:r)?|recupera(?:r)?|saca(?:r)?|borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b\s+(?:el\s+archivo\s+)?["']?([\wÀ-ÿ.-]+)/,
+    );
+    if (matchNombrePapelera && (tieneIntencionRestaurar || tieneIntencionBorrarDef)) {
+      const res = await resolverEnPapelera(usuarioId, matchNombrePapelera[1]);
+      if (res.error) return { respuesta: res.error, acciones };
+      if (res.opciones) {
+        const tool = tieneIntencionRestaurar ? "restaurar_archivo" : "borrar_permanente";
+        registrarAclaracion(usuarioId, tool, {}, "nombre", res.opciones);
+        const lista = res.opciones
+          .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
+          .join("\n");
+        return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+      }
+      if (tieneIntencionRestaurar) {
+        await restaurarArchivo(res.archivo!.id, usuarioId);
+        acciones.push(`Restaurado "${res.archivo!.nombre}"`);
+      } else {
+        await borrarPermanente(res.archivo!.id, usuarioId);
+        acciones.push(`Borrado definitivamente "${res.archivo!.nombre}"`);
+      }
+      return { respuesta: "Hecho.", acciones };
+    }
   }
 
   // Pre-flight: "abre/muéstrame factura_X" debe leer la factura YA escaneada
@@ -1166,6 +1314,7 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, matchNombreFactura[0]);
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
+      registrarAclaracion(usuarioId, "obtener_factura", {}, "nombre", res.opciones);
       const lista = res.opciones
         .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
         .join("\n");
@@ -1183,6 +1332,27 @@ export const chatear = async (
       acciones,
       archivo: { id: res.archivo!.id, nombre: res.archivo!.nombre },
     };
+  }
+
+  // Pre-flight: "totales/total facturado de factura_X y factura_Y" (sin un verbo
+  // claro como "dame"/"cuánto") a veces hace que el modelo interprete el primer
+  // identificador como "abrir esa factura" en vez de pedir el total combinado de
+  // todas las nombradas. Si se mencionan 2+ identificadores de factura junto a
+  // "total(es)"/"facturado", se resuelve aquí directamente con "totales_facturas".
+  const pideTotales = /\btotal(es)?\b/.test(msgLower) || /\bfacturado\b/.test(msgLower);
+  const nombresFactura = [...msgLower.matchAll(/\bfactura[\w.-]*\b/g)].map((m) => m[0]);
+  const esTotalesMultiple =
+    pideTotales &&
+    nombresFactura.length >= 2 &&
+    !/escane[ao]|abre|abrir|mu[eé]stra|vendid|ranking/.test(msgLower);
+  if (esTotalesMultiple) {
+    const resultado = (await ejecutarTool(
+      "totales_facturas",
+      { facturas: nombresFactura },
+      usuarioId,
+      acciones,
+    )) as Record<string, unknown>;
+    if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
   // Pre-flight: "¿tengo/hay/existe/dónde está... un archivo llamado X?" o
@@ -1243,14 +1413,102 @@ export const chatear = async (
     }
   }
 
+  // Pre-flight: "borra/elimina el archivo X" (un archivo concreto, ni carpeta ni
+  // borrado masivo). El modelo no llama de forma fiable a "eliminar_archivo" para
+  // esta frase tan directa: unas veces no emite ninguna tool call válida, otras
+  // confunde "borra X" (sin la palabra "archivo") con "lee X". Se resuelve aquí
+  // sin pasar por Ollama, igual que el resto de pre-flights de borrado.
+  const matchNombreArchivoABorrar = msgLower.match(
+    /\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b.*?(?:archivo|fichero)\s+(?:llamado\s+)?["']?([\wÀ-ÿ.-]+)/,
+  );
+  const esBorrarUnArchivo = !!matchNombreArchivoABorrar && !/carpeta|papelera/.test(msgLower);
+  if (esBorrarUnArchivo && matchNombreArchivoABorrar) {
+    const res = await resolverArchivo(usuarioId, matchNombreArchivoABorrar[1]);
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", res.opciones);
+      const lista = res.opciones
+        .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
+        .join("\n");
+      return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+    }
+    await eliminarArchivo(res.archivo!.id, usuarioId);
+    acciones.push(`Enviado a la papelera "${res.archivo!.nombre}"`);
+    return { respuesta: "Hecho.", acciones };
+  }
+
+  // Pre-flight: "borra/elimina la carpeta X" (una carpeta concreta, ni archivo
+  // ni borrado masivo). Igual que con archivos, el modelo no llama de forma
+  // fiable a "eliminar_carpeta" para esta frase tan directa.
+  const matchNombreCarpetaABorrar = msgLower.match(
+    /\b(?:borra(?:r)?|elimina(?:r)?|quita(?:r)?)\b.*?carpeta\s+(?:llamada\s+)?["']?([\wÀ-ÿ/-]+)/,
+  );
+  const esBorrarUnaCarpeta = !!matchNombreCarpetaABorrar && !/papelera/.test(msgLower);
+  if (esBorrarUnaCarpeta && matchNombreCarpetaABorrar) {
+    const res = await resolverCarpeta(usuarioId, matchNombreCarpetaABorrar[1]);
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      registrarAclaracion(usuarioId, "eliminar_carpeta", {}, "ruta", res.opciones);
+      const lista = res.opciones.map((o) => `- ${o}`).join("\n");
+      return { respuesta: `Hay varias carpetas con ese nombre, ¿cuál quieres?\n\n${lista}`, acciones };
+    }
+    const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
+    acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
+    return { respuesta: "Hecho.", acciones };
+  }
+
+  // Pre-flight: "crea/créame una nota/archivo/documento llamado X [con esto:/
+  // con el contenido/que diga CONTENIDO]". El modelo casi nunca llama a
+  // "crear_archivo" para esta petición: en su lugar intenta buscar o leer un
+  // archivo que todavía no existe y responde que no lo encuentra, en vez de
+  // crearlo. No aplica a carpetas (esas sí funcionan bien con el modelo).
+  const esCrearNota =
+    /\bcr[eé]a(?:me)?\b/.test(msgLower) && /\b(nota|archivo|documento|fichero)\b/.test(msgLower);
+  if (esCrearNota) {
+    const matchNombreExt = ultimoMensaje.match(/\b([\wÀ-ÿ-]+\.(?:md|txt))\b/i);
+    const matchLlamado = ultimoMensaje.match(/llamad[oa]\s+["']?([\wÀ-ÿ.-]+)/i);
+    const nombreNota = matchNombreExt?.[1] ?? (matchLlamado ? `${matchLlamado[1]}.md` : undefined);
+    if (nombreNota) {
+      const matchContenido = ultimoMensaje.match(
+        /(?:con esto|con el contenido|con texto|que diga|que ponga)\s*:?\s*([\s\S]+)$/i,
+      );
+      const contenidoNota = matchContenido?.[1]?.trim() ?? "";
+      const r = await crearArchivoTexto(usuarioId, nombreNota, "/", contenidoNota);
+      acciones.push(`Archivo creado "${r.nombre}" en ${r.carpeta}`);
+      return { respuesta: "Hecho.", acciones };
+    }
+  }
+
+  // Pre-flight: "resume/qué tengo/qué documento(s) habla(n) sobre/de X" -
+  // búsqueda semántica por tema. El modelo a veces no llama a "buscar_semantica"
+  // para esta frase y en su lugar pide más detalles al usuario en vez de buscar.
+  const matchResumenTema = ultimoMensaje.match(
+    /(?:resum[ei](?:me)?|qu[eé]\s+tengo|qu[eé]\s+(?:documento|archivo)s?\s+habla(?:n)?)\s+(?:lo\s+que\s+tengo\s+)?(?:sobre|acerca\s+de|de)\s+(.+)$/i,
+  );
+  if (matchResumenTema) {
+    const tema = matchResumenTema[1].trim().replace(/[?.!]+$/, "");
+    const resultados = await buscarSemantica(usuarioId, tema);
+    if (resultados.length === 0) {
+      return { respuesta: `No encontré nada relevante sobre "${tema}".`, acciones };
+    }
+    const detalle = resultados
+      .map((r) => `- **${r.nombre}**${r.carpeta !== "/" ? ` (${r.carpeta})` : ""}: ${r.fragmento}`)
+      .join("\n");
+    return { respuesta: `Esto es lo que encontré sobre "${tema}":\n\n${detalle}`, acciones };
+  }
+
   // Pre-flight: "pásame/lista/dame todo lo que tengo (archivos y/o carpetas,
   // en la raíz o en general)" es una petición muy directa y frecuente para la
   // que el modelo a veces no llama a ninguna herramienta (responde "no recibí
   // respuesta de las funciones..."). Se detecta aquí y se construye la lista
   // directamente, sin depender del modelo.
   const verboListar = "p[aá]sa(me)?|dame|env[ií]a(me)?|mu[eé]stra(me)?|ense[ñn]a(me)?|lista(r)?";
+  // El lookahead negativo evita que "resume LO QUE TENGO sobre el proyecto X"
+  // (una búsqueda semántica por tema, no un listado) dispare esto solo por
+  // contener la subcadena "que tengo".
   const pideTodoGenerico =
-    new RegExp(`(${verboListar})\\s+todo\\b`).test(msgLower) || /qu[eé]\s+tengo\b/.test(msgLower);
+    new RegExp(`(${verboListar})\\s+todo\\b`).test(msgLower) ||
+    /qu[eé]\s+tengo\b(?!\s+(sobre|de|acerca|relacionado))/.test(msgLower);
   const pideArchivos =
     new RegExp(`(${verboListar})\\s+(todos\\s+)?(mis\\s+)?(los\\s+)?(archivos?|ficheros?)\\b`).test(
       msgLower,
@@ -1275,7 +1533,11 @@ export const chatear = async (
   // carpeta X"), el listado se limita a esa carpeta en vez de a todo el usuario
   // (antes "lista todo lo que tengo dentro de la carpeta X" ignoraba el filtro
   // y devolvía absolutamente todo).
-  const matchCarpetaObjetivo = esListado ? msgLower.match(/carpeta\s+([\wÀ-ÿ/-]+)/) : null;
+  // Admite tanto "dentro de la carpeta X" / "de la carpeta X" como "dentro de X"
+  // sin la palabra "carpeta" (ej. "lista todo lo que tengo dentro de demo11").
+  const matchCarpetaObjetivo = esListado
+    ? msgLower.match(/(?:dentro\s+de\s+(?:la\s+carpeta\s+)?|carpeta\s+)([\wÀ-ÿ/-]+)/)
+    : null;
   if (matchCarpetaObjetivo) {
     const res = await resolverCarpeta(usuarioId, matchCarpetaObjetivo[1]);
     if (res.error) return { respuesta: res.error, acciones };

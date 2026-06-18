@@ -390,11 +390,16 @@ const construirFiltro = (
       });
     if (ors.length) cond.push(`(${ors.join(" OR ")})`);
   }
-  if (filtro.cliente?.trim()) cond.push(`f."cliente" ILIKE ${add(`%${filtro.cliente.trim()}%`)}`);
-  if (filtro.emisor?.trim()) cond.push(`f."emisor" ILIKE ${add(`%${filtro.emisor.trim()}%`)}`);
+  // unaccent() en ambos lados: para que "Tecnologias" (sin tilde, lo más común
+  // al escribir rápido) encuentre "Tecnologías".
+  if (filtro.cliente?.trim())
+    cond.push(`unaccent(f."cliente") ILIKE unaccent(${add(`%${filtro.cliente.trim()}%`)})`);
+  if (filtro.emisor?.trim())
+    cond.push(`unaccent(f."emisor") ILIKE unaccent(${add(`%${filtro.emisor.trim()}%`)})`);
   if (filtro.desde) cond.push(`f."fecha" >= ${add(filtro.desde)}::date`);
   if (filtro.hasta) cond.push(`f."fecha" <= ${add(filtro.hasta)}::date`);
-  if (filtro.producto?.trim()) cond.push(`l."descripcion" ILIKE ${add(`%${filtro.producto.trim()}%`)}`);
+  if (filtro.producto?.trim())
+    cond.push(`unaccent(l."descripcion") ILIKE unaccent(${add(`%${filtro.producto.trim()}%`)})`);
 
   return { where: cond.join(" AND "), params };
 };
