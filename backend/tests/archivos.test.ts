@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll } from "@jest/globals";
 const registrar = async (email: string): Promise<string> => {
   const res = await request(app)
     .post("/api/auth/registro")
-    .send({ email, password: "password123" });
+    .send({ email, password: "password123", nombre: "Archivos Test" });
   return res.body.token as string;
 };
 
