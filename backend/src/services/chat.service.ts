@@ -702,7 +702,18 @@ const ejecutarTool = async (
         const rutaArg = extraerRuta(args);
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a borrar." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
-        if (res.error) return { error: res.error };
+        if (res.error) {
+          // El modelo pudo confundir un archivo con una carpeta (ej. llamó a esta
+          // tool para algo que en realidad es un archivo).
+          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          if (comoArchivo.archivo) {
+            await eliminarArchivo(comoArchivo.archivo.id, usuarioId);
+            acciones.push(`Enviado a la papelera "${comoArchivo.archivo.nombre}"`);
+            return { ok: true, nombre: comoArchivo.archivo.nombre, resumen: "Hecho." };
+          }
+          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          return { error: res.error };
+        }
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
         const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
         acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
@@ -776,7 +787,18 @@ const ejecutarTool = async (
             : undefined;
         if (!destinoArg) return { error: "Falta indicar la carpeta destino." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
-        if (res.error) return { error: res.error };
+        if (res.error) {
+          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          if (comoArchivo.archivo) {
+            const r = await actualizarArchivo(comoArchivo.archivo.id, usuarioId, {
+              carpeta: normalizarRuta(destinoArg),
+            });
+            acciones.push(`Movido "${r.nombre}" a ${r.carpeta}`);
+            return { ok: true, nombre: r.nombre, resumen: "Hecho." };
+          }
+          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          return { error: res.error };
+        }
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
         const origen = res.ruta!;
         const destino = unirRuta(normalizarRuta(destinoArg), hojaRuta(origen));
@@ -793,7 +815,18 @@ const ejecutarTool = async (
             : undefined;
         if (!nuevoNombre) return { error: "Falta indicar el nuevo nombre de la carpeta." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
-        if (res.error) return { error: res.error };
+        if (res.error) {
+          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          if (comoArchivo.archivo) {
+            const r = await actualizarArchivo(comoArchivo.archivo.id, usuarioId, {
+              nombre: nuevoNombre,
+            });
+            acciones.push(`Renombrado a "${r.nombre}"`);
+            return { ok: true, nombre: r.nombre, resumen: "Hecho." };
+          }
+          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          return { error: res.error };
+        }
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
         const origen = res.ruta!;
         const destino = unirRuta(padreRuta(origen), nuevoNombre);
@@ -805,7 +838,18 @@ const ejecutarTool = async (
         const rutaArg = extraerRuta(args);
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a copiar." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
-        if (res.error) return { error: res.error };
+        if (res.error) {
+          const comoArchivo = await resolverArchivo(usuarioId, rutaArg);
+          if (comoArchivo.archivo) {
+            const r = await copiarArchivo(comoArchivo.archivo.id, usuarioId, {
+              carpeta: typeof args.carpeta_destino === "string" ? args.carpeta_destino : undefined,
+            });
+            acciones.push(`Copiado "${r.nombre}"`);
+            return { ok: true, nombre: r.nombre, resumen: "Hecho." };
+          }
+          if (comoArchivo.opciones) return { necesita_aclaracion: true, opciones: comoArchivo.opciones };
+          return { error: res.error };
+        }
         if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
         const origen = res.ruta!;
         const destino =
