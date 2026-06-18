@@ -91,7 +91,7 @@ Cómo actuar:
 - Para crear un archivo/nota/documento (.md o .txt) DEBES llamar a "crear_archivo" (nombre, carpeta y contenido). Nunca describas que lo creas sin llamar a la herramienta. Si el usuario NO indica carpeta, NO pongas "carpeta" (se creará en la raíz); no te inventes una carpeta a partir del nombre.
 - "eliminar_carpeta" borra la carpeta ENTERA (carpeta + contenido). "vaciar_carpeta" borra SOLO el contenido y deja la carpeta: úsalo si piden "borra el contenido de X" o "vacía X".
 - Si el usuario pide borrar TODAS las carpetas (ej: "borra todas las carpetas"), usa "borrar_todas_carpetas": borra las carpetas Y su contenido (a la papelera), pero NO toca los archivos que ya estaban en la raíz. Si pide borrar TODOS los archivos/ficheros (ej: "borra todos los ficheros") sin mencionar carpetas, usa "borrar_todos_archivos": borra todos los archivos pero deja las carpetas (ahora vacías). Si pide borrar/vaciar TODO (absolutamente todo, incluida la raíz) o "empezar de cero", usa "borrar_todo".
-- Para mover/renombrar/copiar carpetas usa "mover_carpeta"/"renombrar_carpeta"/"copiar_carpeta".
+- Para mover/renombrar/copiar/eliminar/vaciar una carpeta que YA EXISTE, indica solo su NOMBRE (ej: "tmp"); el sistema la localiza igual que con archivos, sin necesidad de la ruta completa. Solo da la ruta completa (ej: "/proyectos/tmp") si quieres ser explícito o si hay varias carpetas con el mismo nombre y te piden aclarar. La ruta completa SÍ es obligatoria al CREAR una carpeta nueva (no existe nada que localizar) y al indicar el destino de un mover/copiar.
 - Para listar carpetas usa "listar_carpetas" (devuelve TODAS, incluidas las que tienen archivos).
 - Papelera: "listar_papelera", "restaurar_archivo" (recuperar), "borrar_permanente" (definitivo, irreversible) y "vaciar_papelera". OJO: "borra/elimina X de la papelera" significa BORRAR DEFINITIVAMENTE ese archivo (usa "borrar_permanente"), NO recuperarlo. Solo uses "restaurar_archivo" si el usuario dice explícitamente "restaura"/"recupera"/"saca X de la papelera".
 - Para responder sobre el contenido de un archivo CONCRETO (sabes su nombre) usa "leer_archivo". Para cifras de uso, "estadisticas".
@@ -523,6 +523,27 @@ const resolverArchivo = async (
   return { opciones: lista.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
 };
 
+// Localiza una carpeta EXISTENTE por nombre o ruta completa. Si el argumento ya
+// parece una ruta (empieza por "/"), se usa tal cual (los servicios validan que
+// exista). Si es solo un nombre (ej. "tmp"), busca entre TODAS las carpetas del
+// usuario cualquiera cuyo último tramo coincida: así no hace falta dar la ruta
+// completa para operar sobre una carpeta anidada, igual que ya pasa con archivos.
+const resolverCarpeta = async (
+  usuarioId: string,
+  nombreORuta: string,
+): Promise<{ ruta?: string; error?: string; opciones?: string[] }> => {
+  const texto = nombreORuta.trim();
+  if (texto.startsWith("/")) return { ruta: normalizarRuta(texto) };
+  const todas = await listarTodasCarpetas(usuarioId);
+  const buscado = texto.toLowerCase();
+  const coincidencias = todas.filter((c) => hojaRuta(c.ruta).toLowerCase() === buscado);
+  if (coincidencias.length === 0) {
+    return { error: `No encontré ninguna carpeta llamada "${nombreORuta}".` };
+  }
+  if (coincidencias.length === 1) return { ruta: coincidencias[0].ruta };
+  return { opciones: coincidencias.map((c) => c.ruta) };
+};
+
 // Localiza un archivo dentro de la papelera por su nombre.
 const resolverEnPapelera = async (
   usuarioId: string,
@@ -672,15 +693,21 @@ const ejecutarTool = async (
       case "eliminar_carpeta": {
         const rutaArg = extraerRuta(args);
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a borrar." };
-        const r = await eliminarCarpetaConContenido(usuarioId, rutaArg);
-        acciones.push(`Carpeta enviada a la papelera: ${rutaArg} (${r.borrados} archivo/s)`);
+        const res = await resolverCarpeta(usuarioId, rutaArg);
+        if (res.error) return { error: res.error };
+        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
+        acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados, resumen: "Hecho." };
       }
       case "vaciar_carpeta": {
         const rutaArg = extraerRuta(args);
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a vaciar." };
-        const r = await vaciarCarpeta(usuarioId, rutaArg);
-        acciones.push(`Contenido de ${rutaArg} enviado a la papelera (${r.borrados} archivo/s)`);
+        const res = await resolverCarpeta(usuarioId, rutaArg);
+        if (res.error) return { error: res.error };
+        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        const r = await vaciarCarpeta(usuarioId, res.ruta!);
+        acciones.push(`Contenido de ${res.ruta} enviado a la papelera (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados, resumen: "Hecho." };
       }
       case "listar_carpetas": {
@@ -740,7 +767,10 @@ const ejecutarTool = async (
             ? args.carpeta_destino
             : undefined;
         if (!destinoArg) return { error: "Falta indicar la carpeta destino." };
-        const origen = normalizarRuta(rutaArg);
+        const res = await resolverCarpeta(usuarioId, rutaArg);
+        if (res.error) return { error: res.error };
+        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        const origen = res.ruta!;
         const destino = unirRuta(normalizarRuta(destinoArg), hojaRuta(origen));
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta movida a ${destino} (${r.movidos} archivo/s)`);
@@ -754,7 +784,10 @@ const ejecutarTool = async (
             ? args.nuevo_nombre
             : undefined;
         if (!nuevoNombre) return { error: "Falta indicar el nuevo nombre de la carpeta." };
-        const origen = normalizarRuta(rutaArg);
+        const res = await resolverCarpeta(usuarioId, rutaArg);
+        if (res.error) return { error: res.error };
+        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        const origen = res.ruta!;
         const destino = unirRuta(padreRuta(origen), nuevoNombre);
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta renombrada a ${destino}`);
@@ -763,7 +796,10 @@ const ejecutarTool = async (
       case "copiar_carpeta": {
         const rutaArg = extraerRuta(args);
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a copiar." };
-        const origen = normalizarRuta(rutaArg);
+        const res = await resolverCarpeta(usuarioId, rutaArg);
+        if (res.error) return { error: res.error };
+        if (res.opciones) return { necesita_aclaracion: true, opciones: res.opciones };
+        const origen = res.ruta!;
         const destino =
           typeof args.carpeta_destino === "string" && args.carpeta_destino
             ? unirRuta(normalizarRuta(args.carpeta_destino), hojaRuta(origen))
@@ -1016,6 +1052,37 @@ export const chatear = async (
     if (r.ok) {
       return { respuesta: "Hecho.", acciones };
     }
+  }
+
+  // Pre-flight: "pásame/lista/dame todos los archivos/carpetas (que tengo)" es una
+  // petición muy directa y frecuente para la que el modelo a veces no llama a
+  // ninguna herramienta (responde "no recibí respuesta de las funciones..."). Se
+  // detecta aquí y se construye la lista directamente, sin depender del modelo.
+  const esListarArchivos =
+    !/carpeta/.test(msgLower) &&
+    /(p[aá]sa(me)?|dame|env[ií]a(me)?|mu[eé]stra(me)?|ense[ñn]a(me)?|lista(r)?)\s+(todos\s+)?(mis\s+)?(los\s+)?(archivos?|ficheros?)\b|qu[eé]\s+(archivos?|ficheros?)\s+tengo/.test(
+      msgLower,
+    );
+  const esListarCarpetas =
+    /(p[aá]sa(me)?|dame|env[ií]a(me)?|mu[eé]stra(me)?|ense[ñn]a(me)?|lista(r)?)\s+(todas\s+)?(mis\s+)?(las\s+)?carpetas?\b|qu[eé]\s+carpetas?\s+tengo/.test(
+      msgLower,
+    );
+
+  if (esListarArchivos) {
+    const { archivos, total } = await listarArchivos(usuarioId, undefined, 1, 200);
+    if (archivos.length === 0) return { respuesta: "No tienes ningún archivo.", acciones };
+    const lista = archivos
+      .map((a) => `- ${a.nombre}${a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`)
+      .join("\n");
+    const extra =
+      total > archivos.length ? `\n\n(mostrando los ${archivos.length} más recientes de ${total})` : "";
+    return { respuesta: `Tienes ${total} archivo(s):\n\n${lista}${extra}`, acciones };
+  }
+  if (esListarCarpetas) {
+    const carpetas = await listarTodasCarpetas(usuarioId);
+    if (carpetas.length === 0) return { respuesta: "No tienes ninguna carpeta.", acciones };
+    const lista = carpetas.map((c) => `- ${c.ruta}`).join("\n");
+    return { respuesta: `Tienes ${carpetas.length} carpeta(s):\n\n${lista}`, acciones };
   }
 
   const MAX_ITER = 15;
