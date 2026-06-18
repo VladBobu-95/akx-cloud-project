@@ -199,8 +199,9 @@ con ejemplos reales de frases que entiende:
 - **Papelera** — listar, restaurar, borrar definitivamente (irreversible), vaciar entera:
   - "¿qué hay en la papelera?"
   - "restaura factura_01" / "recupera factura_01"
+  - "restaura todos los ficheros" / "recupera toda la papelera" (recupera TODO de golpe)
   - "borra factura_01 de la papelera" (borrado definitivo, no restaura)
-  - "vacía la papelera"
+  - "vacía la papelera" (borrado definitivo de TODO, no confundir con "restaura todo")
 - **Búsqueda e info** — por significado del contenido (no solo por nombre), y uso de la cuenta:
   - "¿qué documento habla de impuestos?" / "¿dónde dice algo sobre el proyecto X?"
   - "resume lo que tengo sobre Y"
