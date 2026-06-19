@@ -1327,6 +1327,15 @@ export const chatear = async (
   const VERBO_OTRAS_ACCIONES =
     "mueve(?:lo|la|los|las)?|mover|copia(?:lo|la|los|las)?|copiar|renombra(?:lo|la|los|las)?|cambia(?:lo|la|los|las)?|escane[ao](?:lo|la|los|las)?";
 
+  // Palabras sueltas que NO deben tratarse como nombre de archivo si aparecen
+  // justo tras un verbo de acción (ej. "borra mi reporte", "muestra todo lo
+  // que tengo" — "todo" aquí no es un nombre de archivo, es "todo lo que
+  // tengo", y debe caer en el pre-flight de listado en vez de en estos).
+  const STOPWORDS_NOMBRE = new Set([
+    "mi", "tu", "su", "lo", "la", "el", "los", "las", "eso", "esto", "esta",
+    "este", "todo", "toda", "algo", "uno", "una", "ese", "esa",
+  ]);
+
   // Pre-flight: si en el turno anterior se pidió aclarar entre varias
   // coincidencias y este mensaje es justo la opción elegida (el usuario copia/
   // escribe el nombre que se le ofreció), se completa AQUÍ la acción original
@@ -1587,11 +1596,13 @@ export const chatear = async (
   // devolviendo el contenido tal cual, sin pasar por el modelo. Si el mensaje
   // tiene algo más (una pregunta concreta sobre el contenido, ej. "qué dice el
   // contrato sobre los plazos"), el ancla `$` no casa y sigue el flujo normal.
-  const matchLeerSimple = msgSinTildes.match(
+  const matchLeerSimpleRaw = msgSinTildes.match(
     new RegExp(
       `^(?:lee(?:me)?|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?|que\\s+dice)\\s+(?:el\\s+archivo\\s+|la\\s+nota\\s+|el\\s+documento\\s+)?["']?([\\wÀ-ÿ.-]+)["']?\\s*\\??\\s*$`,
     ),
   );
+  const matchLeerSimple =
+    matchLeerSimpleRaw && !STOPWORDS_NOMBRE.has(matchLeerSimpleRaw[1]) ? matchLeerSimpleRaw : null;
   if (matchLeerSimple) {
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchLeerSimple));
     if (res.error) return { respuesta: res.error, acciones };
@@ -1651,20 +1662,14 @@ export const chatear = async (
   // borrado. El segundo patrón (sin "archivo") exige una extensión para no
   // capturar palabras sueltas como "borra **mi** reporte" o "borra **la**
   // carpeta" (esa además queda excluida por el filtro de "carpeta" de más abajo).
-  // Palabras sueltas que NO deben tratarse como nombre de archivo si aparecen
-  // justo tras el verbo (ej. "borra mi reporte", "borra eso de antes").
-  const STOPWORDS_BORRAR = new Set([
-    "mi", "tu", "su", "lo", "la", "el", "los", "las", "eso", "esto", "esta",
-    "este", "todo", "toda", "algo", "uno", "una", "ese", "esa",
-  ]);
   const matchNombreArchivoABorrar =
     msgSinTildes.match(new RegExp(`\\b${VERBO_BORRAR}\\b.*?(?:archivo|fichero)\\s+(?:llamado\\s+)?["']?([\\wÀ-ÿ.-]+)`)) ||
     msgSinTildes.match(new RegExp(`\\b${VERBO_BORRAR}\\b\\s+["']?([\\wÀ-ÿ-]+\\.[a-z0-9]{1,5})\\b`)) ||
     (() => {
       // Sin extensión ni la palabra "archivo" (ej. "borra factura_F2026-101"):
-      // solo se acepta si NO es una palabra suelta de la lista de arriba.
+      // solo se acepta si NO es una palabra suelta de las prohibidas.
       const m = msgSinTildes.match(new RegExp(`\\b${VERBO_BORRAR}\\b\\s+["']?([\\wÀ-ÿ-]{4,})\\b`));
-      return m && !STOPWORDS_BORRAR.has(m[1]!) ? m : null;
+      return m && !STOPWORDS_NOMBRE.has(m[1]!) ? m : null;
     })();
   const esBorrarUnArchivo = !!matchNombreArchivoABorrar && !/carpeta|papelera/.test(msgSinTildes);
   if (esBorrarUnArchivo && matchNombreArchivoABorrar) {
