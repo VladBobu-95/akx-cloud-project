@@ -144,6 +144,12 @@ const reemplazarArchivoTexto = async (
 
 const eur = (n: number | string): string => `${Number(n).toFixed(2)} €`;
 
+// Formatea una fecha ISO (YYYY-MM-DD) como DD/MM/YYYY para mostrar al usuario.
+export const formatearFecha = (iso: string): string => {
+  const [anio, mes, dia] = iso.split("-");
+  return `${dia}/${mes}/${anio}`;
+};
+
 // Serializa tareas por usuario: las que llegan para el mismo usuario se
 // encadenan en vez de correr a la vez. Necesario porque el front sube varias
 // imágenes EN PARALELO y cada subida acaba regenerando el MISMO archivo
@@ -418,14 +424,16 @@ export const totalesMd = (
 };
 
 // Markdown de un listado de facturas (con € server-side). Se usa para "facturas
-// de [mes/año]" cuando se pide el LISTADO, no el total agregado.
+// de [mes/año]" cuando se pide el LISTADO, no el total agregado. Es el texto de
+// respaldo para clientes sin UI (curl, etc.); el frontend renderiza estas mismas
+// filas como una tabla con botón "Abrir" (ver `archivos` en chat.service.ts).
 export const listadoFacturasMd = (
   filas: { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number }[],
   titulo: string,
 ): string => {
   if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
   const cuerpo = filas
-    .map((f) => `- **${f.numero}**${f.archivoNombre ? ` — ${f.archivoNombre}` : ""} (${f.fecha}): ${eur(f.total)}`)
+    .map((f) => `- **${f.archivoNombre ?? f.numero}** (${formatearFecha(f.fecha)}): ${eur(f.total)}`)
     .join("\n");
   return `## ${titulo}\n\n${cuerpo}`;
 };
@@ -501,7 +509,7 @@ export const listarFacturas = async (
   const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string }[] =
     await AppDataSource.query(
       `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
-              f."fecha" AS fecha, f."total" AS total
+              f."fecha"::text AS fecha, f."total" AS total
        FROM "facturas" f
        LEFT JOIN "archivos" a ON a."id" = f."archivoId"
        WHERE ${where}

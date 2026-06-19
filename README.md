@@ -213,6 +213,10 @@ con ejemplos reales de frases que entiende:
     tal cual en una pestaña nueva)
   - "¿qué producto vendí más?" / "ranking de lo menos vendido"
   - "¿qué es lo que más se vende en julio?" / "lo más vendido en 2026" (ranking por periodo; el mes se entiende por su nombre)
+  -  Pasame el total de todo lo que he facturado
+  -  Pasame lo que he facaturado en abril 
+  -  Que cliente ha facturado mas? 
+  -  Que facturas hablan de X? 
   - "¿cuánto le he facturado a Ferretería Sánchez?"
   - "total facturado en 2026" / "totales de factura_01 y factura_02"
   - "top clientes por gasto total" / "¿qué cliente me ha comprado menos?" / "¿quién es mi mejor cliente?"

@@ -42,6 +42,7 @@ import {
   totalesMd,
   clientesTopMd,
   listadoFacturasMd,
+  formatearFecha,
   type FiltroFacturas,
 } from "./facturas.service";
 
@@ -1279,6 +1280,10 @@ export const chatear = async (
   respuesta: string;
   acciones: string[];
   archivos?: { id: string; nombre: string }[];
+  tablaFacturas?: {
+    titulo: string;
+    filas: { archivoId: string | null; archivoNombre: string | null; fecha: string; total: number }[];
+  };
 }> => {
   // Solo el último mensaje del usuario. En un asistente de archivos cada orden es
   // independiente; enviar el historial hace que modelos pequeños re-ejecuten
@@ -1598,9 +1603,15 @@ export const chatear = async (
     return {
       respuesta: listadoFacturasMd(filas, titulo),
       acciones,
-      archivos: filas
-        .filter((f) => f.archivoId && f.archivoNombre)
-        .map((f) => ({ id: f.archivoId!, nombre: f.archivoNombre! })),
+      tablaFacturas: {
+        titulo,
+        filas: filas.map((f) => ({
+          archivoId: f.archivoId,
+          archivoNombre: f.archivoNombre,
+          fecha: formatearFecha(f.fecha),
+          total: f.total,
+        })),
+      },
     };
   }
 

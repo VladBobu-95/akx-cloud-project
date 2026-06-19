@@ -1,41 +1,6 @@
-Archivos
-
-Buscar / listar archivos (por nombre o por carpeta)
-Copiar, mover, renombrar un archivo
-Eliminar un archivo (va a la papelera)
-Crear un archivo de texto/nota (.md o .txt) con contenido
-Leer el contenido de un archivo concreto
-Carpetas
-
-Crear una carpeta
-Eliminar una carpeta entera (carpeta + contenido, a la papelera)
-Vaciar el contenido de una carpeta (o de la raíz con /) dejando la carpeta
-Mover, renombrar, copiar una carpeta
-Listar todas las carpetas
-Borrados masivos
-
-Borrar TODO (archivos y carpetas, factory reset / "empezar de cero")
-Borrar todas las carpetas (con su contenido, pero sin tocar lo que está suelto en la raíz)
-Borrar todos los archivos (sin tocar las carpetas)
-Papelera
-
-Listar lo que hay en la papelera
-Restaurar un archivo de la papelera
-Borrar un archivo definitivamente (irreversible)
-Vaciar la papelera entera (borrado definitivo de todo)
-Búsqueda e info
-
-Búsqueda semántica por significado ("¿qué documento habla de X?")
-Estadísticas de uso (espacio, nº de archivos, etc.)
-Facturas
-
-Escanear una factura concreta (OCR + extracción de datos)
-Escanear todas las facturas pendientes
-Obtener/resumir una factura ya escaneada
-Ranking de productos más/menos vendidos (ventas_top), con filtros por cliente, emisor, fecha, etc.
-Totales facturados (totales_facturas), con los mismos filtros
 
 
+- escanear despues de subir
 -el buscador no funciona error 504
 .donde esta ... donde esta factura_F2026-109.pdf 
  Lo siento, pero solo puedo leer archivos de texto como .md, .txt, .csv, .json. El archivo que intentaste leer no es de ese tipo. ¿Podrías proporcionar un archivo de texto para que pueda leerlo? 

@@ -32,11 +32,41 @@ import { mensajeError } from '../../shared/errores';
           @for (m of mensajes(); track $index) {
             <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
               @if (m.de === 'bot') {
-                <div class="md" [innerHTML]="renderBot(m.texto)"></div>
+                @if (m.tablaFacturas) {
+                  <h3 class="tabla-facturas-titulo">{{ m.tablaFacturas.titulo }}</h3>
+                  <table class="table tabla-facturas">
+                    <thead>
+                      <tr>
+                        <th>Archivo</th>
+                        <th>Fecha</th>
+                        <th>Total</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (f of m.tablaFacturas.filas; track $index) {
+                        <tr>
+                          <td>{{ f.archivoNombre || '—' }}</td>
+                          <td>{{ f.fecha }}</td>
+                          <td>{{ f.total.toFixed(2) }} €</td>
+                          <td>
+                            @if (f.archivoId && f.archivoNombre) {
+                              <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">
+                                📂 Abrir
+                              </button>
+                            }
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                } @else {
+                  <div class="md" [innerHTML]="renderBot(m.texto)"></div>
+                }
               } @else {
                 {{ m.texto }}
               }
-              @if (m.archivos?.length) {
+              @if (!m.tablaFacturas && m.archivos?.length) {
                 <div class="abrir-archivo">
                   @for (a of m.archivos; track a.id) {
                     <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">
@@ -192,6 +222,34 @@ import { mensajeError } from '../../shared/errores';
         border-radius: 4px;
         font-size: 0.85em;
       }
+      /* Listado de facturas por periodo: tabla real (no markdown) para poder
+         poner el botón "Abrir" en su propia fila, a la derecha. */
+      .tabla-facturas-titulo {
+        font-size: 0.98rem;
+        margin: 0 0 6px;
+      }
+      .tabla-facturas {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+      }
+      .tabla-facturas th,
+      .tabla-facturas td {
+        border: 1px solid var(--border);
+        padding: 5px 8px;
+        text-align: left;
+      }
+      .tabla-facturas th {
+        background: rgba(0, 0, 0, 0.04);
+        font-weight: 700;
+      }
+      .tabla-facturas td:last-child {
+        text-align: right;
+        white-space: nowrap;
+      }
+      .tabla-facturas .btn {
+        font-size: 0.85rem;
+      }
       .abrir-archivo {
         margin-top: 8px;
         display: flex;
@@ -280,7 +338,7 @@ export class InicioPage implements AfterViewInit {
     this.chat.enviar(historial).subscribe({
       next: (r) => {
         const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
-        this.chat.añadir({ de: 'bot', texto: r.respuesta + extra, archivos: r.archivos });
+        this.chat.añadir({ de: 'bot', texto: r.respuesta + extra, archivos: r.archivos, tablaFacturas: r.tablaFacturas });
         this.pensando.set(false);
         this.scrollAbajo();
       },

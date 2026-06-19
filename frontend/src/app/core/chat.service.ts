@@ -7,17 +7,31 @@ export interface MensajeChat {
   contenido: string;
 }
 
+export interface FilaFactura {
+  archivoId: string | null;
+  archivoNombre: string | null;
+  fecha: string;
+  total: number;
+}
+
+export interface TablaFacturas {
+  titulo: string;
+  filas: FilaFactura[];
+}
+
 // Mensaje tal y como lo muestra la UI.
 export interface Mensaje {
   de: 'usuario' | 'bot';
   texto: string;
   archivos?: { id: string; nombre: string }[];
+  tablaFacturas?: TablaFacturas;
 }
 
 export interface RespuestaChat {
   respuesta: string;
   acciones: string[];
   archivos?: { id: string; nombre: string }[];
+  tablaFacturas?: TablaFacturas;
 }
 
 const CHAT_KEY = 'akx_chat';
