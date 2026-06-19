@@ -95,11 +95,6 @@ const pareceBucleDegenerado = (texto: string): boolean => {
 //    en vez de transcribirla — para fotos normales (objetos, personas...).
 // 3. Si Ollama no responde a ninguno de los dos, Tesseract.js de último recurso.
 const ocrImagen = async (buffer: Buffer): Promise<string> => {
-  // El modelo de chat puede estar cargado (p. ej. si esta llamada viene de
-  // "escanea factura X" en el chat, donde el modelo de chat decidió la tool
-  // call justo antes). En GPUs con poca VRAM, chat + deepseek-ocr tampoco
-  // caben juntos — se libera el de chat antes de cargar el de OCR.
-  await descargarModelo(env.OLLAMA_MODEL);
   try {
     const texto = await ocrConOllama(buffer);
     if (!pareceBucleDegenerado(texto)) return texto;
