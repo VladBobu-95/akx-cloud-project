@@ -1,40 +1,22 @@
 
 
-- escanear despues de subir
--el buscador no funciona error 504
-.donde esta ... donde esta factura_F2026-109.pdf 
- Lo siento, pero solo puedo leer archivos de texto como .md, .txt, .csv, .json. El archivo que intentaste leer no es de ese tipo. ¿Podrías proporcionar un archivo de texto para que pueda leerlo? 
-- al decire escanea factura y abrela , la escanea ,me envia el texto pero no el archivo para abrir
-- si escribes alg o en el chabox la vista no sigue el texto, deberia
+- escanear despues de subir(añadir estado)
+-el cambiar nombre no va en ficheros
+- al selecionar autocompletado en login  usuario y depsues contraseña desaparece la linea vertical
 - pensar en segundo plano(el chatbot) para poder mover 
-- guardar mensaje del chabot
-- mas flexible muestra factura (abre)/no funciona si no esta en la raiz
+- guardar mensaje del chabot (pensando)
 - si le digo muéstrame todas las facturas que me las muestre, o todos los ficheros llamados x.
 - si le digo abre la factura que la abra directamente 
-- cambia el nombre de factura_01 de la raiz a factura_011 
- ¿Cuál de estas facturas quieres que escanee?  si hay varios llamados igual
-- Si booro un fichero dentro de una carpeta tmb borra la carpeta
-- léeme el contenido de notas.md no va
--borra factura_01 de la papelera 
- ¿Cuál de estas facturas quieres escanear? "factura_01.pdf" en la raíz o "factura_01.pdf" en "/facturas"? 
-- Si le digo que copie una fichero me da esto: {
-  "name": "copiar_factura",
-  "arguments": {
-    "nombre": "factura_01"
-  }
-} 
+- Si le digo que copie una fichero me da esto (el resumen de facturas/factura escaneada)
+- si intento copiar despues de elegir de las varias varientes del mismo archivo me sale el resumen
 
 -escanea todas las facturas 
  Error 504 (supongo pq ya se escanean en segundo plano al subirlas)
--si le pongo  muestrame la factura_01 me da el resumen:
- # Resumen factura 2026-2001
 
 - totales facturados toma en cuenta también si una carpeta esta varias veces copiada, no deberia
  
 -en la carpeta facturas las facturas escaneadas que tengan el nomre resumen-y el nombre de la factura. tmb en resumen ventas el numero de facturas escaneadas sube siempre auque he borrado facturas o he subido otras (no se actualiza a lo que hay actualmente ,debería solo escanear las facturas qe hay actualmente)
 - En el resumen pnme mas estadísticas ,que podrías poner?
-- Se puede hacer que en el chabot si pudo resumen o estas cosa que me aparezca mas bonito , tipo caundo selecciono algún fichero de facturas(resumen)
-
 
 1. Cola de trabajos en vez de "fire-and-forget" 🥇 (impacto alto / esfuerzo medio-alto)
 Hoy el indexado RAG, el OCR y el auto-escaneo se lanzan así en archivos.controller.ts:130:
