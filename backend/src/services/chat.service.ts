@@ -1598,7 +1598,7 @@ export const chatear = async (
   // contrato sobre los plazos"), el ancla `$` no casa y sigue el flujo normal.
   const matchLeerSimpleRaw = msgSinTildes.match(
     new RegExp(
-      `^(?:lee(?:me)?|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?|que\\s+dice)\\s+(?:el\\s+archivo\\s+|la\\s+nota\\s+|el\\s+documento\\s+)?["']?([\\wÀ-ÿ.-]+)["']?\\s*\\??\\s*$`,
+      `^(?:lee(?:me)?|que\\s+dice|${VERBO_ABRIR})\\s+(?:el\\s+archivo\\s+|la\\s+nota\\s+|el\\s+documento\\s+)?["']?([\\wÀ-ÿ.-]+)["']?\\s*\\??\\s*$`,
     ),
   );
   const matchLeerSimple =
@@ -1613,13 +1613,15 @@ export const chatear = async (
         .join("\n");
       return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista2}`, acciones };
     }
+    const archivoBoton = { id: res.archivo!.id, nombre: res.archivo!.nombre };
     try {
       const contenido = await leerTextoArchivo(res.archivo!.id, usuarioId);
-      return { respuesta: `**${res.archivo!.nombre}**:\n\n${contenido}`, acciones };
+      return { respuesta: `**${res.archivo!.nombre}**:\n\n${contenido}`, acciones, archivo: archivoBoton };
     } catch (err) {
       return {
         respuesta: err instanceof AppError ? err.message : "No pude leer el contenido del archivo.",
         acciones,
+        archivo: archivoBoton,
       };
     }
   }
