@@ -36,11 +36,13 @@ import { mensajeError } from '../../shared/errores';
               } @else {
                 {{ m.texto }}
               }
-              @if (m.archivo) {
+              @if (m.archivos?.length) {
                 <div class="abrir-archivo">
-                  <button class="btn btn-outline btn-sm" (click)="abrirArchivo(m.archivo)">
-                    📂 Abrir {{ m.archivo.nombre }}
-                  </button>
+                  @for (a of m.archivos; track a.id) {
+                    <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">
+                      📂 Abrir {{ a.nombre }}
+                    </button>
+                  }
                 </div>
               }
             </div>
@@ -192,6 +194,9 @@ import { mensajeError } from '../../shared/errores';
       }
       .abrir-archivo {
         margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
       }
       .abrir-archivo .btn {
         font-size: 0.85rem;
@@ -275,7 +280,7 @@ export class InicioPage implements AfterViewInit {
     this.chat.enviar(historial).subscribe({
       next: (r) => {
         const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
-        this.chat.añadir({ de: 'bot', texto: r.respuesta + extra, archivo: r.archivo });
+        this.chat.añadir({ de: 'bot', texto: r.respuesta + extra, archivos: r.archivos });
         this.pensando.set(false);
         this.scrollAbajo();
       },

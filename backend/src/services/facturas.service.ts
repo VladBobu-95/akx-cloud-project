@@ -417,6 +417,19 @@ export const totalesMd = (
   return `## ${titulo}\n\n- **Facturas:** ${t.numFacturas}\n- **Subtotal:** ${eur(t.subtotal)}\n- **IVA:** ${eur(t.iva)}\n- **TOTAL:** ${eur(t.total)}`;
 };
 
+// Markdown de un listado de facturas (con € server-side). Se usa para "facturas
+// de [mes/año]" cuando se pide el LISTADO, no el total agregado.
+export const listadoFacturasMd = (
+  filas: { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number }[],
+  titulo: string,
+): string => {
+  if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
+  const cuerpo = filas
+    .map((f) => `- **${f.numero}**${f.archivoNombre ? ` — ${f.archivoNombre}` : ""} (${f.fecha}): ${eur(f.total)}`)
+    .join("\n");
+  return `## ${titulo}\n\n${cuerpo}`;
+};
+
 // Ranking de productos (por importe) sobre las facturas que cumplen el filtro.
 // orden 'desc' = más vendido (defecto); 'asc' = menos vendido.
 export const ventasTop = async (
@@ -472,6 +485,36 @@ export const totalesFacturado = async (
     iva: Number(row.iva),
     total: Number(row.total),
   };
+};
+
+// Lista (no agrega) las facturas que cumplen el filtro, con el archivo asociado
+// para poder ofrecer un botón "Abrir" por cada una. El campo `producto` no
+// aplica aquí (no hay JOIN con lineas_factura, igual que en totalesFacturado).
+export const listarFacturas = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+): Promise<
+  { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number }[]
+> => {
+  const { producto: _producto, ...rest } = filtro;
+  const { where, params } = construirFiltro(usuarioId, rest);
+  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string }[] =
+    await AppDataSource.query(
+      `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
+              f."fecha" AS fecha, f."total" AS total
+       FROM "facturas" f
+       LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+       WHERE ${where}
+       ORDER BY f."fecha" DESC`,
+      params,
+    );
+  return filas.map((r) => ({
+    archivoId: r.archivoid,
+    archivoNombre: r.archivonombre,
+    numero: r.numero,
+    fecha: r.fecha,
+    total: Number(r.total),
+  }));
 };
 
 // Ranking de clientes por gasto total. orden 'desc' = quién más gastó (defecto);

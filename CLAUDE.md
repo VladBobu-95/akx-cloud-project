@@ -186,11 +186,11 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 ### `/api/chat`
 | Método | Ruta | Body |
 |---|---|---|
-| POST | `/` | `{mensajes: [{rol: "usuario"\|"bot", contenido}]}` → `{respuesta, acciones[], archivo?: {id, nombre}}` |
+| POST | `/` | `{mensajes: [{rol: "usuario"\|"bot", contenido}]}` → `{respuesta, acciones[], archivos?: {id, nombre}[]}` |
 
-`archivo` solo viene cuando la respuesta se resolvió sobre un archivo concreto (p. ej.
-`obtener_factura` o el pre-flight de "abre/muestra factura X"): el frontend lo usa para
-mostrar un botón "Abrir archivo" bajo la respuesta.
+`archivos` solo viene cuando la respuesta resolvió uno o varios archivos concretos
+(p. ej. `obtener_factura`, "abre/muestra/busca X", "facturas de [mes/año]"): el
+frontend lo usa para mostrar un botón "Abrir `<nombre>`" por archivo bajo la respuesta.
 
 ### `/api/facturas`
 | Método | Ruta | Body |

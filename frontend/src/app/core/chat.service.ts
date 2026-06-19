@@ -11,13 +11,13 @@ export interface MensajeChat {
 export interface Mensaje {
   de: 'usuario' | 'bot';
   texto: string;
-  archivo?: { id: string; nombre: string };
+  archivos?: { id: string; nombre: string }[];
 }
 
 export interface RespuestaChat {
   respuesta: string;
   acciones: string[];
-  archivo?: { id: string; nombre: string };
+  archivos?: { id: string; nombre: string }[];
 }
 
 const CHAT_KEY = 'akx_chat';

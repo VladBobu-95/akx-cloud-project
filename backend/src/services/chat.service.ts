@@ -36,10 +36,12 @@ import {
   ventasTop,
   totalesFacturado,
   clientesTop,
+  listarFacturas,
   asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
   clientesTopMd,
+  listadoFacturasMd,
   type FiltroFacturas,
 } from "./facturas.service";
 
@@ -1276,7 +1278,7 @@ export const chatear = async (
 ): Promise<{
   respuesta: string;
   acciones: string[];
-  archivo?: { id: string; nombre: string };
+  archivos?: { id: string; nombre: string }[];
 }> => {
   // Solo el último mensaje del usuario. En un asistente de archivos cada orden es
   // independiente; enviar el historial hace que modelos pequeños re-ejecuten
@@ -1292,11 +1294,11 @@ export const chatear = async (
   ];
 
   const acciones: string[] = [];
-  // Si una tool resuelve un archivo concreto (ej. obtener_factura), se guarda
-  // aquí para que el front pueda ofrecer un botón "Abrir archivo" (abrir una
-  // pestaña nueva desde el chat sin botón propio choca con el bloqueo de
-  // pop-ups del navegador).
-  let archivoParaAbrir: { id: string; nombre: string } | undefined;
+  // Si una tool resuelve uno o varios archivos concretos (ej. obtener_factura,
+  // buscar_archivos), se guardan aquí para que el front pueda ofrecer botones
+  // "Abrir archivo" (abrir una pestaña nueva desde el chat sin botón propio
+  // choca con el bloqueo de pop-ups del navegador).
+  let archivosParaAbrir: { id: string; nombre: string }[] = [];
 
   // Pre-flight: el modelo no siempre llama de forma fiable a "borrar_todo" /
   // "borrar_todas_carpetas" / "borrar_todos_archivos" para frases muy directas,
@@ -1335,6 +1337,25 @@ export const chatear = async (
     "mi", "tu", "su", "lo", "la", "el", "los", "las", "eso", "esto", "esta",
     "este", "todo", "toda", "algo", "uno", "una", "ese", "esa",
   ]);
+
+  // Detecta un mes (por nombre) y/o año (4 dígitos) en el mensaje, para los
+  // pre-flights de periodo de facturas (ranking de ventas, listado de facturas).
+  const MESES: Record<string, number> = {
+    enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
+    julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10,
+    noviembre: 11, diciembre: 12,
+  };
+  const detectarMesAnio = (texto: string): { mes?: number; anio?: number } => {
+    let mes: number | undefined;
+    for (const [nombreMes, num] of Object.entries(MESES)) {
+      if (new RegExp(`\\b${nombreMes}\\b`).test(texto)) {
+        mes = num;
+        break;
+      }
+    }
+    const anioMatch = texto.match(/\b(20\d{2})\b/);
+    return { mes, anio: anioMatch ? Number(anioMatch[1]) : undefined };
+  };
 
   // Pre-flight: si en el turno anterior se pidió aclarar entre varias
   // coincidencias y este mensaje es justo la opción elegida (el usuario copia/
@@ -1378,9 +1399,9 @@ export const chatear = async (
           return {
             respuesta: resultado.resumen,
             acciones,
-            archivo:
+            archivos:
               typeof resultado.archivoId === "string" && typeof resultado.archivoNombre === "string"
-                ? { id: resultado.archivoId, nombre: resultado.archivoNombre }
+                ? [{ id: resultado.archivoId, nombre: resultado.archivoNombre }]
                 : undefined,
           };
         }
@@ -1488,7 +1509,7 @@ export const chatear = async (
     return {
       respuesta: r.resumen!,
       acciones,
-      archivo: { id: res.archivo!.id, nombre: res.archivo!.nombre },
+      archivos: [{ id: res.archivo!.id, nombre: res.archivo!.nombre }],
     };
   }
 
@@ -1532,28 +1553,55 @@ export const chatear = async (
     /\bproductos?\s+(mas|menos)\s+vendidos?\b/.test(msgSinTildes) ||
     /\branking\s+de\s+(ventas|productos|lo\s+(mas|menos))/.test(msgSinTildes);
   if (esRankingVentas) {
-    const MESES: Record<string, number> = {
-      enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
-      julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10,
-      noviembre: 11, diciembre: 12,
-    };
-    let mes: number | undefined;
-    for (const [nombreMes, num] of Object.entries(MESES)) {
-      if (new RegExp(`\\b${nombreMes}\\b`).test(msgSinTildes)) {
-        mes = num;
-        break;
-      }
-    }
-    const anioMatch = msgSinTildes.match(/\b(20\d{2})\b/);
+    const { mes, anio } = detectarMesAnio(msgSinTildes);
     const orden = /\bmenos\b/.test(msgSinTildes) ? "menos" : "mas";
     const args: Record<string, unknown> = { orden };
     if (mes) args.mes = mes;
-    if (anioMatch) args.anio = Number(anioMatch[1]);
+    if (anio) args.anio = anio;
     const resultado = (await ejecutarTool("ventas_top", args, usuarioId, acciones)) as Record<
       string,
       unknown
     >;
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
+  // Pre-flight: "busca/dame/qué facturas tengo de [mes/año]" es un LISTADO de
+  // facturas concretas (con botón para abrir cada una), distinto de los totales
+  // agregados ("cuánto facturé en abril" → totales_facturas) o el ranking de
+  // productos ("qué más se vendió en abril" → ventas_top). Requiere la palabra
+  // "factura(s)" + un periodo (mes y/o año); se excluye si además pide
+  // total/facturado/vendido/ranking, que ya tienen su propio pre-flight.
+  const esListarFacturasPeriodo =
+    /\bfacturas?\b/.test(msgSinTildes) &&
+    !pideTotales &&
+    !esRankingVentas &&
+    new RegExp(`\\b(${Object.keys(MESES).join("|")}|20\\d{2})\\b`).test(msgSinTildes);
+  if (esListarFacturasPeriodo) {
+    const { mes, anio } = detectarMesAnio(msgSinTildes);
+    const filtro: FiltroFacturas = {};
+    const partes: string[] = [];
+    if (mes) {
+      const anioEfectivo = anio ?? new Date().getFullYear();
+      const mm = String(mes).padStart(2, "0");
+      const ultimoDia = new Date(anioEfectivo, mes, 0).getDate();
+      filtro.desde = `${anioEfectivo}-${mm}-01`;
+      filtro.hasta = `${anioEfectivo}-${mm}-${ultimoDia}`;
+      const nombreMes = new Date(anioEfectivo, mes - 1).toLocaleString("es-ES", { month: "long" });
+      partes.push(`${nombreMes} ${anioEfectivo}`);
+    } else if (anio) {
+      filtro.desde = `${anio}-01-01`;
+      filtro.hasta = `${anio}-12-31`;
+      partes.push(`${anio}`);
+    }
+    const filas = await listarFacturas(usuarioId, filtro);
+    const titulo = `Facturas de ${partes.join(" ")}`;
+    return {
+      respuesta: listadoFacturasMd(filas, titulo),
+      acciones,
+      archivos: filas
+        .filter((f) => f.archivoId && f.archivoNombre)
+        .map((f) => ({ id: f.archivoId!, nombre: f.archivoNombre! })),
+    };
   }
 
   // Pre-flight: "¿tengo/hay/existe/dónde está... un archivo llamado X?" o
@@ -1586,7 +1634,11 @@ export const chatear = async (
     const detalle = lista
       .map((a) => `- ${a.nombre}${a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`)
       .join("\n");
-    return { respuesta: `Sí, tienes:\n\n${detalle}`, acciones };
+    return {
+      respuesta: `Sí, tienes:\n\n${detalle}`,
+      acciones,
+      archivos: lista.map((a) => ({ id: a.id, nombre: a.nombre })),
+    };
   }
 
   // Pre-flight: "lee/muestra/qué dice X" SIN nada más en el mensaje (solo verbo +
@@ -1613,15 +1665,15 @@ export const chatear = async (
         .join("\n");
       return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista2}`, acciones };
     }
-    const archivoBoton = { id: res.archivo!.id, nombre: res.archivo!.nombre };
+    const archivoBoton = [{ id: res.archivo!.id, nombre: res.archivo!.nombre }];
     try {
       const contenido = await leerTextoArchivo(res.archivo!.id, usuarioId);
-      return { respuesta: `**${res.archivo!.nombre}**:\n\n${contenido}`, acciones, archivo: archivoBoton };
+      return { respuesta: `**${res.archivo!.nombre}**:\n\n${contenido}`, acciones, archivos: archivoBoton };
     } catch (err) {
       return {
         respuesta: err instanceof AppError ? err.message : "No pude leer el contenido del archivo.",
         acciones,
-        archivo: archivoBoton,
+        archivos: archivoBoton,
       };
     }
   }
@@ -1929,7 +1981,7 @@ export const chatear = async (
       }
 
       if (typeof r.archivoId === "string" && typeof r.archivoNombre === "string") {
-        archivoParaAbrir = { id: r.archivoId, nombre: r.archivoNombre };
+        archivosParaAbrir.push({ id: r.archivoId, nombre: r.archivoNombre });
       }
     }
 
@@ -1939,7 +1991,7 @@ export const chatear = async (
       return {
         respuesta: [...new Set(resumenes)].join("\n\n---\n\n"),
         acciones,
-        archivo: archivoParaAbrir,
+        archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
       };
     }
 
@@ -1955,7 +2007,11 @@ export const chatear = async (
           "Ya tienes los datos reales en el resultado de la herramienta (mensaje anterior, rol \"tool\"). Usa ESOS datos para responder ahora a la pregunta del usuario, en texto. No describas qué herramientas existen ni para qué sirven, y no vuelvas a llamar a ninguna.",
       });
       const final = await llamarOllama(messages, true);
-      return { respuesta: final.content || "He realizado las acciones solicitadas.", acciones, archivo: archivoParaAbrir };
+      return {
+        respuesta: final.content || "He realizado las acciones solicitadas.",
+        acciones,
+        archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
+      };
     }
   }
 
