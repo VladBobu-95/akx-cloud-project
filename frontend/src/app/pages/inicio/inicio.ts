@@ -1,4 +1,4 @@
-import { Component, ElementRef, inject, signal, viewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { marked } from 'marked';
 import { AuthService } from '../../core/auth.service';
@@ -208,7 +208,7 @@ import { mensajeError } from '../../shared/errores';
     `,
   ],
 })
-export class InicioPage {
+export class InicioPage implements AfterViewInit {
   protected auth = inject(AuthService);
   protected chat = inject(ChatService);
   private archivosSvc = inject(ArchivosService);
@@ -220,6 +220,13 @@ export class InicioPage {
   protected pensando = signal(false);
 
   private mensajesEl = viewChild<ElementRef<HTMLDivElement>>('mensajesContainer');
+
+  // Al volver a esta página (Angular recrea el componente), la conversación ya
+  // tiene mensajes guardados pero la vista arranca con scroll en 0 — sin esto
+  // se queda arriba en vez de mostrar los últimos mensajes.
+  ngAfterViewInit() {
+    this.scrollAbajo();
+  }
 
   // Renderiza la respuesta del bot como markdown (tablas de facturas/estadísticas,
   // títulos, listas...) en vez de texto plano. `breaks: true` para que un solo
