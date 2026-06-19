@@ -246,10 +246,13 @@ frontend lo usa para mostrar un botón "Abrir `<nombre>`" por archivo bajo la re
    - **Restaurar TODA la papelera** ("restaura/recupera todos los archivos/ficheros", "restaura toda la papelera"): sin este pre-flight, el modelo no tenía ninguna tool de "restaurar todo" entre las que conocía y "resolvía" la frase con la única tool masiva de papelera que sí conocía, `vaciar_papelera` — justo la acción opuesta (provocó una pérdida real de datos en una cuenta de prueba: "restaura todos los ficheros" vació la papelera en vez de recuperarla). Se añadió `restaurar_todo` (recupera todos, uno a uno con `restaurarArchivo` para que aplique igual el sufijo "(restaurado)" en colisiones) y este pre-flight, además de remarcar en las descripciones de ambas tools que son opuestas, como refuerzo si alguna frase se le escapa al pre-flight.
    - **Listado combinado**: "lista/pásame todo lo que tengo" (archivos + carpetas), con soporte para acotar a una carpeta concreta o solo la raíz.
    - **¿Qué hay en la papelera?**: el prompt de facturas es grande y sesgaba al modelo hacia esas tools para esta pregunta (devolvía contenido random no relacionado); se resuelve aquí con `listar_papelera`.
-   - **Existencia/ubicación de un archivo** ("¿tengo/hay/existe... archivo X?", "dónde está/busca el archivo X"): comprobación instantánea con `buscar_archivos`. Sin esto, el modelo a veces decidía "comprobar" escaneando con OCR (lento, y en servidores sin GPU puede acabar tirando el proceso — se ve como "no se puede conectar con el servidor" en el front).
+   - **Existencia/ubicación de un archivo** ("¿tengo/hay/existe... archivo X?", "dónde está/busca el archivo X"): comprobación instantánea con `buscar_archivos`. Sin esto, el modelo a veces decidía "comprobar" escaneando con OCR (lento, y en servidores sin GPU puede acabar tirando el proceso — se ve como "no se puede conectar con el servidor" en el front). La respuesta incluye un botón "Abrir" por cada coincidencia encontrada.
    - **Abrir/mostrar una factura** ("abre/muéstrame factura_X"): lee siempre de BD vía `obtener_factura`, nunca relanza un escaneo OCR. Si la factura no se ha escaneado, lo dice al instante en vez de escanearla sin que se pida (antes parecía que la petición "no funcionaba" cuando en realidad el modelo se había puesto a escanear por su cuenta).
+   - **Abrir/mostrar/leer un archivo NORMAL** ("lee/muestra/ábreme X" sin nada más en el mensaje): igual que con facturas, lee el contenido directamente (`leerTextoArchivo`) sin pasar por el modelo, y la respuesta trae el botón "Abrir `<nombre>`". "Muestra X" ya funcionaba por sí solo vía el modelo, pero "abre X" (sin pre-flight) lo rechazaba con "no puedo abrir archivos en este chat" — el modelo no seguía de forma fiable la aclaración del prompt de que "abrir" = "leer/mostrar" en este chat, así que "abre"/"abrir" se añadió directamente al pre-flight (reutilizando `VERBO_ABRIR`) en vez de depender de esa instrucción.
+   - **Palabras prohibidas como nombre de archivo** (`STOPWORDS_NOMBRE`: `todo`, `eso`, `mi`, `la`, `el`...): tanto este pre-flight como el de borrar un archivo concreto capturan "lo que sigue al verbo" como nombre de archivo — sin esta lista, "muestra todo lo que tengo" se interpretaba como "lee un archivo llamado 'todo'" (error "no encontré ningún archivo que coincida con todo") en vez de caer en el pre-flight de listado de más abajo, que va DESPUÉS en el código.
    - **Totales de varias facturas nombradas** ("totales de factura_01 y factura_02" sin un verbo como "dame"): el modelo podía interpretarlo como abrir solo la primera factura mencionada en vez de sumar el total de todas; se detecta y se llama `totales_facturas` directamente con el array de identificadores.
    - **Ranking de ventas con periodo** ("qué es lo que más se vende en julio", "lo más/menos vendido", "producto más vendido", "qué vendí más", "ranking de ventas"): el modelo pequeño a veces acertaba los argumentos (`{mes:7, orden:"mas"}`) pero NO llamaba a la tool — los escupía como JSON en texto al usuario. Se resuelve con `ventas_top`, parseando el mes por su NOMBRE (enero…diciembre) y el año si aparece. No captura cuando se nombra un producto concreto ("cuánto he vendido de X") ni los rankings de cliente.
+   - **Listado de facturas de un periodo** ("búscame todas las facturas de abril", "facturas de 2026"): distinto de `ventas_top` (ranking agregado de productos) y `totales_facturas` (suma agregada) — esto LISTA las facturas concretas de ese mes/año (número, fecha, total) vía `listarFacturas`/`listadoFacturasMd`, con un botón "Abrir" por cada una. Se excluye si el mensaje además pide totales/facturado/vendido/ranking (esos ya tienen su propio pre-flight).
    - **Borrar UN archivo/carpeta concreto** ("borra el archivo X" / "borra la carpeta X"): el modelo casi nunca llamaba a `eliminar_archivo`/`eliminar_carpeta` para esto — a veces no emitía ninguna tool call válida, a veces (sin la palabra "archivo") confundía "borra X" con "lee X". Se resuelve aquí con el mismo `resolverArchivo`/`resolverCarpeta` que usan las tools reales.
    - **Crear una nota/archivo de texto** ("créame una nota llamada X.md con esto: ..."): el modelo intentaba *buscar/leer* un archivo que aún no existía en vez de llamar a `crear_archivo`. Extrae nombre (con extensión, o por "llamado X" con `.md` por defecto) y contenido (tras "con esto"/"que diga"/etc.) y llama a `crearArchivoTexto` directamente.
    - **Restaurar vs. borrar definitivamente de la papelera**: son acciones opuestas que el modelo confundía pese a la instrucción explícita de más abajo en el prompt — se llegó a ver "borra X de la papelera" *restaurando* el archivo en vez de borrarlo para siempre. Se distingue por verbo (restaura/recupera/saca → `restaurar_archivo`; borra/elimina/quita + mención de "papelera" → `borrar_permanente`) y se resuelve sin pasar por el modelo.
@@ -295,13 +298,15 @@ factura (`## Factura 2026-2003 — factura_03.pdf`) para que no haya desconexió
 lo que se pidió y lo que aparece.
 
 ### Abrir archivo desde el chat
-Cuando `obtener_factura` (o el pre-flight de "abre/muestra factura") resuelve un
-archivo concreto, `chatear()` devuelve `archivo: {id, nombre}` además de la respuesta.
-El frontend (`pages/inicio/inicio.ts`) muestra un botón "Abrir `<nombre>`" bajo el
-mensaje; al pulsarlo abre el archivo en una pestaña nueva igual que en el explorador
-(PDF/imagen/texto se previsualizan, el resto se descarga). La ventana se abre en
-blanco **en el momento del clic** (antes de pedir el blob) para que el navegador no la
-bloquee como pop-up — abrir una pestaña fuera de un gesto de clic directo se bloquea.
+Cuando una tool/pre-flight resuelve uno o varios archivos concretos (`obtener_factura`,
+"abre/muestra/busca X", listado de facturas por periodo...), `chatear()` devuelve
+`archivos: {id, nombre}[]` además de la respuesta. El frontend (`pages/inicio/inicio.ts`)
+muestra un botón "Abrir `<nombre>`" por cada archivo bajo el mensaje (no solo uno: una
+búsqueda o un listado de facturas puede traer varios); al pulsar uno abre ESE archivo en
+una pestaña nueva igual que en el explorador (PDF/imagen/texto se previsualizan, el resto
+se descarga). La ventana se abre en blanco **en el momento del clic** (antes de pedir el
+blob) para que el navegador no la bloquee como pop-up — abrir una pestaña fuera de un
+gesto de clic directo se bloquea.
 
 ---
 
@@ -386,7 +391,7 @@ src/
       shell.ts              ← Navbar: logo, nav links, avatar, cerrar sesión
     pages/
       login/login.ts        ← Login + registro en tabs
-      inicio/inicio.ts      ← Chat con el asistente IA; botón "Abrir archivo" cuando la respuesta resuelve uno
+      inicio/inicio.ts      ← Chat con el asistente IA; botón "Abrir" por cada archivo que la respuesta resuelva; scroll al fondo también al volver a la página (no solo al enviar/recibir)
       archivos/archivos.ts  ← Explorador: tabla, carpetas, drag&drop, menú contextual, RAG
       papelera/papelera.ts  ← Restaurar / borrar permanente / vaciar
       perfil/perfil.ts      ← Editar nombre y avatar
