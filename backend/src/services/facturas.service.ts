@@ -6,6 +6,7 @@ import { Factura } from "../entities/Factura";
 import { LineaFactura } from "../entities/LineaFactura";
 import { AppError } from "../utils/errors";
 import { crearArchivoTexto, borrarPermanente, combinarContenido } from "./archivos.service";
+import { actualizarDescripcionManual } from "./rag.service";
 
 const CARPETA_FACTURAS = "/facturas";
 
@@ -277,9 +278,28 @@ export const escanearFactura = async (
     if (!tieneImportes || !tieneIdentificacion) {
       await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
       if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
+
+      // Escaneo MANUAL de algo que no es factura (la app admite subir
+      // cualquier PDF/imagen, no solo facturas): aunque no se guarde como
+      // factura, no tiramos el texto que sí se haya podido extraer (OCR) —
+      // se añade a la descripción del archivo (junto a lo que ya hubiera
+      // puesto el usuario) para que quede buscable/legible igualmente. El
+      // `includes` evita duplicarlo si se escanea el mismo archivo varias veces.
+      const extraido = archivo.textoExtraido?.trim();
+      let descripcionActualizada = false;
+      if (extraido && !archivo.descripcionManual?.includes(extraido)) {
+        const nuevaDescripcion = [archivo.descripcionManual?.trim(), extraido]
+          .filter(Boolean)
+          .join("\n\n");
+        await actualizarDescripcionManual(archivo.id, nuevaDescripcion, usuarioId);
+        descripcionActualizada = true;
+      }
+
       throw new AppError(
         422,
-        "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica los datos reales en la pista.",
+        descripcionActualizada
+          ? "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor), pero he añadido el texto detectado a su descripción."
+          : "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica los datos reales en la pista.",
       );
     }
 
