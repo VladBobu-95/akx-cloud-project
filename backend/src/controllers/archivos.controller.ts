@@ -26,7 +26,9 @@ import {
 import { indexarArchivo, indexarTexto, buscarSemantica } from "../services/rag.service";
 import {
   autoEscanearArchivo,
-  marcarPendienteSiFactura,
+  marcarPendiente,
+  marcarEnProceso,
+  limpiarEstadoSiNoEsFactura,
   encolarProcesamientoSubida,
 } from "../services/facturas.service";
 import { AppError } from "../utils/errors";
@@ -122,7 +124,7 @@ export const ctrlSubir = async (
     }
     const carpeta = (req.body.carpeta as string) || "/";
     const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id);
-    await marcarPendienteSiFactura(archivo);
+    await marcarPendiente(archivo);
     res.status(201).json(archivo);
 
     // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO y EN ESTE ORDEN:
@@ -136,12 +138,16 @@ export const ctrlSubir = async (
     const buffer = req.file.buffer;
     const usuarioId = req.usuario!.id;
     void encolarProcesamientoSubida(async () => {
+      await marcarEnProceso(archivo);
       await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
         console.error(`Error indexando "${archivo.nombre}":`, err),
       );
       await autoEscanearArchivo(usuarioId, archivo).catch((err) =>
         console.error(`Error auto-escaneando "${archivo.nombre}":`, err),
       );
+      // Si no es candidato a factura, escanearFactura ni se ha llegado a llamar:
+      // sin esto el spinner se quedaría encendido para siempre en .txt/.docx/etc.
+      await limpiarEstadoSiNoEsFactura(archivo);
     });
   } catch (error) {
     next(error);

@@ -39,10 +39,13 @@ export class Archivo {
   @Column({ type: "text", nullable: true })
   textoExtraido?: string;
 
-  // Estado del escaneo de factura: null = no aplica (no es PDF/imagen o nunca se
-  // intentó). "pendiente" = en cola para escanear. "escaneando" = en proceso.
-  // "escaneada" = factura guardada en BD. "no_factura" = se comprobó y no parecía
-  // una factura real. "error" = fallo técnico (ej. Ollama no responde).
+  // Estado del pipeline en segundo plano al subir (indexado RAG + escaneo de
+  // factura). "pendiente"/"escaneando" se ponen para CUALQUIER archivo (para
+  // que la columna "Estado" del explorador muestre la animación mientras se
+  // procesa, sea o no candidato a factura). Al terminar: "escaneada" = factura
+  // guardada en BD, "no_factura" = se comprobó y no parecía una factura real,
+  // "error" = fallo técnico (ej. Ollama no responde), null = no era candidato
+  // a factura (no hay nada más que mostrar, queda en blanco).
   @Column({ type: "varchar", nullable: true })
   estadoEscaneo?: "pendiente" | "escaneando" | "escaneada" | "no_factura" | "error" | null;
 

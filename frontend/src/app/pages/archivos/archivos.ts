@@ -184,17 +184,12 @@ interface Arrastre {
                   <td class="col-tamano">{{ a.tamanoBytes | fileSize }}</td>
                   <td class="muted col-subido">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
                   <td class="col-estado">
-                    @switch (a.estadoEscaneo) {
-                      @case ('escaneando') {
-                        <span class="spinner" title="Escaneando…"></span>
-                      }
-                      @case ('escaneada') {
-                        <span class="estado-ok" title="Factura escaneada">✓</span>
-                      }
-                      @case ('error') {
-                        <span class="estado-error" title="Error al escanear">✕</span>
-                      }
-                      @default {}
+                    @if (a.estadoEscaneo === 'pendiente' || a.estadoEscaneo === 'escaneando') {
+                      <span class="spinner" title="Procesando…"></span>
+                    } @else if (a.estadoEscaneo === 'escaneada') {
+                      <span class="estado-ok" title="Factura escaneada">✓</span>
+                    } @else if (a.estadoEscaneo === 'error') {
+                      <span class="estado-error" title="Error al procesar">✕</span>
                     }
                   </td>
                 </tr>
@@ -850,7 +845,7 @@ export class ArchivosPage {
     this.cargar();
     const id = setInterval(() => {
       if (this.hayEscaneoEnCurso()) this.refrescarEstados();
-    }, 5000);
+    }, 3000);
     inject(DestroyRef).onDestroy(() => clearInterval(id));
   }
 

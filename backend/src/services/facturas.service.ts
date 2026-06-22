@@ -299,13 +299,31 @@ export const esArchivoFactura = (archivo: Archivo): boolean =>
   /\.(pdf|jpe?g|png|webp|tiff?)$/i.test(archivo.nombre) ||
   /^(application\/pdf|image\/)/.test(archivo.mimeType);
 
-// Marca el archivo recién subido como "pendiente" de escaneo si es candidato a
-// factura, para que la columna "Estado" del explorador lo refleje desde el
-// instante de la subida (antes de que el pipeline en segundo plano lo recoja).
-export const marcarPendienteSiFactura = async (archivo: Archivo): Promise<void> => {
-  if (!esArchivoFactura(archivo)) return;
+// Marca el archivo recién subido como "pendiente", para que la columna
+// "Estado" del explorador muestre la animación desde el instante de la subida
+// (antes de que el pipeline en segundo plano lo recoja). Se aplica a CUALQUIER
+// archivo, no solo a los candidatos a factura: el indexado RAG (extracción de
+// texto + embeddings) corre para todos, y el usuario debe ver que algo está
+// pasando aunque luego no termine en ✓/✕ (ej. un .txt o una foto sin factura).
+export const marcarPendiente = async (archivo: Archivo): Promise<void> => {
   archivo.estadoEscaneo = "pendiente";
   await AppDataSource.getRepository(Archivo).update(archivo.id, { estadoEscaneo: "pendiente" });
+};
+
+// Marca el archivo como "en proceso" al arrancar el pipeline en segundo plano
+// (indexado + auto-escaneo), también para cualquier archivo — así el spinner
+// cubre el indexado RAG entero, no solo el escaneo de factura en sí.
+export const marcarEnProceso = async (archivo: Archivo): Promise<void> => {
+  archivo.estadoEscaneo = "escaneando";
+  await AppDataSource.getRepository(Archivo).update(archivo.id, { estadoEscaneo: "escaneando" });
+};
+
+// Al terminar el pipeline, si el archivo NO es candidato a factura no queda
+// ningún estado final (escanearFactura ni se llega a invocar), así que el
+// spinner se quedaría encendido para siempre si no lo limpiamos aquí.
+export const limpiarEstadoSiNoEsFactura = async (archivo: Archivo): Promise<void> => {
+  if (esArchivoFactura(archivo)) return;
+  await AppDataSource.getRepository(Archivo).update(archivo.id, { estadoEscaneo: null });
 };
 
 // Auto-escaneo al subir: si el archivo parece una factura, intenta escanearlo en
