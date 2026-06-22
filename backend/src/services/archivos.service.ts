@@ -221,6 +221,22 @@ export const descargarArchivo = async (
   return { archivo, stream };
 };
 
+// Combina el texto extraído automáticamente (OCR/PDF/DOCX) con la descripción
+// manual del usuario (modal "¿Qué es esta imagen?"), cuando hay alguno de los
+// dos. Se guardan en columnas separadas (`textoExtraido`/`descripcionManual`)
+// para que ninguna sobrescriba a la otra según cuál termine antes — el OCR es
+// en segundo plano y puede tardar más que rellenar el modal — y aquí se juntan
+// en el momento de leer/indexar, siempre con el valor más reciente de las dos.
+export const combinarContenido = (
+  textoExtraido?: string | null,
+  descripcionManual?: string | null,
+): string => {
+  const partes: string[] = [];
+  if (descripcionManual?.trim()) partes.push(`Descripción: ${descripcionManual.trim()}`);
+  if (textoExtraido?.trim()) partes.push(`Texto detectado (OCR):\n${textoExtraido.trim()}`);
+  return partes.join("\n\n");
+};
+
 // --- LEER TEXTO DE UN ARCHIVO (para el chatbot) ---
 // Devuelve el contenido como string si es un archivo de texto (texto/markdown/csv/json),
 // truncado a maxChars. Lanza error si no es texto.
@@ -235,8 +251,9 @@ export const leerTextoArchivo = async (
     stream.destroy();
     // PDF/DOCX no son texto plano, pero ya se extrajo su contenido al subirlos
     // (mismo pipeline que usa el RAG, guardado en textoExtraido): se reutiliza
-    // en vez de fallar.
-    if (archivo.textoExtraido) return archivo.textoExtraido.slice(0, maxChars);
+    // en vez de fallar. En imágenes, se combina con la descripción manual si la hay.
+    const combinado = combinarContenido(archivo.textoExtraido, archivo.descripcionManual);
+    if (combinado) return combinado.slice(0, maxChars);
     throw new AppError(400, "El archivo no es de texto, no puedo leer su contenido.");
   }
   const chunks: Buffer[] = [];

@@ -2,6 +2,7 @@ import { AppDataSource } from "../config/database";
 import { Archivo } from "../entities/Archivo";
 import { env } from "../config/env";
 import { extraerTexto } from "./extraccion.service";
+import { combinarContenido } from "./archivos.service";
 
 const archivoRepo = () => AppDataSource.getRepository(Archivo);
 
@@ -69,19 +70,14 @@ export const trocear = (texto: string): string[] => {
 // Literal de pgvector: un array JS [0.1, 0.2] -> "[0.1,0.2]" para insertar como ::vector.
 const vecLiteral = (v: number[]): string => `[${v.join(",")}]`;
 
-// Indexa un archivo: extrae su texto, lo trocea, genera embeddings y guarda los
-// fragmentos. Devuelve cuántos fragmentos creó. Pensado para llamarse en segundo
-// plano tras la subida (los embeddings en CPU pueden tardar).
-// Indexa un texto ya disponible (extraído o escrito a mano por el usuario):
-// lo guarda en archivo.textoExtraido y regenera sus fragmentos para RAG.
-export const indexarTexto = async (
+// Trocea, genera embeddings y guarda los fragmentos para RAG de un texto ya
+// resuelto (combinado, en su caso). Devuelve cuántos fragmentos creó. Borra
+// los fragmentos previos del archivo (por si se reindexa) antes de insertar.
+const reindexarFragmentos = async (
   archivoId: string,
-  texto: string,
   usuarioId: string,
+  texto: string,
 ): Promise<number> => {
-  await archivoRepo().update(archivoId, { textoExtraido: texto.slice(0, 20000) });
-
-  // Borra fragmentos previos de este archivo (por si se reindexa) antes de insertar.
   await AppDataSource.query(`DELETE FROM "fragmentos" WHERE "archivoId" = $1`, [archivoId]);
 
   const trozos = trocear(texto);
@@ -98,6 +94,39 @@ export const indexarTexto = async (
   return trozos.length;
 };
 
+// `textoExtraido` y `descripcionManual` se guardan en columnas separadas (ver
+// `combinarContenido` en archivos.service.ts) para que el OCR en segundo plano
+// y el modal de descripción manual no se pisen entre sí según cuál termine
+// antes. Cada vez que se actualiza una de las dos, se relee la otra de BD y se
+// reindexa con el contenido combinado de ambas.
+const reindexarConCombinado = async (archivoId: string, usuarioId: string): Promise<number> => {
+  const archivo = await archivoRepo().findOneBy({ id: archivoId });
+  const combinado = combinarContenido(archivo?.textoExtraido, archivo?.descripcionManual);
+  return reindexarFragmentos(archivoId, usuarioId, combinado);
+};
+
+// Actualiza el texto extraído automáticamente (OCR/PDF/DOCX) y reindexa con el
+// contenido combinado (+ descripción manual, si ya la había).
+export const actualizarTextoExtraido = async (
+  archivoId: string,
+  texto: string,
+  usuarioId: string,
+): Promise<number> => {
+  await archivoRepo().update(archivoId, { textoExtraido: texto.slice(0, 20000) });
+  return reindexarConCombinado(archivoId, usuarioId);
+};
+
+// Actualiza la descripción manual del usuario (modal "¿Qué es esta imagen?") y
+// reindexa con el contenido combinado (+ texto extraído, si ya lo había).
+export const actualizarDescripcionManual = async (
+  archivoId: string,
+  descripcion: string,
+  usuarioId: string,
+): Promise<number> => {
+  await archivoRepo().update(archivoId, { descripcionManual: descripcion });
+  return reindexarConCombinado(archivoId, usuarioId);
+};
+
 export const indexarArchivo = async (
   archivo: Archivo,
   buffer: Buffer,
@@ -105,7 +134,7 @@ export const indexarArchivo = async (
 ): Promise<number> => {
   const texto = await extraerTexto(buffer, archivo.mimeType, archivo.nombre);
   if (!texto) return 0;
-  return indexarTexto(archivo.id, texto, usuarioId);
+  return actualizarTextoExtraido(archivo.id, texto, usuarioId);
 };
 
 export interface ResultadoSemantico {

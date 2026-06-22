@@ -23,13 +23,15 @@ import {
   eliminarCarpetaConContenido,
   reubicarCarpeta,
 } from "../services/carpetas.service";
-import { indexarArchivo, indexarTexto, buscarSemantica } from "../services/rag.service";
+import { indexarArchivo, actualizarDescripcionManual, buscarSemantica } from "../services/rag.service";
 import {
   autoEscanearArchivo,
   marcarPendiente,
   marcarEnProceso,
   limpiarEstadoSiNoEsFactura,
   encolarProcesamientoSubida,
+  PRIORIDAD_ALTA,
+  PRIORIDAD_BAJA,
 } from "../services/facturas.service";
 import { AppError } from "../utils/errors";
 
@@ -135,8 +137,12 @@ export const ctrlSubir = async (
     // Encolado (uno detrás de otro, no en paralelo): si se suben varios archivos
     // a la vez, cada uno lanzaba su propio OCR/IA de visión en paralelo y todos
     // competían por la misma GPU (más lento en total, riesgo de agotar memoria).
+    // Las imágenes van con prioridad BAJA: el OCR de visión tarda mucho más que
+    // procesar un PDF/texto, así que si se suben mezclados, los PDFs no se
+    // quedan esperando detrás de imágenes lentas que aún no han empezado.
     const buffer = req.file.buffer;
     const usuarioId = req.usuario!.id;
+    const esImagen = /^image\//.test(archivo.mimeType);
     void encolarProcesamientoSubida(async () => {
       await marcarEnProceso(archivo);
       await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
@@ -148,7 +154,7 @@ export const ctrlSubir = async (
       // Si no es candidato a factura, escanearFactura ni se ha llegado a llamar:
       // sin esto el spinner se quedaría encendido para siempre en .txt/.docx/etc.
       await limpiarEstadoSiNoEsFactura(archivo);
-    });
+    }, esImagen ? PRIORIDAD_BAJA : PRIORIDAD_ALTA);
   } catch (error) {
     next(error);
   }
@@ -276,9 +282,10 @@ export const ctrlRestaurar = async (
 };
 
 // PATCH /api/archivos/:id/descripcion  { descripcion }
-// Permite que el usuario describa a mano una imagen sin texto legible (ej. una
-// foto de un producto): se guarda como si fuera el texto extraído del archivo,
-// para que "muéstrame"/la búsqueda semántica tengan algo útil que devolver.
+// Permite que el usuario describa a mano una imagen (modal obligatorio al
+// subir): se guarda separada del texto que haya extraído el OCR y se reindexa
+// con las dos combinadas, para que "muéstrame"/la búsqueda semántica tengan
+// siempre lo mejor de ambas (ver `combinarContenido`).
 export const ctrlDescribir = async (
   req: Request,
   res: Response,
@@ -288,7 +295,7 @@ export const ctrlDescribir = async (
     const descripcion = String(req.body.descripcion ?? "").trim();
     if (!descripcion) throw new AppError(400, "Falta la descripción");
     const archivo = await obtenerArchivo(String(req.params.id), req.usuario!.id);
-    await indexarTexto(archivo.id, descripcion, req.usuario!.id);
+    await actualizarDescripcionManual(archivo.id, descripcion, req.usuario!.id);
     res.json({ mensaje: "Descripción guardada" });
   } catch (error) {
     next(error);

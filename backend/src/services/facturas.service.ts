@@ -150,30 +150,63 @@ export const formatearFecha = (iso: string): string => {
   return `${dia}/${mes}/${anio}`;
 };
 
-// Serializa tareas por clave: las que llegan para la misma clave se encadenan
-// en vez de correr a la vez. Se usa con el usuarioId (varias imágenes EN
-// PARALELO acaban regenerando el MISMO archivo "resumen-ventas.md": sin
+// Serializa tareas por usuario: las que llegan para el mismo usuario se
+// encadenan en vez de correr a la vez. Necesario porque varias facturas
+// escaneándose a la vez (subida múltiple / "escanea todas") acaban
+// regenerando el MISMO archivo "resumen-ventas.md" (borrar+crear): sin
 // serializar, dos ejecuciones a la vez podían dejar dos copias del .md o
-// competir en el borrado) y también con una clave fija para encolar TODO el
-// pipeline de indexado+escaneo al subir (ver `encolarProcesamientoSubida` más
-// abajo): el OCR/IA de visión es pesado y no debe correr en paralelo entre
-// archivos distintos, compiten por la misma GPU.
+// competir en el borrado.
 // (Estado en memoria: válido para una sola instancia de API, como es el caso.)
-const colasPorClave = new Map<string, Promise<unknown>>();
-const enSerie = <T>(clave: string, tarea: () => Promise<T>): Promise<T> => {
-  const anterior = colasPorClave.get(clave) ?? Promise.resolve();
+const colasPorUsuario = new Map<string, Promise<unknown>>();
+const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
+  const anterior = colasPorUsuario.get(usuarioId) ?? Promise.resolve();
   // .then(tarea, tarea): se ejecuta tanto si la anterior fue ok como si falló.
   const actual = anterior.then(tarea, tarea);
   // Guardamos una versión "tragada" para que un fallo no rompa la cadena.
-  colasPorClave.set(clave, actual.catch(() => {}));
+  colasPorUsuario.set(usuarioId, actual.catch(() => {}));
   return actual;
 };
 
-const CLAVE_COLA_SUBIDA = "__cola_subida__";
-// Encola una tarea de indexado+escaneo para que se ejecute de una en una, en
-// el orden en que llegan las subidas (en vez de todas a la vez como antes).
-export const encolarProcesamientoSubida = <T>(tarea: () => Promise<T>): Promise<T> =>
-  enSerie(CLAVE_COLA_SUBIDA, tarea);
+// Prioridad de la cola global de subida: 0 = alta (PDFs y demás, rápidos:
+// pdf-parse/texto plano, sin IA de visión), 1 = baja (imágenes, que pasan por
+// OCR de visión y pueden tardar minutos). Si llegan PDFs e imágenes a la vez,
+// los PDFs adelantan en la cola a las imágenes que AÚN NO han empezado a
+// procesarse — la que ya está en marcha no se interrumpe, no hay preferencia
+// de verdad mientras se está ejecutando, solo en el orden de inicio.
+export const PRIORIDAD_ALTA = 0;
+export const PRIORIDAD_BAJA = 1;
+
+interface TareaCola {
+  prioridad: number;
+  ejecutar: () => Promise<void>;
+}
+const colaSubida: TareaCola[] = [];
+let procesandoColaSubida = false;
+
+const procesarColaSubida = async (): Promise<void> => {
+  if (procesandoColaSubida) return;
+  procesandoColaSubida = true;
+  while (colaSubida.length > 0) {
+    // Array.prototype.sort es estable desde ES2019: dentro de la misma
+    // prioridad se mantiene el orden de llegada (FIFO).
+    colaSubida.sort((a, b) => a.prioridad - b.prioridad);
+    const siguiente = colaSubida.shift()!;
+    await siguiente.ejecutar();
+  }
+  procesandoColaSubida = false;
+};
+
+// Encola una tarea de indexado+escaneo para que se ejecute de una en una (no
+// en paralelo: el OCR/IA de visión es pesado y compite por la misma GPU entre
+// archivos distintos), respetando la prioridad dada.
+export const encolarProcesamientoSubida = <T>(
+  tarea: () => Promise<T>,
+  prioridad: number = PRIORIDAD_ALTA,
+): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    colaSubida.push({ prioridad, ejecutar: () => tarea().then(resolve, reject) });
+    void procesarColaSubida();
+  });
 
 // --- API pública del servicio ---
 

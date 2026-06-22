@@ -44,6 +44,8 @@ import {
   listadoFacturasMd,
   formatearFecha,
   encolarProcesamientoSubida,
+  PRIORIDAD_ALTA,
+  PRIORIDAD_BAJA,
   type FiltroFacturas,
 } from "./facturas.service";
 
@@ -1075,8 +1077,11 @@ const ejecutarTool = async (
         let errores = 0;
         await Promise.all(
           facturas.map(async (a) => {
+            // Igual que al subir: los PDFs (rápidos) adelantan a las imágenes
+            // (OCR de visión, mucho más lento) que aún no hayan empezado.
+            const prioridad = /^image\//.test(a.mimeType) ? PRIORIDAD_BAJA : PRIORIDAD_ALTA;
             try {
-              await encolarProcesamientoSubida(() => escanearFactura(usuarioId, a.id));
+              await encolarProcesamientoSubida(() => escanearFactura(usuarioId, a.id), prioridad);
               ok++;
             } catch {
               errores++;
