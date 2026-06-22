@@ -31,12 +31,9 @@ const envSchema = z.object({
   // que es lo que espera la columna "embedding" vector(1024) (migración 1761).
   // OJO: cambiar a un modelo con otra dimensión rompe el INSERT de fragmentos.
   OLLAMA_EMBED_MODEL: z.string().default("bge-m3"),
-  // Modelo de visión para OCR de imágenes de factura (mejor que Tesseract).
-  // Si falla, se usa Tesseract como fallback.
+  // Modelo de visión para OCR de imágenes de factura. Si no encuentra texto
+  // real, no hay fallback automático: el usuario describe la imagen a mano.
   OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
-  // Modelo de visión general para describir fotos sin texto (deepseek-ocr es
-  // solo-OCR y no sabe hacerlo: alucina en vez de describir).
-  OLLAMA_CAPTION_MODEL: z.string().default("llava"),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente

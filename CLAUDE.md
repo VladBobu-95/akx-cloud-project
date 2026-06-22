@@ -27,8 +27,7 @@ akx-cloud-project/
 | Objetos | MinIO (S3-compatible) |
 | IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5:3b/7b` como fallback en máquinas pequeñas |
 | IA embeddings | Ollama — `bge-m3` (1024 dims, multilingüe) |
-| OCR facturas | Ollama visión — `deepseek-ocr` (`OLLAMA_OCR_MODEL`); Tesseract.js como último fallback |
-| Descripción de fotos | Ollama visión — `llava` (`OLLAMA_CAPTION_MODEL`); fotos sin texto (deepseek-ocr es solo-OCR y alucina si no hay texto) |
+| OCR facturas | Ollama visión — `deepseek-ocr` (`OLLAMA_OCR_MODEL`); sin texto real, no hay fallback de IA: el usuario describe la imagen a mano (modal obligatorio al subir) |
 | Extracción PDF | pdf-parse v2 |
 | Extracción DOCX | mammoth |
 | Auth | JWT + bcrypt |
@@ -51,8 +50,7 @@ docker compose up -d
 # 3. Descargar modelos de Ollama (solo la primera vez)
 docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # o qwen2.5:3b en máquinas pequeñas
 docker exec clouddrive-ollama ollama pull bge-m3
-docker exec clouddrive-ollama ollama pull deepseek-ocr        # OCR de facturas (opcional, hay fallback)
-docker exec clouddrive-ollama ollama pull llava               # describe fotos sin texto (opcional, hay fallback)
+docker exec clouddrive-ollama ollama pull deepseek-ocr        # OCR de facturas
 ```
 
 | URL | Servicio |
@@ -91,7 +89,6 @@ OLLAMA_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5-coder:14b
 OLLAMA_EMBED_MODEL=bge-m3
 OLLAMA_OCR_MODEL=deepseek-ocr
-OLLAMA_CAPTION_MODEL=llava
 ```
 
 > El servicio `api` del `docker-compose.yml` incluye `extra_hosts: host.docker.internal:host-gateway`
@@ -282,8 +279,8 @@ en vez de intentar decodificar el binario como UTF-8. Antes rechazaba cualquier
 archivo que no fuera `text/*`/json/xml/markdown con "el archivo no es de texto, no
 puedo leer su contenido" — rompía "¿qué dice el contrato.docx?"/"qué dice
 factura_01.pdf". Para imágenes, el contenido que se lee aquí es la descripción que
-se generó al subir (OCR si tenía texto real, o la descripción de llava/manual si no
-— ver "OCR y descripción de imágenes" más abajo).
+se generó al subir (OCR si tenía texto real, o la descripción manual obligatoria si
+no — ver "OCR y descripción de imágenes" más abajo).
 
 ### Tools con bypass (devuelven markdown preconstruido, con € server-side)
 - `escanear_factura` → OCR (deepseek-ocr) + extracción JSON forzada con Ollama → guarda en BD → markdown. Rechaza con error (422) en vez de inventar datos si no hay importes ni número/fecha/emisor reales en el contenido — antes esta comprobación (`soloSiFactura`) solo se aplicaba al auto-escaneo; el escaneo manual con una pista vacía o una imagen sin contenido real podía acabar guardando una factura completa inventada (cliente, importes...) de la nada.
@@ -312,33 +309,37 @@ gesto de clic directo se bloquea.
 
 ## OCR y descripción de imágenes (`backend/src/services/extraccion.service.ts`)
 
-`ocrImagen()` prueba en cascada, de más a menos específico:
+`ocrImagen()` solo intenta **deepseek-ocr** (`OLLAMA_OCR_MODEL`): transcribe el texto
+tal cual aparece — el mejor para documentos/facturas reales con texto/tablas/importes.
+Si no encuentra texto real, o Ollama falla, no hay ningún fallback automático de IA
+(antes había una cascada con **llava** describiendo la foto y, si Ollama tampoco
+respondía, **Tesseract.js** como último recurso; se quitaron los dos: si deepseek-ocr
+no puede leer una imagen, Tesseract tampoco iba a hacerlo mejor — solo cubría el caso de
+Ollama caído, no el de "no hay texto real"). En su lugar, el explorador **obliga** al
+usuario a describir a mano toda imagen que suba (ver más abajo), así que ese hueco
+siempre se rellena sin depender de más modelos.
 
-1. **deepseek-ocr** (`OLLAMA_OCR_MODEL`): transcribe el texto tal cual aparece — el
-   mejor para documentos/facturas reales con texto/tablas/importes.
-2. **llava** (`OLLAMA_CAPTION_MODEL`): si el paso anterior no encontró texto real, describe
-   la foto en 1-2 frases en español. deepseek-ocr es un modelo **solo de OCR**: ante una
-   foto sin texto (un objeto, una persona...) no sabe decir "no hay texto" — a veces entra
-   en un **bucle degenerado** repitiendo la misma etiqueta cientos de veces (ej.
-   `<table:tr><td>...</table>`) hasta agotar el límite de tokens (~115s), o devuelve algo
-   corto pero igual de falso (`None`, etiquetas HTML sueltas). `pareceBucleDegenerado()`
-   detecta ambos casos (señal corta: contiene `None` o `<table`/`<td`; señal larga: muy
-   baja variedad de palabras en un texto de 30+ palabras) y descarta el resultado en vez
-   de guardarlo.
-3. **Tesseract.js**: último recurso si Ollama no responde a ninguno de los dos modelos.
+deepseek-ocr es un modelo **solo de OCR**: ante una foto sin texto (un objeto, una
+persona...) no sabe decir "no hay texto" — a veces entra en un **bucle degenerado**
+repitiendo la misma etiqueta cientos de veces (ej. `<table:tr><td>...</table>`) hasta
+agotar el límite de tokens (~115s), o devuelve algo corto pero igual de falso (`None`,
+etiquetas HTML sueltas). `pareceBucleDegenerado()` detecta ambos casos (señal corta:
+contiene `None` o `<table`/`<td`; señal larga: muy baja variedad de palabras en un
+texto de 30+ palabras) y descarta el resultado (texto vacío) en vez de guardarlo.
 
-En una GPU de 8GB, deepseek-ocr no entra entero (corre parcialmente en CPU, ~2 min);
-si cae a llava (que sí entra 100% en GPU) se suma otro minuto — una foto sin texto puede
-tardar varios minutos en quedar descrita. Es en segundo plano, no bloquea la subida.
+En una GPU de 8GB, deepseek-ocr no entra entero (corre parcialmente en CPU, ~2 min por
+imagen). Es en segundo plano, no bloquea la subida.
 
 ### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
 El explorador (`pages/archivos/archivos.ts`) muestra, justo después de subir una o
-varias imágenes, un modal "¿Qué es esta imagen?" (omitible) para cada una. Lo que se
-escriba se guarda como si fuera el texto extraído del archivo y se reindexa para RAG
-(`indexarTexto`, en `rag.service.ts` — la misma función que usa el indexado automático,
-extraída para poder indexar un texto ya dado sin volver a invocar OCR). Sirve tanto para
-corregir una descripción automática como para evitar esperar los minutos del pipeline
-anterior en fotos normales.
+varias imágenes, un modal "¿Qué es esta imagen?" **obligatorio** (sin botón de omitir,
+y el backdrop no lo cierra) para cada una — no hay otro fallback si el OCR automático no
+encuentra texto real, así que sin esta descripción la imagen quedaría sin contenido
+indexado. Lo que se escriba se guarda como si fuera el texto extraído del archivo y se
+reindexa para RAG (`indexarTexto`, en `rag.service.ts` — la misma función que usa el
+indexado automático, extraída para poder indexar un texto ya dado sin volver a invocar
+OCR). Sirve tanto para corregir una transcripción automática como para darle contenido
+a una foto sin texto, en el momento (sin esperar al pipeline en segundo plano).
 
 ---
 
@@ -440,7 +441,9 @@ npm start    # ng serve → http://localhost:4200
 - **"Lee X" con contenido muy corto**: a veces el modelo solo confirma "lo he leído" en vez de mostrar el contenido cuando este es trivial (una sola frase corta); con contenido más rico (una factura completa) sí lo resume bien. Se intentó un ajuste de prompt sin éxito total.
 - **PDFs escaneados (sin capa de texto)**: se leen con `pdf-parse`, que no hace OCR; solo las **imágenes** pasan por deepseek-ocr. Si una factura es un PDF puramente escaneado, habría que rasterizar las páginas a imagen antes del OCR (pendiente).
 - **Auto-escaneo al subir**: se ejecuta para todo PDF/imagen subido; con la guardia `soloSiFactura` no guarda los que no parecen factura, pero igualmente consume cómputo de OCR+IA por cada uno.
-- **GPU pequeña (8GB) + dos modelos de visión**: deepseek-ocr (6.7GB) no entra entero y corre parcial en CPU (~2 min por imagen); si además cae a llava (4.7GB, sí entra 100% en GPU) se suma otro minuto. Una foto sin texto puede tardar varios minutos en quedar descrita — no bloquea la subida (es en segundo plano), pero conviene saberlo al probar en máquinas sin una GPU más grande.
+- **GPU pequeña (8GB)**: deepseek-ocr (6.7GB) no entra entero y corre parcial en CPU
+  (~2 min por imagen) — no bloquea la subida (es en segundo plano), pero conviene
+  saberlo al probar en máquinas sin una GPU más grande.
 - **Tipos de archivo permitidos**: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máximo 50 MB.
 - **Subida**: un archivo por petición HTTP; múltiples archivos → peticiones paralelas en el frontend.
 - El chat renderiza la respuesta del bot como markdown real (con `marked`, igual que el visor de `.md` del explorador): títulos, tablas, listas y negritas se ven formateados, no como texto plano con `#`/`**`/`|`. Los mensajes del usuario sí se muestran tal cual (texto plano, `white-space: pre-wrap`). Se usa `breaks: true` para que las líneas `✓ ...` de las acciones respeten el salto de línea simple en vez de fundirse en un párrafo.

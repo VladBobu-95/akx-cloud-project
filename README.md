@@ -11,8 +11,8 @@ buscar por el **contenido** de los documentos (RAG con embeddings en pgvector).
 | Servidor HTTP / rutas | Express 5 + TypeScript (ts-node en dev, `tsc` en build) |
 | ORM / base de datos | TypeORM + PostgreSQL 16 (imagen **pgvector**) |
 | Almacenamiento de archivos | **MinIO** (S3-compatible), descarga por streaming desde la API |
-| IA / asistente | **Ollama**: chat `qwen2.5-coder:14b` (*tool calling*) + embeddings `bge-m3` (RAG) + OCR `deepseek-ocr` (facturas) + descripción de fotos `llava` |
-| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: OCR con deepseek-ocr → si no hay texto real, descripción con llava → Tesseract de último recurso |
+| IA / asistente | **Ollama**: chat `qwen2.5-coder:14b` (*tool calling*) + embeddings `bge-m3` (RAG) + OCR `deepseek-ocr` (facturas) |
+| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: OCR con deepseek-ocr — si no hay texto real, el usuario describe la imagen a mano (modal obligatorio al subir) |
 | Subida de ficheros | Multer (en memoria, filtro MIME, límite 50 MB) |
 | Auth | JWT (`jsonwebtoken`) + bcrypt |
 | Validación | Zod (entrada y variables de entorno) |
@@ -38,8 +38,7 @@ cp .env.example .env         # rellenar contraseñas y JWT_SECRET (mín. 16 char
 docker compose up -d         # db + minio + api + web + ollama (en casa, vía override)
 docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # chatbot (o qwen2.5:3b en máquinas pequeñas)
 docker exec clouddrive-ollama ollama pull bge-m3             # embeddings (búsqueda)
-docker exec clouddrive-ollama ollama pull deepseek-ocr       # OCR de facturas (opcional, hay fallback)
-docker exec clouddrive-ollama ollama pull llava              # describe fotos sin texto (opcional, hay fallback)
+docker exec clouddrive-ollama ollama pull deepseek-ocr       # OCR de facturas
 ```
 
 Desarrollo con hot-reload (fuera de Docker): `cd backend && npm install && npm run dev`
@@ -222,15 +221,16 @@ con ejemplos reales de frases que entiende:
   - "top clientes por gasto total" / "¿qué cliente me ha comprado menos?" / "¿quién es mi mejor cliente?"
 - **Imágenes** — ver qué contienen, buscarlas por contenido, o tratarlas como factura:
   - "qué dice foto.jpg" / "muéstrame foto.jpg" (la descripción que se generó al
-    subirla: la escrita a mano en el modal, o la automática — OCR si tenía texto
-    real, descripción de llava si era una foto sin texto)
+    subirla: el OCR automático si tenía texto real, o la escrita a mano en el
+    modal obligatorio si no lo tenía)
   - "resume lo que tengo sobre velas" / "qué imágenes hablan de X" (búsqueda
     semántica, igual que con documentos)
   - "escanea la factura foto.jpg" (con pista opcional si es difícil de leer; si no
     hay datos reales de una factura, ya no se inventa una)
-  - Para que la descripción sea exacta sin esperar el OCR automático (puede tardar
-    varios minutos en máquinas sin GPU potente), conviene escribirla a mano en el
-    modal "¿Qué es esta imagen?" que aparece justo al subir una foto.
+  - Al subir cualquier foto aparece el modal "¿Qué es esta imagen?": es obligatorio
+    (no se puede omitir) porque si el OCR automático no encuentra texto real no hay
+    ningún otro fallback de IA — sin la descripción, esa imagen no se podría
+    encontrar luego buscando ni mostrar su contenido.
 
 **Limitaciones conocidas del chatbot** (verificadas probando todas las frases de
 arriba contra el modelo real): copiar/mover con la frase exacta "a **la carpeta**
@@ -329,4 +329,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 1 — Drive básico:** auth JWT, subir/descargar/listar/carpetas, papelera, tests
 - [x] **Fase 2 — Chatbot:** Ollama + tool calling sobre archivos y carpetas
 - [x] **Fase 3 — RAG:** extracción de texto (PDF/Word/texto), embeddings (bge-m3 + pgvector), búsqueda híbrida
-- [x] **Fase 4 — Facturas:** OCR con visión (deepseek-ocr), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción de fotos sin texto (llava)
+- [x] **Fase 4 — Facturas:** OCR con visión (deepseek-ocr), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción manual obligatoria de fotos sin texto

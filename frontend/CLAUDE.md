@@ -106,9 +106,9 @@ Componente más complejo. Características:
 - **Modal escanear factura**: botón "Escanear factura" en el menú contextual de archivos
   PDF/imagen, con pista opcional (ya se envía correctamente al backend)
 - **Modal describir imagen**: tras subir una o varias imágenes, pregunta "¿Qué es esta
-  imagen?" (omitible) una por una; lo escrito se guarda como el contenido del archivo
-  (`describirArchivo`) para que "muéstrame"/la búsqueda semántica lo encuentren sin
-  esperar al OCR automático en segundo plano
+  imagen?" (obligatorio, sin omitir, una por una; no hay fallback de IA si el OCR
+  automático no encuentra texto real); lo escrito se guarda como el contenido del
+  archivo (`describirArchivo`) para que "muéstrame"/la búsqueda semántica lo encuentren
 
 ### `/papelera`
 - Lista archivos eliminados con fecha de borrado

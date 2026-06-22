@@ -11,8 +11,8 @@ const coincide = (instalado: string, esperado: string): boolean =>
 
 // Se llama al arrancar la API: avisa en los logs (sin bloquear el arranque) si
 // algún modelo configurado en .env no está descargado en Ollama. Sin esto, un
-// modelo que falta falla en silencio (fallback a Tesseract para OCR, error solo
-// logueado para el chat) y nadie se entera hasta ver resultados de mala calidad.
+// modelo que falta falla en silencio (sin texto para esa imagen/factura, error
+// solo logueado para el chat) y nadie se entera hasta ver resultados de mala calidad.
 export const verificarModelosOllama = async (): Promise<void> => {
   let data: OllamaTagsResponse;
   try {

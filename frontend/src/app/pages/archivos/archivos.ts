@@ -312,9 +312,11 @@ interface Arrastre {
       </div>
     }
 
-    <!-- Modal describir imagen (tras subir una foto sin texto legible) -->
+    <!-- Modal describir imagen: OBLIGATORIO al subir cualquier foto, no se puede
+         omitir (sin esto, una imagen sin texto legible no se podría encontrar
+         buscando ni mostrar su contenido: ya no hay ningún fallback de IA). -->
     @if (describirModal(); as di) {
-      <div class="modal-backdrop" (click)="omitirDescripcion()">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>¿Qué es esta imagen?</h2>
           <p class="muted" style="margin-bottom: 10px;">
@@ -326,13 +328,16 @@ interface Arrastre {
               [(ngModel)]="descripcionImagen"
               placeholder="Ej: foto de una vela aromática blanca"
               autocomplete="off"
+              (keyup.enter)="confirmarDescripcion()"
+              autofocus
             />
           </div>
           <div class="row" style="justify-content: flex-end; margin-top: 8px;">
-            <button class="btn btn-ghost" [disabled]="guardandoDescripcion()" (click)="omitirDescripcion()">
-              Omitir
-            </button>
-            <button class="btn btn-primary" [disabled]="guardandoDescripcion()" (click)="confirmarDescripcion()">
+            <button
+              class="btn btn-primary"
+              [disabled]="guardandoDescripcion() || !descripcionImagen.trim()"
+              (click)="confirmarDescripcion()"
+            >
               {{ guardandoDescripcion() ? 'Guardando…' : 'Guardar' }}
             </button>
           </div>
@@ -1037,12 +1042,8 @@ export class ArchivosPage {
   }
   confirmarDescripcion() {
     const di = this.describirModal();
-    if (!di || this.guardandoDescripcion()) return;
     const texto = this.descripcionImagen.trim();
-    if (!texto) {
-      this.siguienteImagenADescribir();
-      return;
-    }
+    if (!di || this.guardandoDescripcion() || !texto) return;
     this.guardandoDescripcion.set(true);
     this.svc.describirArchivo(di.id, texto).subscribe({
       next: () => {
@@ -1055,10 +1056,6 @@ export class ArchivosPage {
         this.toast.error(mensajeError(err));
       },
     });
-  }
-  omitirDescripcion() {
-    if (this.guardandoDescripcion()) return;
-    this.siguienteImagenADescribir();
   }
 
   // --- Acciones de archivo ---

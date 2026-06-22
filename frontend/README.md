@@ -82,12 +82,12 @@ imagen tiene **"Escanear factura"**, que abre un modal (con pista opcional) y ll
 `POST /api/facturas/escanear` (OCR + extracción de datos; rechaza si no hay datos reales
 de factura en vez de inventarlos).
 
-Tras subir una o varias **imágenes**, aparece un modal "¿Qué es esta imagen?" (omitible,
-una por foto): lo que se escriba se guarda como el contenido del archivo
-(`PATCH /:id/descripcion`) para que el chat y la búsqueda semántica lo encuentren al
-instante, sin esperar al pipeline automático en segundo plano (OCR con deepseek-ocr y,
-si la foto no tiene texto real, descripción con llava — puede tardar varios minutos en
-máquinas sin GPU potente).
+Tras subir una o varias **imágenes**, aparece un modal "¿Qué es esta imagen?"
+(obligatorio, una por foto, sin opción de omitir): lo que se escriba se guarda como
+el contenido del archivo (`PATCH /:id/descripcion`) para que el chat y la búsqueda
+semántica lo encuentren al instante. Es obligatorio porque el OCR automático
+(deepseek-ocr) no tiene ningún fallback si la foto no tiene texto real — sin la
+descripción manual, esa imagen quedaría sin contenido indexado.
 
 ### Perfil (`pages/perfil`)
 Editar nombre, avatar y contraseña. El avatar se procesa en el cliente: se recorta a

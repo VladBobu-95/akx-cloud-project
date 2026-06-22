@@ -1,19 +1,10 @@
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
-import { createWorker, Worker } from "tesseract.js";
 import { env } from "../config/env";
 
 // MIME de un .docx (Word moderno).
 const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-// --- OCR de imágenes: deepseek-ocr (Ollama) primero, Tesseract.js de fallback ---
-// Worker de Tesseract perezoso: inicializarlo es caro, se crea una vez y se reutiliza.
-let workerPromise: Promise<Worker> | null = null;
-const getWorker = (): Promise<Worker> => {
-  if (!workerPromise) workerPromise = createWorker("spa");
-  return workerPromise;
-};
 
 const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): Promise<string> => {
   const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
@@ -46,15 +37,6 @@ const ocrConOllama = (buffer: Buffer): Promise<string> =>
     buffer,
   );
 
-// deepseek-ocr es solo-OCR: ante una foto sin texto no sabe describirla, solo
-// transcribir (o alucinar). llava sí sabe describir fotos normales.
-const describirConOllama = (buffer: Buffer): Promise<string> =>
-  consultarVision(
-    env.OLLAMA_CAPTION_MODEL,
-    "Describe brevemente en español (1-2 frases) qué se ve en esta imagen, para poder encontrarla luego buscándola por su contenido. No inventes detalles que no se vean realmente.",
-    buffer,
-  );
-
 // deepseek-ocr es un modelo SOLO de OCR: ante una foto sin texto (un objeto, una
 // persona...) no sabe decir "no hay texto" y en vez de eso a veces entra en un
 // bucle degenerado repitiendo la misma etiqueta cientos de veces (ej. "<table:tr>
@@ -71,26 +53,19 @@ const pareceBucleDegenerado = (texto: string): boolean => {
   return unicas.size / palabras.length < 0.15;
 };
 
-// OCR de una imagen, en cascada:
-// 1. deepseek-ocr: mucho mejor leyendo tablas/importes de un documento real.
-// 2. Si no hay texto real (alucina/bucle degenerado), llava describe la foto
-//    en vez de transcribirla — para fotos normales (objetos, personas...).
-// 3. Si Ollama no responde a ninguno de los dos, Tesseract.js de último recurso.
+// OCR de una imagen: solo deepseek-ocr. Si no encuentra texto real (alucina/
+// bucle degenerado) o Ollama no responde, no hay fallback automático (antes
+// llava describía la foto y, si Ollama tampoco respondía, Tesseract.js hacía
+// un OCR de peor calidad) — el explorador obliga al usuario a describir a mano
+// toda imagen que suba (ver modal "¿Qué es esta imagen?"), así que ese texto
+// vacío se rellena siempre con la descripción manual, sin depender de más IA.
 const ocrImagen = async (buffer: Buffer): Promise<string> => {
   try {
     const texto = await ocrConOllama(buffer);
-    if (!pareceBucleDegenerado(texto)) return texto;
-    console.error("[extraccion] OCR Ollama devolvió un bucle degenerado, probando a describir con llava");
+    return pareceBucleDegenerado(texto) ? "" : texto;
   } catch (err) {
-    console.error("[extraccion] OCR Ollama falló, probando a describir con llava:", err);
-  }
-  try {
-    return await describirConOllama(buffer);
-  } catch (err) {
-    console.error("[extraccion] Descripción Ollama falló, usando Tesseract:", err);
-    const worker = await getWorker();
-    const { data } = await worker.recognize(buffer);
-    return pareceBucleDegenerado(data.text ?? "") ? "" : (data.text ?? "");
+    console.error("[extraccion] OCR Ollama falló:", err);
+    return "";
   }
 };
 
@@ -131,7 +106,7 @@ export const extraerTexto = async (
       return limpiar(buffer.toString("utf8"));
     }
 
-    // Imagen: OCR (deepseek-ocr vía Ollama, con fallback a Tesseract.js).
+    // Imagen: OCR con deepseek-ocr vía Ollama (sin fallback automático).
     if (/^image\//.test(mt)) {
       return limpiar(await ocrImagen(buffer));
     }
