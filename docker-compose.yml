@@ -63,6 +63,7 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-bge-m3}
       OLLAMA_OCR_MODEL: ${OLLAMA_OCR_MODEL:-deepseek-ocr}
+      OLLAMA_CAPTION_MODEL: ${OLLAMA_CAPTION_MODEL:-granite3.2-vision}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

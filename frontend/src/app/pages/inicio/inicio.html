@@ -1,0 +1,88 @@
+    <div class="head row">
+      <div>
+        <h1>Hola, {{ auth.usuario()?.nombre || auth.usuario()?.email }}</h1>
+      </div>
+      <span class="spacer"></span>
+      @if (mensajes().length > 0) {
+        <button class="btn btn-ghost btn-sm limpiar-btn" (click)="limpiar()">Limpiar conversación</button>
+      }
+    </div>
+
+    <div class="card chat-card">
+      <div class="mensajes" #mensajesContainer>
+        @if (mensajes().length === 0) {
+          <div class="empty">
+            <div class="icon">💬</div>
+            Escribe un mensaje para empezar a chatear.
+          </div>
+        } @else {
+          @for (m of mensajes(); track $index) {
+            <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
+              @if (m.de === 'bot') {
+                @if (m.tablaFacturas) {
+                  <h3 class="tabla-facturas-titulo">{{ m.tablaFacturas.titulo }}</h3>
+                  <table class="table tabla-facturas">
+                    <thead>
+                      <tr>
+                        <th>Archivo</th>
+                        <th>Fecha</th>
+                        <th>Total</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (f of m.tablaFacturas.filas; track $index) {
+                        <tr>
+                          <td>{{ f.archivoNombre || '—' }}</td>
+                          <td>{{ f.fecha }}</td>
+                          <td>{{ f.total.toFixed(2) }} €</td>
+                          <td>
+                            @if (f.archivoId && f.archivoNombre) {
+                              <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">
+                                📂 Abrir
+                              </button>
+                            }
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                } @else {
+                  <div class="md" [innerHTML]="renderBot(m.texto)"></div>
+                }
+              } @else {
+                {{ m.texto }}
+              }
+              @if (!m.tablaFacturas && m.archivos?.length) {
+                <div class="abrir-archivo">
+                  @for (a of m.archivos; track a.id) {
+                    <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">
+                      📂 Abrir {{ a.nombre }}
+                    </button>
+                  }
+                </div>
+              }
+            </div>
+          }
+          @if (pensando()) {
+            <div class="burbuja bot pensando">Pensando…</div>
+          }
+        }
+      </div>
+
+      <form class="barra" (ngSubmit)="enviar()">
+        <input
+          class="input"
+          type="text"
+          name="entrada"
+          [ngModel]="chat.borrador()"
+          (ngModelChange)="chat.borrador.set($event)"
+          placeholder="Escribe tu mensaje…"
+          autocomplete="off"
+          [disabled]="pensando()"
+        />
+        <button class="btn btn-primary" type="submit" [disabled]="!chat.borrador().trim() || pensando()">
+          Enviar
+        </button>
+      </form>
+    </div>

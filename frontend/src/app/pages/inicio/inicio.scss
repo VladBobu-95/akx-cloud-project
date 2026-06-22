@@ -1,0 +1,166 @@
+      .head {
+        margin-bottom: 18px;
+      }
+      /* Botón de limpiar: siempre rodeado por un borde tipo "burbuja";
+         al pasar el ratón por encima se pone verde. */
+      .limpiar-btn {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 16px;      
+        font-size: 1.3rem;
+        margin-bottom: 1px;
+        transition:
+          background 0.15s ease,
+          border-color 0.15s ease,
+          color 0.15s ease;
+      }
+      .limpiar-btn:hover {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fff;
+      }
+      .chat-card {
+        display: flex;
+        flex-direction: column;
+        height: 60vh;
+        min-height: 380px;
+        padding: 0;
+        overflow: hidden;
+      }
+      .mensajes {
+        flex: 1;
+        overflow-y: auto;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .empty {
+        margin: auto;
+        text-align: center;
+        color: var(--muted);
+      }
+      .empty .icon {
+        font-size: 2rem;
+        margin-bottom: 6px;
+      }
+      .burbuja {
+        max-width: 75%;
+        padding: 10px 14px;
+        border-radius: 14px;
+        font-size: 0.92rem;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .burbuja.usuario {
+        align-self: flex-end;
+        background: var(--green);
+        color: #fff;
+        border-bottom-right-radius: 4px;
+        white-space: pre-wrap;
+      }
+      .burbuja.bot {
+        align-self: flex-start;
+        background: var(--surface);
+        color: var(--text);
+        border-bottom-left-radius: 4px;
+      }
+      .burbuja.pensando {
+        opacity: 0.6;
+        font-style: italic;
+      }
+      /* Markdown de las respuestas del bot (tablas de facturas/estadísticas,
+         títulos ##, listas...). Reutiliza la misma idea que el visor de .md del
+         explorador, pero más compacto para encajar en una burbuja de chat. */
+      .burbuja.bot .md {
+        overflow-x: auto;
+      }
+      .burbuja.bot .md > :first-child {
+        margin-top: 0;
+      }
+      .burbuja.bot .md > :last-child {
+        margin-bottom: 0;
+      }
+      .burbuja.bot .md p {
+        margin: 0 0 8px;
+      }
+      .burbuja.bot .md h1,
+      .burbuja.bot .md h2,
+      .burbuja.bot .md h3 {
+        font-size: 0.98rem;
+        margin: 10px 0 6px;
+      }
+      .burbuja.bot .md ul,
+      .burbuja.bot .md ol {
+        margin: 0 0 8px;
+        padding-left: 20px;
+      }
+      .burbuja.bot .md table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 6px 0 10px;
+        font-size: 0.85rem;
+      }
+      .burbuja.bot .md th,
+      .burbuja.bot .md td {
+        border: 1px solid var(--border);
+        padding: 5px 8px;
+        text-align: left;
+        white-space: nowrap;
+      }
+      .burbuja.bot .md th {
+        background: rgba(0, 0, 0, 0.04);
+        font-weight: 700;
+      }
+      .burbuja.bot .md code {
+        background: rgba(0, 0, 0, 0.06);
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 0.85em;
+      }
+      /* Listado de facturas por periodo: tabla real (no markdown) para poder
+         poner el botón "Abrir" en su propia fila, a la derecha. */
+      .tabla-facturas-titulo {
+        font-size: 0.98rem;
+        margin: 0 0 6px;
+      }
+      .tabla-facturas {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+      }
+      .tabla-facturas th,
+      .tabla-facturas td {
+        border: 1px solid var(--border);
+        padding: 5px 8px;
+        text-align: left;
+      }
+      .tabla-facturas th {
+        background: rgba(0, 0, 0, 0.04);
+        font-weight: 700;
+      }
+      .tabla-facturas td:last-child {
+        text-align: right;
+        white-space: nowrap;
+      }
+      .tabla-facturas .btn {
+        font-size: 0.85rem;
+      }
+      .abrir-archivo {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .abrir-archivo .btn {
+        font-size: 0.85rem;
+      }
+      .barra {
+        display: flex;
+        gap: 8px;
+        padding: 12px;
+        border-top: 1px solid var(--border);
+      }
+      .barra .input {
+        flex: 1;
+      }

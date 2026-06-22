@@ -37,6 +37,9 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
   return data.message.content;
 };
 
+// 2ª pasada: OCR especialista (deepseek-ocr). La transcripción más fiel de
+// texto/tablas/importes, pero lento y, ante una imagen SIN texto, alucina; por
+// eso solo se usa cuando la 1ª pasada ya detectó que parece una factura.
 const ocrConOllama = (buffer: Buffer): Promise<string> =>
   consultarVision(
     env.OLLAMA_OCR_MODEL,
@@ -44,36 +47,79 @@ const ocrConOllama = (buffer: Buffer): Promise<string> =>
     buffer,
   );
 
-// deepseek-ocr es un modelo SOLO de OCR: ante una foto sin texto (un objeto, una
-// persona...) no sabe decir "no hay texto" y en vez de eso a veces entra en un
-// bucle degenerado repitiendo la misma etiqueta cientos de veces (ej. "<table:tr>
-// <td>...</table>") hasta agotar el límite de tokens. Se detecta por la baja
-// variedad de palabras (una transcripción real, aunque sea corta, no repite
-// siempre los mismos tokens) y se descarta en vez de guardar la basura.
+// 1ª pasada: modelo de visión ligero (granite3.2-vision). Rápido, cabe entero en
+// GPU y hace las dos cosas — transcribe el texto si lo hay, o describe la foto si
+// no — sin entrar en el bucle degenerado de un modelo solo-OCR.
+const visionPrimeraPasada = (buffer: Buffer): Promise<string> =>
+  consultarVision(
+    env.OLLAMA_CAPTION_MODEL,
+    "Si la imagen contiene texto (factura, recibo, documento), transcríbelo TODO tal cual aparece, con sus números e importes. Si NO contiene texto, describe brevemente en español lo que se ve. No añadas explicaciones.",
+    buffer,
+  );
+
+// Un modelo solo-OCR (deepseek-ocr) ante una foto sin texto no sabe decir "no hay
+// texto" y a veces entra en un bucle degenerado repitiendo la misma etiqueta
+// cientos de veces (ej. "<table:tr><td>...</table>") hasta agotar el límite de
+// tokens. OJO: deepseek también emite `<table>/<td>` LEGÍTIMOS para transcribir
+// las tablas de una factura real, así que NO se puede tratar esas etiquetas como
+// basura por sí solas (eso descartaba transcripciones buenas). Se juzga el
+// CONTENIDO tras quitar las etiquetas: si apenas queda texto real, o si lo que
+// queda es muy repetitivo, es un bucle/placeholder y se descarta.
 const pareceBucleDegenerado = (texto: string): boolean => {
-  // Señal corta pero inequívoca: "None" (placeholder de Python/JS) o etiquetas
-  // <table>/<td> sueltas no son nunca texto real de un documento.
-  if (/\bNone\b/.test(texto) || /<table[ :>]|<td[ >]/i.test(texto)) return true;
-  const palabras = texto.toLowerCase().split(/\s+/).filter(Boolean);
+  const sinTags = texto
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // "None" (placeholder de Python/JS) como prácticamente todo el contenido.
+  if (/^\W*None\W*$/i.test(sinTags)) return true;
+  const palabras = sinTags.toLowerCase().split(/\s+/).filter(Boolean);
+  // Tras quitar etiquetas casi no queda texto → era sopa de tags vacía.
+  if (palabras.length < 3) return true;
   if (palabras.length < 30) return false;
+  // Texto largo pero con muy poca variedad de palabras → repetición degenerada.
   const unicas = new Set(palabras);
   return unicas.size / palabras.length < 0.15;
 };
 
-// OCR de una imagen: solo deepseek-ocr. Si no encuentra texto real (alucina/
-// bucle degenerado) o Ollama no responde, no hay fallback automático (antes
-// llava describía la foto y, si Ollama tampoco respondía, Tesseract.js hacía
-// un OCR de peor calidad) — el explorador obliga al usuario a describir a mano
-// toda imagen que suba (ver modal "¿Qué es esta imagen?"), así que ese texto
-// vacío se rellena siempre con la descripción manual, sin depender de más IA.
+// ¿El texto de la 1ª pasada parece una factura/recibo con importes? Es la señal
+// para escalar al OCR especialista (deepseek-ocr), que no se equivoca con los
+// dígitos. Una descripción de foto o un texto sin importes no lo dispara, así nos
+// ahorramos la pasada lenta de deepseek en todo lo que no es factura.
+const pareceFacturaConImportes = (texto: string): boolean => {
+  const t = texto.toLowerCase();
+  if (/[€$]|\beuros?\b|\biva\b|\bfactura\b|\bsubtotal\b|\btotal\b|\bimporte\b|\bprecio\b|\bcantidad\b|\brecibo\b/.test(t))
+    return true;
+  // Muchos dígitos → probable tabla/documento numérico.
+  return (t.match(/\d/g) ?? []).length >= 12;
+};
+
+// OCR/descripción de una imagen, cascada "ligero primero":
+//   1. granite (rápido) transcribe el texto o describe la foto.
+//   2. Si lo que sacó parece una factura con importes Y hay un modelo de OCR
+//      distinto configurado, se RE-LEE con deepseek-ocr para máxima fidelidad de
+//      los dígitos; si deepseek falla o alucina, nos quedamos con lo de granite.
+//   3. Si no parece factura (foto, o texto sin importes), se usa lo de granite —
+//      sin pagar la pasada lenta de deepseek.
+// Si OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL (máquinas con un solo VLM), la 2ª
+// pasada se desactiva sola.
 const ocrImagen = async (buffer: Buffer): Promise<string> => {
+  let primera = "";
   try {
-    const texto = await ocrConOllama(buffer);
-    return pareceBucleDegenerado(texto) ? "" : texto;
+    primera = await visionPrimeraPasada(buffer);
   } catch (err) {
-    console.error("[extraccion] OCR Ollama falló:", err);
-    return "";
+    console.error("[extraccion] visión (1ª pasada) falló:", err);
   }
+  primera = pareceBucleDegenerado(primera) ? "" : primera.trim();
+
+  if (env.OLLAMA_OCR_MODEL !== env.OLLAMA_CAPTION_MODEL && pareceFacturaConImportes(primera)) {
+    try {
+      const ocr = await ocrConOllama(buffer);
+      if (ocr.trim() && !pareceBucleDegenerado(ocr)) return ocr.trim();
+    } catch (err) {
+      console.error("[extraccion] OCR especialista (2ª pasada) falló:", err);
+    }
+  }
+  return primera;
 };
 
 // Carácter NUL: hay que quitarlo del texto extraído porque Postgres no admite

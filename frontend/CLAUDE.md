@@ -96,19 +96,21 @@ Componente más complejo. Características:
 - **Árbol de carpetas en cliente**: carga TODOS los archivos y deriva el árbol localmente
 - **Carpetas persistidas en BD** (`/api/archivos/carpetas`): permite carpetas vacías
 - **Drag & drop** propio (eventos `pointer`, no HTML5 DnD) para mover archivos/carpetas
-- **Menú contextual** (clic derecho): abrir, escanear factura, descargar, copiar, renombrar, mover, borrar
+- **Menú contextual** (clic derecho): abrir, añadir descripción, descargar, copiar, renombrar, mover, borrar
 - **Visor de .md**: renderiza markdown con `marked` en un modal inline
 - **Selección múltiple**: checkbox por fila + barra de acciones bulk (copiar/mover/borrar);
   al borrar carpeta+archivos seleccionados a la vez, se espera a que el borrado de la
   carpeta termine en el servidor antes de refrescar (si no, podía "reaparecer" hasta
   repetir la acción una segunda vez)
 - **Búsqueda semántica RAG**: campo + botón que llama `/api/archivos/buscar`
-- **Modal escanear factura**: botón "Escanear factura" en el menú contextual de archivos
-  PDF/imagen, con pista opcional (ya se envía correctamente al backend)
-- **Modal describir imagen**: tras subir una o varias imágenes, pregunta "¿Qué es esta
-  imagen?" (obligatorio, sin omitir, una por una; no hay fallback de IA si el OCR
-  automático no encuentra texto real); lo escrito se guarda como el contenido del
-  archivo (`describirArchivo`) para que "muéstrame"/la búsqueda semántica lo encuentren
+- **Columna "Estado"** (iconos, refresco con polling cada 3s mientras haya algo en
+  proceso): `spinner + "Escaneando"` mientras se procesa, `✓` verde cuando terminó
+  (factura o no, ambos = "procesado"; no es clicable), `✕` rojo si hubo error; en blanco
+  si no aplica (txt/docx)
+- **Añadir descripción**: sustituye al "Escanear" manual (ya innecesario: todo se escanea/
+  indexa solo al subir). Modal con textarea que se guarda vía `describirArchivo`
+  (`PATCH /api/archivos/:id/descripcion`) y se reindexa para el buscador por contenido —
+  útil para que una foto sea encontrable por una descripción a mano
 
 ### `/papelera`
 - Lista archivos eliminados con fecha de borrado

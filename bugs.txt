@@ -1,5 +1,7 @@
 
-
+- el texto del chat se guarda de un usuario  otro
+- si se sube un archiv oque no reconoce ,error. El chat si no sabe algo error
+- un pdf con imagenes como sabe si utilizar pdf parse o no
 - escanear despues de subir(añadir estado)
 -el cambiar nombre no va en ficheros
 - al selecionar autocompletado en login  usuario y depsues contraseña desaparece la linea vertical

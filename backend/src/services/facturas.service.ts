@@ -403,6 +403,40 @@ export const limpiarEstadoSiNoEsFactura = async (archivo: Archivo): Promise<void
   await AppDataSource.getRepository(Archivo).update(archivo.id, { estadoEscaneo: null });
 };
 
+// Escaneo MANUAL disparado desde el explorador (clic derecho → Escanear). NO
+// espera al resultado: en una GPU pequeña la extracción puede tardar minutos y
+// bloquear el modal con "Escaneando…" toda la espera era el peor punto de
+// fricción. Valida propiedad/existencia (para devolver 404/403 al instante),
+// marca "pendiente" y encola en la fase de extracción (el texto ya se extrajo al
+// subir; escanear NO relanza OCR). El estado final ("escaneada"/"no_factura"/
+// "error") lo deja `escanearFactura` y la columna "Estado" lo refleja con su
+// polling — igual que el auto-escaneo al subir.
+export const encolarEscaneoManual = async (
+  usuarioId: string,
+  archivoId: string,
+  pista?: string,
+): Promise<void> => {
+  const archivoRepo = AppDataSource.getRepository(Archivo);
+  const archivo = await archivoRepo.findOne({
+    where: { id: archivoId },
+    relations: { propietario: true },
+  });
+  if (!archivo) throw new AppError(404, "Archivo no encontrado");
+  if (archivo.propietario.id !== usuarioId) {
+    throw new AppError(403, "No tienes permiso sobre este archivo");
+  }
+  await marcarPendiente(archivo);
+  void encolarExtraccion(() =>
+    escanearFactura(usuarioId, archivoId, { pista })
+      .then(() => undefined)
+      // El estado (no_factura/error) ya lo deja escanearFactura en su catch;
+      // aquí solo logueamos porque no hay nadie esperando la promesa.
+      .catch((err) =>
+        console.error(`[facturas] Escaneo manual de "${archivo.nombre}" falló:`, err),
+      ),
+  );
+};
+
 // Auto-escaneo al subir: si el archivo parece una factura, intenta escanearlo en
 // segundo plano. Solo persiste si la extracción tiene pinta de factura (soloSiFactura).
 // Pensado para llamarse "fire-and-forget"; los errores se logean, no se propagan.

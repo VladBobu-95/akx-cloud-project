@@ -78,16 +78,8 @@ export class ArchivosService {
     return this.http.get<ResultadoBusqueda[]>(`${this.base}/buscar`, { params });
   }
 
-  // Escanear una factura (PDF/imagen): extrae datos y genera resúmenes.
-  escanearFactura(archivoId: string, pista?: string) {
-    return this.http.post<{ numero?: string; total?: number; lineas: number }>(
-      `${environment.apiUrl}/api/facturas/escanear`,
-      { archivoId, pista },
-    );
-  }
-
-  // Guarda una descripción manual de una imagen (sin texto legible) para que
-  // se pueda encontrar luego por su contenido al buscar/leer.
+  // Guarda una descripción manual de un archivo (típicamente una imagen) para
+  // poder encontrarlo luego por su contenido en el buscador semántico.
   describirArchivo(archivoId: string, descripcion: string) {
     return this.http.patch<{ mensaje: string }>(
       `${this.base}/${archivoId}/descripcion`,

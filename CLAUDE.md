@@ -27,7 +27,7 @@ akx-cloud-project/
 | Objetos | MinIO (S3-compatible) |
 | IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5:3b/7b` como fallback en máquinas pequeñas |
 | IA embeddings | Ollama — `bge-m3` (1024 dims, multilingüe) |
-| OCR facturas | Ollama visión — `deepseek-ocr` (`OLLAMA_OCR_MODEL`); sin texto real, no hay fallback de IA: el usuario describe la imagen a mano (modal obligatorio al subir) |
+| Visión imágenes | Cascada Ollama: **granite3.2-vision** (`OLLAMA_CAPTION_MODEL`, 1ª pasada rápida: transcribe o describe) → **deepseek-ocr** (`OLLAMA_OCR_MODEL`, 2ª pasada solo si parece factura, OCR fiel de importes). Ver "OCR y descripción de imágenes" |
 | Extracción PDF | pdf-parse v2 |
 | Extracción DOCX | mammoth |
 | Auth | JWT + bcrypt |
@@ -88,7 +88,8 @@ CORS_ORIGIN=*   # "*" o lista separada por comas; en prod fija el dominio del fr
 OLLAMA_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen2.5-coder:14b
 OLLAMA_EMBED_MODEL=bge-m3
-OLLAMA_OCR_MODEL=deepseek-ocr
+OLLAMA_CAPTION_MODEL=granite3.2-vision  # 1ª pasada de visión (transcribe o describe)
+OLLAMA_OCR_MODEL=deepseek-ocr           # 2ª pasada: OCR fiel solo si parece factura
 ```
 
 > El servicio `api` del `docker-compose.yml` incluye `extra_hosts: host.docker.internal:host-gateway`
@@ -106,7 +107,7 @@ docker compose up -d                        # levantar todo
 docker compose build api                    # rebuild imagen API tras cambios de código
 docker compose up -d api                    # recrear contenedor API (recarga .env)
 docker compose restart api                  # SOLO reinicia, NO recarga .env ni código
-docker compose build frontend && docker compose up -d web  # rebuild frontend
+docker compose build web && docker compose up -d web       # rebuild frontend (servicio "web")
 docker compose logs -f api                  # logs en tiempo real
 ```
 
@@ -192,7 +193,7 @@ frontend lo usa para mostrar un botón "Abrir `<nombre>`" por archivo bajo la re
 ### `/api/facturas`
 | Método | Ruta | Body |
 |---|---|---|
-| POST | `/escanear` | `{archivoId, pista?}` — rechaza con 422 si no hay datos reales de factura (ni importes ni número/fecha/emisor), en vez de guardar una inventada |
+| POST | `/escanear` | `{archivoId, pista?}` — **asíncrono**: valida propiedad/existencia (404/403 al instante), marca el archivo `pendiente`, encola el escaneo en segundo plano y responde **202** sin esperar. El resultado se ve en la columna "Estado" del explorador vía polling. Sin caller en la UI (todo se escanea solo al subir); queda como API de re-escaneo manual. |
 
 ---
 
@@ -309,37 +310,46 @@ gesto de clic directo se bloquea.
 
 ## OCR y descripción de imágenes (`backend/src/services/extraccion.service.ts`)
 
-`ocrImagen()` solo intenta **deepseek-ocr** (`OLLAMA_OCR_MODEL`): transcribe el texto
-tal cual aparece — el mejor para documentos/facturas reales con texto/tablas/importes.
-Si no encuentra texto real, o Ollama falla, no hay ningún fallback automático de IA
-(antes había una cascada con **llava** describiendo la foto y, si Ollama tampoco
-respondía, **Tesseract.js** como último recurso; se quitaron los dos: si deepseek-ocr
-no puede leer una imagen, Tesseract tampoco iba a hacerlo mejor — solo cubría el caso de
-Ollama caído, no el de "no hay texto real"). En su lugar, el explorador **obliga** al
-usuario a describir a mano toda imagen que suba (ver más abajo), así que ese hueco
-siempre se rellena sin depender de más modelos.
+`ocrImagen()` usa una **cascada "ligero primero"** de dos modelos (configurables por `.env`):
 
-deepseek-ocr es un modelo **solo de OCR**: ante una foto sin texto (un objeto, una
-persona...) no sabe decir "no hay texto" — a veces entra en un **bucle degenerado**
-repitiendo la misma etiqueta cientos de veces (ej. `<table:tr><td>...</table>`) hasta
-agotar el límite de tokens (~115s), o devuelve algo corto pero igual de falso (`None`,
-etiquetas HTML sueltas). `pareceBucleDegenerado()` detecta ambos casos (señal corta:
-contiene `None` o `<table`/`<td`; señal larga: muy baja variedad de palabras en un
-texto de 30+ palabras) y descarta el resultado (texto vacío) en vez de guardarlo.
+1. **1ª pasada — granite3.2-vision** (`OLLAMA_CAPTION_MODEL`): modelo de visión ligero
+   (~2.4GB, cabe entero en GPU). Rápido y hace las dos cosas en una sola llamada —
+   transcribe el texto si lo hay, o describe la foto si no — sin el bucle degenerado de
+   un modelo solo-OCR.
+2. **¿Parece factura con importes?** (`pareceFacturaConImportes`): si el texto de la 1ª
+   pasada tiene símbolos de moneda / palabras clave (factura, IVA, total…) o muchos
+   dígitos, se escala a la 2ª pasada. Si no (una foto, o texto sin importes), se queda con
+   lo de granite — sin pagar la pasada lenta.
+3. **2ª pasada — deepseek-ocr** (`OLLAMA_OCR_MODEL`): OCR especialista, la transcripción
+   más fiel de tablas/importes (no se equivoca con los dígitos). Solo se lanza para lo que
+   parece factura. Si falla o alucina, se conserva lo de granite.
+
+Si `OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL`, la 2ª pasada se desactiva sola (máquinas
+con un solo VLM). Esta cascada sustituyó al esquema anterior (solo deepseek-ocr +
+descripción manual obligatoria): se comprobó con pruebas reales que **ningún modelo
+pequeño iguala a deepseek-ocr en fidelidad de OCR** (granite acertaba importes pero
+fallaba dígitos finos como un teléfono), mientras que deepseek **alucina** ante fotos sin
+texto — de ahí el reparto: granite clasifica/describe barato, deepseek afina las facturas.
+
+`pareceBucleDegenerado()` descarta la basura de un modelo solo-OCR ante una imagen sin
+texto (bucle repitiendo `<table:tr><td>…`, o `None`). **Importante:** juzga el contenido
+**tras quitar las etiquetas HTML**, no la mera presencia de `<table>/<td>` — porque
+deepseek emite esas etiquetas también para transcribir tablas de factura LEGÍTIMAS
+(tratarlas como basura descartaba transcripciones buenas).
 
 En una GPU de 8GB, deepseek-ocr no entra entero (corre parcialmente en CPU, ~2 min por
-imagen). Es en segundo plano, no bloquea la subida.
+imagen) — pero con esta cascada solo se invoca en imágenes que parecen factura, no en
+toda foto. Todo en segundo plano, no bloquea la subida.
 
 ### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
-El explorador (`pages/archivos/archivos.ts`) muestra, justo después de subir una o
-varias imágenes, un modal "¿Qué es esta imagen?" **obligatorio** (sin botón de omitir,
-y el backdrop no lo cierra) para cada una — no hay otro fallback si el OCR automático no
-encuentra texto real, así que sin esta descripción la imagen quedaría sin contenido
-indexado. Lo que se escriba se guarda como si fuera el texto extraído del archivo y se
-reindexa para RAG (`indexarTexto`, en `rag.service.ts` — la misma función que usa el
-indexado automático, extraída para poder indexar un texto ya dado sin volver a invocar
-OCR). Sirve tanto para corregir una transcripción automática como para darle contenido
-a una foto sin texto, en el momento (sin esperar al pipeline en segundo plano).
+Ya **no** hay modal obligatorio al subir (se quitó: estorbaba en cada subida de fotos).
+Con la cascada de visión, una foto sin texto ya se **describe automáticamente** al subir
+(la 1ª pasada de granite, ver arriba), así que normalmente es buscable sin hacer nada. El
+endpoint `PATCH .../descripcion` queda para **corregir/afinar** esa descripción a mano (o
+escaneándola desde el explorador: si no es factura, la "pista" + el OCR se guardan como
+`descripcionManual`, ver `escanearFactura`). Lo que se guarde se reindexa para RAG
+(`indexarTexto` en `rag.service.ts`, combinado con el texto extraído vía
+`combinarContenido`), para que "muéstrame"/la búsqueda semántica lo encuentren.
 
 ---
 
@@ -408,7 +418,14 @@ src/
 ### Página archivos (más compleja)
 - Árbol de carpetas construido en cliente (carga TODOS los archivos + carpetas de BD)
 - Drag & drop con eventos `pointer` (no HTML5 DnD)
-- Menú contextual (clic derecho): abrir, escanear factura, descargar, copiar, renombrar, mover, borrar
+- Menú contextual (clic derecho): abrir, añadir descripción, descargar, copiar, renombrar, mover, borrar
+- **Añadir descripción** (sustituyó al "Escanear" manual, ya innecesario porque todo se
+  escanea/indexa solo al subir): modal con un textarea que se guarda vía
+  `PATCH /api/archivos/:id/descripcion` y se reindexa para el buscador por contenido
+- **Columna "Estado"** con iconos (refresco por polling cada 3s mientras haya algo
+  `pendiente`/`escaneando`): `spinner + "Escaneando"` mientras se procesa, `✓` verde
+  cuando terminó (`escaneada` o `no_factura` — ambos significan "procesado", no es
+  clicable), `✕` rojo (`error`); "no aplica" (txt/docx, estado null) queda en blanco
 - Visor de `.md` con `marked` en modal
 - Selección múltiple + barra de acciones bulk (copiar/mover/borrar)
 - Búsqueda semántica RAG integrada

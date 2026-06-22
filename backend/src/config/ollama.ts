@@ -27,6 +27,7 @@ export const verificarModelosOllama = async (): Promise<void> => {
     OLLAMA_MODEL: env.OLLAMA_MODEL,
     OLLAMA_EMBED_MODEL: env.OLLAMA_EMBED_MODEL,
     OLLAMA_OCR_MODEL: env.OLLAMA_OCR_MODEL,
+    OLLAMA_CAPTION_MODEL: env.OLLAMA_CAPTION_MODEL,
   };
   for (const [variable, modelo] of Object.entries(requeridos)) {
     const ok = instalados.some((i) => coincide(i, modelo));

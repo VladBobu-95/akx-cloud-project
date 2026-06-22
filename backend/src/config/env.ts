@@ -31,9 +31,17 @@ const envSchema = z.object({
   // que es lo que espera la columna "embedding" vector(1024) (migración 1761).
   // OJO: cambiar a un modelo con otra dimensión rompe el INSERT de fragmentos.
   OLLAMA_EMBED_MODEL: z.string().default("bge-m3"),
-  // Modelo de visión para OCR de imágenes de factura. Si no encuentra texto
-  // real, no hay fallback automático: el usuario describe la imagen a mano.
+  // Cascada de visión para imágenes (ver `ocrImagen` en extraccion.service.ts):
+  //  - OLLAMA_CAPTION_MODEL: 1ª pasada, modelo ligero (granite3.2-vision). Rápido,
+  //    cabe en GPU y hace las dos cosas — transcribe texto si lo hay o describe la
+  //    foto si no — sin el bucle degenerado de un modelo solo-OCR.
+  //  - OLLAMA_OCR_MODEL: 2ª pasada, OCR especialista (deepseek-ocr). Solo se usa
+  //    si la 1ª pasada detecta que parece una factura con importes, para no
+  //    equivocar dígitos. Más lento, por eso no se lanza en todo.
+  // Poniendo ambos al mismo modelo, la 2ª pasada se desactiva (máquinas con un
+  // solo VLM).
   OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
+  OLLAMA_CAPTION_MODEL: z.string().default("granite3.2-vision"),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente

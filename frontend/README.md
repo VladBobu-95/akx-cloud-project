@@ -77,17 +77,15 @@ metadata en el backend. Al borrar una selección que mezcla carpetas y archivos 
 se espera a que el borrado de las carpetas termine en el servidor antes de refrescar la
 lista (si no, una carpeta podía "reaparecer" hasta repetir la acción una segunda vez). Incluye un **buscador por contenido** (RAG): llama a
 `GET /api/archivos/buscar?q=` y muestra los documentos relevantes con el fragmento que
-coincide; al hacer clic lleva a la carpeta del archivo. El menú contextual de un PDF/
-imagen tiene **"Escanear factura"**, que abre un modal (con pista opcional) y llama a
-`POST /api/facturas/escanear` (OCR + extracción de datos; rechaza si no hay datos reales
-de factura en vez de inventarlos).
+coincide; al hacer clic lleva a la carpeta del archivo.
 
-Tras subir una o varias **imágenes**, aparece un modal "¿Qué es esta imagen?"
-(obligatorio, una por foto, sin opción de omitir): lo que se escriba se guarda como
-el contenido del archivo (`PATCH /:id/descripcion`) para que el chat y la búsqueda
-semántica lo encuentren al instante. Es obligatorio porque el OCR automático
-(deepseek-ocr) no tiene ningún fallback si la foto no tiene texto real — sin la
-descripción manual, esa imagen quedaría sin contenido indexado.
+Todo lo que se sube **se escanea/indexa solo** en segundo plano (no hay que escanear a
+mano). El progreso se ve en la columna **"Estado"**, refrescada por polling: `spinner +
+"Escaneando"` mientras procesa, `✓` verde cuando termina (sea factura o no, = procesado),
+`✕` rojo si hubo error. El menú contextual de un archivo tiene **"Añadir descripción"**:
+abre un modal con un textarea que se guarda vía `PATCH /api/archivos/:id/descripcion` y se
+reindexa, para que una foto (o cualquier archivo) sea encontrable en el buscador por una
+descripción escrita a mano.
 
 ### Perfil (`pages/perfil`)
 Editar nombre, avatar y contraseña. El avatar se procesa en el cliente: se recorta a

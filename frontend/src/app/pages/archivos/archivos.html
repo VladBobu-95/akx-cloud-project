@@ -1,0 +1,376 @@
+    <div class="page-archivos">
+      <div class="head">
+        <div>
+          <h1>Mis archivos</h1>
+          <p class="muted">{{ total() }} archivo(s) en total</p>
+        </div>
+      </div>
+
+      <!-- Subir al directorio actual + nueva carpeta -->
+      <div class="card upload">
+        <div class="up-row">
+          <label class="file-pick">
+            <input type="file" multiple (change)="seleccionar($event)" hidden />
+            <span class="btn btn-primary">{{ etiquetaSubir() }}</span>
+          </label>
+          <button class="btn btn-outline" (click)="abrirNuevaCarpeta()">📁 Nueva carpeta</button>
+        </div>
+      </div>
+
+      <!-- Búsqueda semántica (por el contenido de los documentos) -->
+      <div class="card buscador">
+        <form class="buscar-row" (ngSubmit)="buscar()">
+          <input
+            class="input"
+            type="text"
+            name="consulta"
+            [(ngModel)]="consulta"
+            placeholder="Buscar por contenido… (ej: facturas de transporte)"
+            autocomplete="off"
+          />
+          <button class="btn btn-primary" type="submit" [disabled]="buscando() || !consulta.trim()">
+            {{ buscando() ? 'Buscando…' : '🔎 Buscar' }}
+          </button>
+          @if (resultados() !== null) {
+            <button class="btn btn-ghost" type="button" (click)="limpiarBusqueda()">Limpiar</button>
+          }
+        </form>
+
+        @if (resultados() !== null) {
+          <div class="resultados">
+            @if (resultados()!.length === 0) {
+              <div class="empty">Sin resultados para "{{ ultimaConsulta() }}".</div>
+            } @else {
+              @for (r of resultados()!; track r.archivoId) {
+                <button class="res" (click)="irAArchivo(r.carpeta)" title="Ir a la carpeta del archivo">
+                  <div class="res-head">
+                    <strong>{{ r.nombre }}</strong>
+                    <span class="muted">{{ r.carpeta }}</span>
+                  </div>
+                  <p class="res-frag">{{ r.fragmento }}</p>
+                </button>
+              }
+            }
+          </div>
+        }
+      </div>
+
+      <!-- Volver (solo dentro de una carpeta) -->
+      @if (rutaActual() !== '/') {
+        <div class="back-bar">
+          <button
+            class="btn-back"
+            (click)="volver()"
+            [class.drop]="destinoHover() === '..'"
+            (pointerenter)="enHover('..')"
+            title="Volver a la carpeta anterior"
+          >
+            <svg
+              width="30"
+              height="30"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            >
+              <path d="M19 12H5M5 12l7 7M5 12l7-7" />
+            </svg>
+          </button>
+          <span class="back-label">Volver</span>
+        </div>
+      }
+
+      <!-- Barra de acciones múltiples (visible cuando hay selección) -->
+      @if (haySeleccion()) {
+        <div class="bulk-bar">
+          <span class="bulk-count">{{ numSeleccionados() }} seleccionado(s)</span>
+          <button class="btn btn-outline btn-sm" (click)="ejecutarCopiarSeleccion()">📋 Copiar</button>
+          <button class="btn btn-outline btn-sm" (click)="abrirBulkMover()">📂 Mover a…</button>
+          <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
+          <span class="spacer"></span>
+          <button class="btn btn-ghost btn-sm" (click)="limpiarSeleccion()">✕ Cancelar</button>
+        </div>
+      }
+
+      <!-- Contenido del directorio actual: carpetas y archivos en la misma tabla -->
+      <div class="card list">
+        @if (cargando()) {
+          <div class="empty">Cargando…</div>
+        } @else if (subcarpetas().length === 0 && archivosActuales().length === 0) {
+          <div class="empty">
+            <div class="icon">🗂️</div>
+            Esta carpeta está vacía. Sube un archivo o crea una subcarpeta.
+          </div>
+        } @else {
+          <table class="table">
+            <thead>
+              <tr>
+                <th class="col-check">
+                  <input type="checkbox" [checked]="todosSeleccionados()" (change)="toggleTodo()" />
+                </th>
+                <th>Nombre</th>
+                <th class="col-tamano">Tamaño</th>
+                <th class="col-subido">Subido</th>
+                <th class="col-estado">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Carpetas primero -->
+              @for (c of subcarpetas(); track c) {
+                <tr
+                  class="fila-carpeta"
+                  [class.drop]="destinoHover() === c"
+                  [class.seleccionada]="estaSeleccionado(claveCarpeta(c))"
+                  (pointerdown)="iniciarPosibleArrastre($event, 'carpeta', c, nombreHoja(c))"
+                  (pointerenter)="enHover(c)"
+                  (pointerleave)="salirHover(c)"
+                  (contextmenu)="abrirMenu($event, 'carpeta', c)"
+                >
+                  <td class="col-check" (pointerdown)="$event.stopPropagation()">
+                    <input type="checkbox" [checked]="estaSeleccionado(claveCarpeta(c))" (change)="toggleSeleccion($event, claveCarpeta(c))" />
+                  </td>
+                  <td class="nombre">📁 {{ nombreHoja(c) }}</td>
+                  <td class="col-tamano">
+                    @if (tamanoCarpeta(c); as t) {
+                      {{ t | fileSize }}
+                    } @else {
+                      0 KB
+                    }
+                  </td>
+                  <td class="muted col-subido">
+                    @if (fechaCarpeta(c); as f) {
+                      {{ f | date: 'dd/MM/yy HH:mm' }}
+                    } @else {
+                      —
+                    }
+                  </td>
+                  <td class="col-estado"></td>
+                </tr>
+              }
+              <!-- Archivos después -->
+              @for (a of archivosActuales(); track a.id) {
+                <tr
+                  [class.seleccionada]="estaSeleccionado(claveArchivo(a.id))"
+                  (pointerdown)="iniciarPosibleArrastre($event, 'archivo', a.id, a.nombre)"
+                  (contextmenu)="abrirMenu($event, 'archivo', a.id)"
+                >
+                  <td class="col-check" (pointerdown)="$event.stopPropagation()">
+                    <input type="checkbox" [checked]="estaSeleccionado(claveArchivo(a.id))" (change)="toggleSeleccion($event, claveArchivo(a.id))" />
+                  </td>
+                  <td class="nombre">📄 {{ a.nombre }}</td>
+                  <td class="col-tamano">{{ a.tamanoBytes | fileSize }}</td>
+                  <td class="muted col-subido">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
+                  <td class="col-estado">
+                    @if (a.estadoEscaneo === 'pendiente' || a.estadoEscaneo === 'escaneando') {
+                      <span class="estado-prog" title="Procesando…"><span class="spinner"></span> Escaneando</span>
+                    } @else if (a.estadoEscaneo === 'escaneada' || a.estadoEscaneo === 'no_factura') {
+                      <span class="estado-ok" title="Procesado">✓</span>
+                    } @else if (a.estadoEscaneo === 'error') {
+                      <span class="estado-error" title="Error al procesar">✕</span>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+    </div>
+
+    <!-- Menú contextual (clic derecho) -->
+    @if (menu(); as m) {
+      <div
+        class="menu-backdrop"
+        (click)="cerrarMenu()"
+        (contextmenu)="$event.preventDefault(); cerrarMenu()"
+      ></div>
+      <div class="context-menu" [style.left.px]="m.x" [style.top.px]="m.y">
+        @if (m.tipo === 'archivo') {
+          <button (click)="accionAbrirArchivo(m.ref)">👁️ Abrir</button>
+          <button (click)="accionDescribir(m.ref)">📝 Añadir descripción</button>
+          <button (click)="accionDescargarArchivo(m.ref)">⬇️ Descargar</button>
+          <button (click)="accionCopiarArchivo(m.ref)">📋 Copiar</button>
+          <button (click)="accionRenombrarArchivo(m.ref)">✏️ Renombrar</button>
+          <button (click)="accionMoverA('archivo', m.ref)">📂 Mover a…</button>
+          <button class="peligro" (click)="accionEliminarArchivo(m.ref)">🗑️ Borrar</button>
+        } @else {
+          <button (click)="accionDescargarCarpeta(m.ref)">⬇️ Descargar</button>
+          <button (click)="cerrarMenu(); copiarCarpeta(m.ref)">📋 Copiar</button>
+          <button (click)="cerrarMenu(); abrirRenombrarCarpeta(m.ref)">✏️ Renombrar</button>
+          <button (click)="accionMoverA('carpeta', m.ref)">📂 Mover a…</button>
+          <button class="peligro" (click)="cerrarMenu(); pedirBorrarCarpeta(m.ref)">🗑️ Borrar</button>
+        }
+      </div>
+    }
+
+    <!-- Modal renombrar / mover archivo -->
+    @if (editando(); as ed) {
+      <div class="modal-backdrop" (click)="editando.set(null)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Renombrar / mover</h2>
+          <div class="field">
+            <label>Nombre</label>
+            <input class="input" [(ngModel)]="ed.nombre" />
+          </div>
+          <div class="field">
+            <label>Carpeta (ruta, ej: /facturas/2026)</label>
+            <input class="input" [(ngModel)]="ed.carpeta" />
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="editando.set(null)">Cancelar</button>
+            <button class="btn btn-primary" (click)="guardarEdicion()">Guardar</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal nueva carpeta -->
+    @if (modalCarpeta()) {
+      <div class="modal-backdrop" (click)="cerrarNuevaCarpeta()">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Nueva carpeta</h2>
+          <div class="field">
+            <label>Nombre de la carpeta</label>
+            <input
+              class="input"
+              [(ngModel)]="nombreNueva"
+              placeholder="ej: facturas"
+              (keyup.enter)="crearCarpeta()"
+              autofocus
+            />
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="cerrarNuevaCarpeta()">Cancelar</button>
+            <button class="btn btn-primary" (click)="crearCarpeta()">Crear</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal renombrar carpeta -->
+    @if (renombrarModal(); as rc) {
+      <div class="modal-backdrop" (click)="renombrarModal.set(null)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Renombrar carpeta</h2>
+          <div class="field">
+            <label>Nuevo nombre</label>
+            <input
+              class="input"
+              [(ngModel)]="nombreRenombrar"
+              (keyup.enter)="confirmarRenombrarCarpeta()"
+              autofocus
+            />
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="renombrarModal.set(null)">Cancelar</button>
+            <button class="btn btn-primary" (click)="confirmarRenombrarCarpeta()">Guardar</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal mover a… -->
+    @if (moverModal()) {
+      <div class="modal-backdrop" (click)="moverModal.set(null)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Mover a…</h2>
+          <p class="muted" style="margin-bottom: 10px;">Elige la carpeta de destino:</p>
+          <div class="destinos">
+            @for (d of destinosMover(); track d.ruta) {
+              <button class="destino-item" (click)="confirmarMover(d.ruta)">📁 {{ d.etiqueta }}</button>
+            } @empty {
+              <p class="muted">No hay otras carpetas disponibles.</p>
+            }
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="moverModal.set(null)">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal añadir descripción (para poder encontrar el archivo en el buscador) -->
+    @if (descripcionModal(); as dm) {
+      <div class="modal-backdrop" (click)="descripcionModal.set(null)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Añadir descripción</h2>
+          <p class="muted" style="margin-bottom: 10px;">{{ dm.nombre }}</p>
+          <div class="field">
+            <label>Descripción (se indexa para el buscador por contenido)</label>
+            <textarea
+              class="input"
+              rows="4"
+              [(ngModel)]="textoDescripcion"
+              placeholder="Ej: foto del recibo del taller, factura de la luz de marzo, recibo de Alba…"
+            ></textarea>
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" [disabled]="guardandoDescripcion()" (click)="descripcionModal.set(null)">
+              Cancelar
+            </button>
+            <button
+              class="btn btn-primary"
+              [disabled]="guardandoDescripcion() || !textoDescripcion.trim()"
+              (click)="guardarDescripcion()"
+            >
+              {{ guardandoDescripcion() ? 'Guardando…' : 'Guardar' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Visor de markdown (.md renderizado) -->
+    @if (verMd(); as v) {
+      <div class="modal-backdrop" (click)="verMd.set(null)">
+        <div class="card modal modal-md" (click)="$event.stopPropagation()">
+          <div class="row" style="justify-content: space-between; align-items: center;">
+            <h2 style="margin: 0;">{{ v.nombre }}</h2>
+            <button class="btn btn-ghost btn-sm" (click)="verMd.set(null)">Cerrar</button>
+          </div>
+          <div class="markdown-body" [innerHTML]="v.html"></div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal de confirmación -->
+    @if (confirmacion(); as c) {
+      <div class="modal-backdrop" (click)="confirmacion.set(null)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>{{ c.titulo }}</h2>
+          <p class="muted" style="margin-bottom: 16px;">{{ c.mensaje }}</p>
+          <div class="row" style="justify-content: flex-end;">
+            <button class="btn btn-ghost" (click)="confirmacion.set(null)">Cancelar</button>
+            <button class="btn btn-danger" (click)="ejecutarConfirmacion()">{{ c.accion }}</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal mover selección a… -->
+    @if (bulkMoverModal()) {
+      <div class="modal-backdrop" (click)="bulkMoverModal.set(false)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Mover selección a…</h2>
+          <p class="muted" style="margin-bottom: 10px;">{{ numSeleccionados() }} elemento(s) → elige carpeta de destino:</p>
+          <div class="destinos">
+            @for (d of destinosBulkMover(); track d.ruta) {
+              <button class="destino-item" (click)="confirmarBulkMover(d.ruta)">📁 {{ d.etiqueta }}</button>
+            } @empty {
+              <p class="muted">No hay carpetas disponibles.</p>
+            }
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="bulkMoverModal.set(false)">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Etiqueta flotante mientras se arrastra -->
+    @if (arrastrando(); as ar) {
+      <div class="ghost" [style.left.px]="ghostPos().x + 14" [style.top.px]="ghostPos().y + 14">
+        {{ ar.tipo === 'carpeta' ? '📁' : '📄' }} {{ ar.nombre }}
+      </div>
+    }
