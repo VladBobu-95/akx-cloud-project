@@ -6,6 +6,13 @@ import { env } from "../config/env";
 const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+// Tope de tokens generados por el OCR de visión. Sin esto, una foto sin texto
+// real puede entrar en un bucle degenerado (ver pareceBucleDegenerado) y gastar
+// el máximo del modelo (~115s observados) antes de cortar. Una factura real,
+// con sus líneas y totales, no necesita ni de lejos 800 tokens para
+// transcribirse entera, así que el límite no afecta al caso bueno.
+const MAX_TOKENS_OCR = 800;
+
 const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): Promise<string> => {
   const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: "POST",
@@ -20,7 +27,7 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
         },
       ],
       stream: false,
-      options: { temperature: 0 },
+      options: { temperature: 0, num_predict: MAX_TOKENS_OCR },
     }),
   });
   const data = (await res.json()) as { message?: { content?: string }; error?: string };
