@@ -1,4 +1,4 @@
-import { Component, HostListener, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, HostListener, computed, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin, of, map, catchError, finalize } from 'rxjs';
@@ -134,6 +134,7 @@ interface Arrastre {
                 <th>Nombre</th>
                 <th>Tamaño</th>
                 <th>Subido</th>
+                <th>Estado</th>
               </tr>
             </thead>
             <tbody>
@@ -166,6 +167,7 @@ interface Arrastre {
                       —
                     }
                   </td>
+                  <td></td>
                 </tr>
               }
               <!-- Archivos después -->
@@ -181,6 +183,20 @@ interface Arrastre {
                   <td class="nombre">📄 {{ a.nombre }}</td>
                   <td>{{ a.tamanoBytes | fileSize }}</td>
                   <td class="muted">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
+                  <td class="estado">
+                    @switch (a.estadoEscaneo) {
+                      @case ('escaneando') {
+                        <span class="spinner" title="Escaneando…"></span>
+                      }
+                      @case ('escaneada') {
+                        <span class="estado-ok" title="Factura escaneada">✓</span>
+                      }
+                      @case ('error') {
+                        <span class="estado-error" title="Error al escanear">✕</span>
+                      }
+                      @default {}
+                    }
+                  </td>
                 </tr>
               }
             </tbody>
@@ -688,6 +704,33 @@ interface Arrastre {
         color: var(--green-dark);
         margin-right: 4px;
       }
+      /* Columna "Estado": solo se marca lo que necesita atención (en proceso
+         o fallido); pendiente/no-factura/no-aplica se dejan en blanco a propósito. */
+      .estado {
+        text-align: center;
+      }
+      .estado .spinner {
+        display: inline-block;
+        width: 13px;
+        height: 13px;
+        border: 2px solid var(--border);
+        border-top-color: var(--green);
+        border-radius: 50%;
+        animation: archivos-girar 0.8s linear infinite;
+      }
+      .estado .estado-ok {
+        color: var(--green);
+        font-weight: 700;
+      }
+      .estado .estado-error {
+        color: var(--danger);
+        font-weight: 700;
+      }
+      @keyframes archivos-girar {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     `,
   ],
 })
@@ -750,6 +793,14 @@ export class ArchivosPage {
 
   protected total = computed(() => this.todos().length);
 
+  // El escaneo de facturas va en segundo plano y puede tardar minutos; mientras
+  // haya algo en cola, refrescamos solos el listado cada 5s para que "Estado"
+  // se actualice sin recargar la página a mano. Se para sola en cuanto no
+  // queda nada pendiente/escaneando.
+  private hayEscaneoEnCurso = computed(() =>
+    this.todos().some((a) => a.estadoEscaneo === 'pendiente' || a.estadoEscaneo === 'escaneando'),
+  );
+
   // Conjunto de todas las rutas de carpeta conocidas: las de los archivos (con
   // sus ancestros) más las carpetas vacías guardadas en localStorage.
   private rutasConocidas = computed(() => {
@@ -781,6 +832,20 @@ export class ArchivosPage {
 
   constructor() {
     this.cargar();
+    const id = setInterval(() => {
+      if (this.hayEscaneoEnCurso()) this.refrescarEstados();
+    }, 5000);
+    inject(DestroyRef).onDestroy(() => clearInterval(id));
+  }
+
+  // Refresco silencioso (sin tocar `cargando`, que mostraría "Cargando…" y
+  // ocultaría la tabla): solo actualiza los datos de los archivos para que se
+  // vea el cambio de estado del escaneo.
+  private refrescarEstados() {
+    this.svc.listarTodos().subscribe({
+      next: (archivos) => this.todos.set(archivos),
+      error: () => {},
+    });
   }
 
   // --- Helpers de rutas ---

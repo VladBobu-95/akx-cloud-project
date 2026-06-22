@@ -18,6 +18,7 @@ export interface Archivo {
   textoExtraido?: string | null;
   eliminadoEn?: string | null;
   subidoEn: string;
+  estadoEscaneo?: 'pendiente' | 'escaneando' | 'escaneada' | 'no_factura' | 'error' | null;
 }
 
 export interface AuthResponse {

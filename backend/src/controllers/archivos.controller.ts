@@ -24,7 +24,11 @@ import {
   reubicarCarpeta,
 } from "../services/carpetas.service";
 import { indexarArchivo, indexarTexto, buscarSemantica } from "../services/rag.service";
-import { autoEscanearArchivo } from "../services/facturas.service";
+import {
+  autoEscanearArchivo,
+  marcarPendienteSiFactura,
+  encolarProcesamientoSubida,
+} from "../services/facturas.service";
 import { AppError } from "../utils/errors";
 
 // GET /api/archivos/carpetas
@@ -118,6 +122,7 @@ export const ctrlSubir = async (
     }
     const carpeta = (req.body.carpeta as string) || "/";
     const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id);
+    await marcarPendienteSiFactura(archivo);
     res.status(201).json(archivo);
 
     // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO y EN ESTE ORDEN:
@@ -125,16 +130,19 @@ export const ctrlSubir = async (
     // El indexado va primero porque ya hace el OCR de imágenes (vía extraerTexto) y
     // lo guarda en archivo.textoExtraido; el auto-escaneo lo reutiliza en vez de
     // repetir el OCR (escanearFactura relee el archivo de BD, así que ya lo ve).
+    // Encolado (uno detrás de otro, no en paralelo): si se suben varios archivos
+    // a la vez, cada uno lanzaba su propio OCR/IA de visión en paralelo y todos
+    // competían por la misma GPU (más lento en total, riesgo de agotar memoria).
     const buffer = req.file.buffer;
     const usuarioId = req.usuario!.id;
-    void (async () => {
+    void encolarProcesamientoSubida(async () => {
       await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
         console.error(`Error indexando "${archivo.nombre}":`, err),
       );
       await autoEscanearArchivo(usuarioId, archivo).catch((err) =>
         console.error(`Error auto-escaneando "${archivo.nombre}":`, err),
       );
-    })();
+    });
   } catch (error) {
     next(error);
   }

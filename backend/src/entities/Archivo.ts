@@ -39,6 +39,13 @@ export class Archivo {
   @Column({ type: "text", nullable: true })
   textoExtraido?: string;
 
+  // Estado del escaneo de factura: null = no aplica (no es PDF/imagen o nunca se
+  // intentó). "pendiente" = en cola para escanear. "escaneando" = en proceso.
+  // "escaneada" = factura guardada en BD. "no_factura" = se comprobó y no parecía
+  // una factura real. "error" = fallo técnico (ej. Ollama no responde).
+  @Column({ type: "varchar", nullable: true })
+  estadoEscaneo?: "pendiente" | "escaneando" | "escaneada" | "no_factura" | "error" | null;
+
   // DeleteDateColumn: TypeORM rellena esta columna con la fecha actual al hacer softRemove().
   // Si tiene valor → archivo en la papelera. Si es null → archivo activo.
   // Las queries normales (find, findOne) ignoran automáticamente los registros con esta columna rellena.

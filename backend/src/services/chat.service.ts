@@ -43,6 +43,7 @@ import {
   clientesTopMd,
   listadoFacturasMd,
   formatearFecha,
+  encolarProcesamientoSubida,
   type FiltroFacturas,
 } from "./facturas.service";
 
@@ -1061,7 +1062,9 @@ const ejecutarTool = async (
         };
       }
       case "escanear_todas_facturas": {
-        // Busca todos los PDFs e imágenes y los escanea en paralelo.
+        // Busca todos los PDFs e imágenes. Se escanean de uno en uno (vía la
+        // misma cola global que usa la subida): el OCR/IA de visión es pesado
+        // y escanearlos todos en paralelo competiría por la misma GPU.
         const todos = (await listarArchivos(usuarioId, undefined, 1, 200)).archivos;
         const facturas = todos.filter((a) =>
           /\.(pdf|jpg|jpeg|png|webp|tiff?)$/i.test(a.nombre) ||
@@ -1073,7 +1076,7 @@ const ejecutarTool = async (
         await Promise.all(
           facturas.map(async (a) => {
             try {
-              await escanearFactura(usuarioId, a.id);
+              await encolarProcesamientoSubida(() => escanearFactura(usuarioId, a.id));
               ok++;
             } catch {
               errores++;

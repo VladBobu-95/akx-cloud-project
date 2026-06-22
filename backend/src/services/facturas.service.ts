@@ -150,21 +150,30 @@ export const formatearFecha = (iso: string): string => {
   return `${dia}/${mes}/${anio}`;
 };
 
-// Serializa tareas por usuario: las que llegan para el mismo usuario se
-// encadenan en vez de correr a la vez. Necesario porque el front sube varias
-// imágenes EN PARALELO y cada subida acaba regenerando el MISMO archivo
-// "resumen-ventas.md" (borrar+crear): sin serializar, dos ejecuciones a la vez
-// podían dejar dos copias del .md o competir en el borrado.
+// Serializa tareas por clave: las que llegan para la misma clave se encadenan
+// en vez de correr a la vez. Se usa con el usuarioId (varias imágenes EN
+// PARALELO acaban regenerando el MISMO archivo "resumen-ventas.md": sin
+// serializar, dos ejecuciones a la vez podían dejar dos copias del .md o
+// competir en el borrado) y también con una clave fija para encolar TODO el
+// pipeline de indexado+escaneo al subir (ver `encolarProcesamientoSubida` más
+// abajo): el OCR/IA de visión es pesado y no debe correr en paralelo entre
+// archivos distintos, compiten por la misma GPU.
 // (Estado en memoria: válido para una sola instancia de API, como es el caso.)
-const colaPorUsuario = new Map<string, Promise<unknown>>();
-const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
-  const anterior = colaPorUsuario.get(usuarioId) ?? Promise.resolve();
+const colasPorClave = new Map<string, Promise<unknown>>();
+const enSerie = <T>(clave: string, tarea: () => Promise<T>): Promise<T> => {
+  const anterior = colasPorClave.get(clave) ?? Promise.resolve();
   // .then(tarea, tarea): se ejecuta tanto si la anterior fue ok como si falló.
   const actual = anterior.then(tarea, tarea);
   // Guardamos una versión "tragada" para que un fallo no rompa la cadena.
-  colaPorUsuario.set(usuarioId, actual.catch(() => {}));
+  colasPorClave.set(clave, actual.catch(() => {}));
   return actual;
 };
+
+const CLAVE_COLA_SUBIDA = "__cola_subida__";
+// Encola una tarea de indexado+escaneo para que se ejecute de una en una, en
+// el orden en que llegan las subidas (en vez de todas a la vez como antes).
+export const encolarProcesamientoSubida = <T>(tarea: () => Promise<T>): Promise<T> =>
+  enSerie(CLAVE_COLA_SUBIDA, tarea);
 
 // --- API pública del servicio ---
 
@@ -186,96 +195,118 @@ export const escanearFactura = async (
     throw new AppError(403, "No tienes permiso sobre este archivo");
   }
 
-  const contenido = await leerContenidoFactura(archivo, opts.pista);
-  const datos = await extraerDatosFactura(contenido);
-  datos.archivoNombre = archivo.nombre;
-
-  // Si no parece una factura real, no la guardamos. Exige TANTO un importe real
-  // (no solo líneas con descripción: el modelo puede inventarse precios para algo
-  // que no es una factura, ej. una lista de la compra o una foto sin texto) COMO
-  // algún dato identificativo (número/fecha/emisor) — las dos cosas a la vez,
-  // para no confundir una imagen cualquiera con una factura real. Antes esto solo
-  // se aplicaba al auto-escaneo: el escaneo MANUAL nunca lo comprobaba, así que
-  // ante una imagen sin contenido real el modelo igual inventaba una factura
-  // completa (cliente, importes...) de la nada.
-  const lineasConImporte = (datos.lineas ?? []).filter(
-    (l) => l.descripcion?.trim() && (Number(l.total) > 0 || Number(l.precioUnit) > 0),
-  );
-  const tieneImportes =
-    Number(datos.total) > 0 || Number(datos.subtotal) > 0 || lineasConImporte.length > 0;
-  const tieneIdentificacion = !!(
-    datos.numero?.trim() ||
-    datos.fecha?.trim() ||
-    datos.emisor?.trim()
-  );
-  if (!tieneImportes || !tieneIdentificacion) {
-    if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
-    throw new AppError(
-      422,
-      "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica los datos reales en la pista.",
-    );
-  }
-
-  const facturaRepo = AppDataSource.getRepository(Factura);
-  // Si ya se había escaneado este archivo, reemplazamos su factura (y sus líneas por CASCADE).
-  await facturaRepo
-    .createQueryBuilder()
-    .delete()
-    .where(`"archivoId" = :a AND "propietarioId" = :u`, { a: archivo.id, u: usuarioId })
-    .execute();
-
-  const factura = facturaRepo.create({
-    propietario: { id: usuarioId } as Usuario,
-    archivo: { id: archivo.id } as Archivo,
-    numero: datos.numero,
-    fecha: normalizarFecha(datos.fecha),
-    emisor: datos.emisor,
-    cliente: datos.cliente,
-    subtotal: String(datos.subtotal ?? 0),
-    iva: String(datos.iva ?? 0),
-    total: String(datos.total ?? 0),
-    lineas: (datos.lineas ?? []).map(
-      (l) =>
-        ({
-          descripcion: l.descripcion,
-          cantidad: String(l.cantidad ?? 0),
-          precioUnit: String(l.precioUnit ?? 0),
-          total: String(l.total ?? 0),
-        }) as LineaFactura,
-    ),
-  });
-  const guardada = await facturaRepo.save(factura); // cascade guarda las líneas
-
-  // Resumen por factura + regenerar el resumen global de ventas.
-  // Si falla la creación de los .md (p. ej. MinIO), logueamos pero no abortamos:
-  // los datos de la factura ya están guardados en BD y eso es lo importante.
-  const idCorto = (datos.numero ?? guardada.id.slice(0, 8)).replace(/[^\w.-]/g, "_");
+  await archivoRepo.update(archivo.id, { estadoEscaneo: "escaneando" });
   try {
-    await reemplazarArchivoTexto(
-      usuarioId,
-      `resumen-factura-${idCorto}.md`,
-      CARPETA_FACTURAS,
-      resumenFacturaMd(datos),
-    );
-    // Serializado por usuario: varias facturas escaneándose a la vez (subida
-    // múltiple / "escanea todas") reescriben el mismo resumen-ventas.md.
-    await enSerie(usuarioId, () => regenerarResumenVentas(usuarioId));
-  } catch (err) {
-    console.error("[facturas] Error al crear archivos de resumen (no crítico):", err);
-  }
+    const contenido = await leerContenidoFactura(archivo, opts.pista);
+    const datos = await extraerDatosFactura(contenido);
+    datos.archivoNombre = archivo.nombre;
 
-  return {
-    numero: datos.numero,
-    total: datos.total,
-    lineas: datos.lineas?.length ?? 0,
-    resumen: resumenFacturaMd(datos),
-  };
+    // Si no parece una factura real, no la guardamos. Exige TANTO un importe real
+    // (no solo líneas con descripción: el modelo puede inventarse precios para algo
+    // que no es una factura, ej. una lista de la compra o una foto sin texto) COMO
+    // algún dato identificativo (número/fecha/emisor) — las dos cosas a la vez,
+    // para no confundir una imagen cualquiera con una factura real. Antes esto solo
+    // se aplicaba al auto-escaneo: el escaneo MANUAL nunca lo comprobaba, así que
+    // ante una imagen sin contenido real el modelo igual inventaba una factura
+    // completa (cliente, importes...) de la nada.
+    const lineasConImporte = (datos.lineas ?? []).filter(
+      (l) => l.descripcion?.trim() && (Number(l.total) > 0 || Number(l.precioUnit) > 0),
+    );
+    const tieneImportes =
+      Number(datos.total) > 0 || Number(datos.subtotal) > 0 || lineasConImporte.length > 0;
+    const tieneIdentificacion = !!(
+      datos.numero?.trim() ||
+      datos.fecha?.trim() ||
+      datos.emisor?.trim()
+    );
+    if (!tieneImportes || !tieneIdentificacion) {
+      await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
+      if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
+      throw new AppError(
+        422,
+        "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica los datos reales en la pista.",
+      );
+    }
+
+    const facturaRepo = AppDataSource.getRepository(Factura);
+    // Si ya se había escaneado este archivo, reemplazamos su factura (y sus líneas por CASCADE).
+    await facturaRepo
+      .createQueryBuilder()
+      .delete()
+      .where(`"archivoId" = :a AND "propietarioId" = :u`, { a: archivo.id, u: usuarioId })
+      .execute();
+
+    const factura = facturaRepo.create({
+      propietario: { id: usuarioId } as Usuario,
+      archivo: { id: archivo.id } as Archivo,
+      numero: datos.numero,
+      fecha: normalizarFecha(datos.fecha),
+      emisor: datos.emisor,
+      cliente: datos.cliente,
+      subtotal: String(datos.subtotal ?? 0),
+      iva: String(datos.iva ?? 0),
+      total: String(datos.total ?? 0),
+      lineas: (datos.lineas ?? []).map(
+        (l) =>
+          ({
+            descripcion: l.descripcion,
+            cantidad: String(l.cantidad ?? 0),
+            precioUnit: String(l.precioUnit ?? 0),
+            total: String(l.total ?? 0),
+          }) as LineaFactura,
+      ),
+    });
+    const guardada = await facturaRepo.save(factura); // cascade guarda las líneas
+    await archivoRepo.update(archivo.id, { estadoEscaneo: "escaneada" });
+
+    // Resumen por factura + regenerar el resumen global de ventas.
+    // Si falla la creación de los .md (p. ej. MinIO), logueamos pero no abortamos:
+    // los datos de la factura ya están guardados en BD y eso es lo importante.
+    const idCorto = (datos.numero ?? guardada.id.slice(0, 8)).replace(/[^\w.-]/g, "_");
+    try {
+      await reemplazarArchivoTexto(
+        usuarioId,
+        `resumen-factura-${idCorto}.md`,
+        CARPETA_FACTURAS,
+        resumenFacturaMd(datos),
+      );
+      // Serializado por usuario: varias facturas escaneándose a la vez (subida
+      // múltiple / "escanea todas") reescriben el mismo resumen-ventas.md.
+      await enSerie(usuarioId, () => regenerarResumenVentas(usuarioId));
+    } catch (err) {
+      console.error("[facturas] Error al crear archivos de resumen (no crítico):", err);
+    }
+
+    return {
+      numero: datos.numero,
+      total: datos.total,
+      lineas: datos.lineas?.length ?? 0,
+      resumen: resumenFacturaMd(datos),
+    };
+  } catch (err) {
+    // AppError = resultado esperado (ej. 422 "no es factura"), ya tiene su
+    // propio estado puesto arriba. Cualquier otra cosa es un fallo técnico
+    // (Ollama caído, MinIO, etc.) que sí marcamos como error real.
+    if (!(err instanceof AppError)) {
+      await archivoRepo.update(archivo.id, { estadoEscaneo: "error" }).catch(() => {});
+    }
+    throw err;
+  }
 };
 
 // ¿El archivo es candidato a factura (PDF o imagen)?
 export const esArchivoFactura = (archivo: Archivo): boolean =>
   /\.(pdf|jpe?g|png|webp|tiff?)$/i.test(archivo.nombre) ||
   /^(application\/pdf|image\/)/.test(archivo.mimeType);
+
+// Marca el archivo recién subido como "pendiente" de escaneo si es candidato a
+// factura, para que la columna "Estado" del explorador lo refleje desde el
+// instante de la subida (antes de que el pipeline en segundo plano lo recoja).
+export const marcarPendienteSiFactura = async (archivo: Archivo): Promise<void> => {
+  if (!esArchivoFactura(archivo)) return;
+  archivo.estadoEscaneo = "pendiente";
+  await AppDataSource.getRepository(Archivo).update(archivo.id, { estadoEscaneo: "pendiente" });
+};
 
 // Auto-escaneo al subir: si el archivo parece una factura, intenta escanearlo en
 // segundo plano. Solo persiste si la extracción tiene pinta de factura (soloSiFactura).
