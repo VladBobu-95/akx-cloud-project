@@ -257,14 +257,14 @@ export const escanearFactura = async (
     const datos = await extraerDatosFactura(contenido);
     datos.archivoNombre = archivo.nombre;
 
-    // Si no parece una factura real, no la guardamos. Exige TANTO un importe real
-    // (no solo líneas con descripción: el modelo puede inventarse precios para algo
-    // que no es una factura, ej. una lista de la compra o una foto sin texto) COMO
-    // algún dato identificativo (número/fecha/emisor) — las dos cosas a la vez,
-    // para no confundir una imagen cualquiera con una factura real. Antes esto solo
-    // se aplicaba al auto-escaneo: el escaneo MANUAL nunca lo comprobaba, así que
-    // ante una imagen sin contenido real el modelo igual inventaba una factura
-    // completa (cliente, importes...) de la nada.
+    // ¿Parece una factura real? Exige TANTO un importe real (no solo líneas con
+    // descripción: el modelo puede inventarse precios para algo que no es una
+    // factura, ej. una lista de la compra) COMO algún dato identificativo
+    // (número/fecha/emisor). Solo bloquea el AUTO-escaneo (soloSiFactura, ver
+    // abajo): la app admite subir cualquier PDF/imagen, no solo facturas, y no
+    // queremos crear una factura basura por cada archivo subido que no lo sea.
+    // El escaneo MANUAL es una acción explícita del usuario, así que no se
+    // bloquea aunque falle este chequeo (ver más abajo).
     const lineasConImporte = (datos.lineas ?? []).filter(
       (l) => l.descripcion?.trim() && (Number(l.total) > 0 || Number(l.precioUnit) > 0),
     );
@@ -275,32 +275,28 @@ export const escanearFactura = async (
       datos.fecha?.trim() ||
       datos.emisor?.trim()
     );
-    if (!tieneImportes || !tieneIdentificacion) {
+    if ((!tieneImportes || !tieneIdentificacion) && opts.soloSiFactura) {
+      // Auto-escaneo al subir: aquí SÍ bloqueamos, para no crear facturas
+      // basura a partir de cualquier PDF/imagen subido (la app admite
+      // subir de todo, no solo facturas).
       await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
-      if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
-
-      // Escaneo MANUAL de algo que no es factura (la app admite subir
-      // cualquier PDF/imagen, no solo facturas): aunque no se guarde como
-      // factura, no tiramos el texto que sí se haya podido extraer (OCR) —
-      // se añade a la descripción del archivo (junto a lo que ya hubiera
-      // puesto el usuario) para que quede buscable/legible igualmente. El
-      // `includes` evita duplicarlo si se escanea el mismo archivo varias veces.
+      return { lineas: 0, resumen: "", omitida: true };
+    }
+    if (!tieneImportes || !tieneIdentificacion) {
+      // Escaneo MANUAL: es una acción explícita del usuario, así que no se
+      // bloquea aunque no parezca una factura real — se guarda igual lo que
+      // la IA haya extraído (aunque salgan campos vacíos/a cero). Eso sí,
+      // aprovechamos el texto que se haya podido extraer (OCR) y lo añadimos
+      // a la descripción del archivo (junto a lo que ya hubiera puesto el
+      // usuario), para que quede buscable/legible también desde ahí. El
+      // `includes` evita duplicarlo si se repite el escaneo.
       const extraido = archivo.textoExtraido?.trim();
-      let descripcionActualizada = false;
       if (extraido && !archivo.descripcionManual?.includes(extraido)) {
         const nuevaDescripcion = [archivo.descripcionManual?.trim(), extraido]
           .filter(Boolean)
           .join("\n\n");
         await actualizarDescripcionManual(archivo.id, nuevaDescripcion, usuarioId);
-        descripcionActualizada = true;
       }
-
-      throw new AppError(
-        422,
-        descripcionActualizada
-          ? "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor), pero he añadido el texto detectado a su descripción."
-          : "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica los datos reales en la pista.",
-      );
     }
 
     const facturaRepo = AppDataSource.getRepository(Factura);

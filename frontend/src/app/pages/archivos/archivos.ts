@@ -349,7 +349,7 @@ interface Arrastre {
     @if (escanearModal(); as ef) {
       <div class="modal-backdrop" (click)="escanearModal.set(null)">
         <div class="card modal" (click)="$event.stopPropagation()">
-          <h2>Escanear factura</h2>
+          <h2>Escanear archivo</h2>
           <p class="muted" style="margin-bottom: 10px;">{{ ef.nombre }}</p>
           <div class="field">
             <label>Pista (opcional)</label>
