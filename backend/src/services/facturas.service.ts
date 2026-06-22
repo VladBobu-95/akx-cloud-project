@@ -260,11 +260,9 @@ export const escanearFactura = async (
     // ¿Parece una factura real? Exige TANTO un importe real (no solo líneas con
     // descripción: el modelo puede inventarse precios para algo que no es una
     // factura, ej. una lista de la compra) COMO algún dato identificativo
-    // (número/fecha/emisor). Solo bloquea el AUTO-escaneo (soloSiFactura, ver
-    // abajo): la app admite subir cualquier PDF/imagen, no solo facturas, y no
-    // queremos crear una factura basura por cada archivo subido que no lo sea.
-    // El escaneo MANUAL es una acción explícita del usuario, así que no se
-    // bloquea aunque falle este chequeo (ver más abajo).
+    // (número/fecha/emisor) — así no se guarda una factura inventada por la IA
+    // a partir de cualquier PDF/imagen subido (la app admite subir de todo,
+    // no solo facturas).
     const lineasConImporte = (datos.lineas ?? []).filter(
       (l) => l.descripcion?.trim() && (Number(l.total) > 0 || Number(l.precioUnit) > 0),
     );
@@ -275,28 +273,32 @@ export const escanearFactura = async (
       datos.fecha?.trim() ||
       datos.emisor?.trim()
     );
-    if ((!tieneImportes || !tieneIdentificacion) && opts.soloSiFactura) {
-      // Auto-escaneo al subir: aquí SÍ bloqueamos, para no crear facturas
-      // basura a partir de cualquier PDF/imagen subido (la app admite
-      // subir de todo, no solo facturas).
-      await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
-      return { lineas: 0, resumen: "", omitida: true };
-    }
     if (!tieneImportes || !tieneIdentificacion) {
-      // Escaneo MANUAL: es una acción explícita del usuario, así que no se
-      // bloquea aunque no parezca una factura real — se guarda igual lo que
-      // la IA haya extraído (aunque salgan campos vacíos/a cero). Eso sí,
-      // aprovechamos el texto que se haya podido extraer (OCR) y lo añadimos
-      // a la descripción del archivo (junto a lo que ya hubiera puesto el
-      // usuario), para que quede buscable/legible también desde ahí. El
-      // `includes` evita duplicarlo si se repite el escaneo.
-      const extraido = archivo.textoExtraido?.trim();
-      if (extraido && !archivo.descripcionManual?.includes(extraido)) {
-        const nuevaDescripcion = [archivo.descripcionManual?.trim(), extraido]
+      await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
+      if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
+
+      // Escaneo MANUAL de algo que no es factura: ya no hay modal obligatorio
+      // al subir una imagen, así que esta es la única forma de describirla a
+      // mano. Se guarda lo que el usuario haya puesto en la pista + el texto
+      // que se haya podido extraer (OCR), junto a la descripción que ya
+      // hubiera, sin duplicar si se repite el escaneo.
+      const piezas = [opts.pista?.trim(), archivo.textoExtraido?.trim()].filter(
+        (p): p is string => !!p,
+      );
+      const nuevas = piezas.filter((p) => !archivo.descripcionManual?.includes(p));
+      if (nuevas.length > 0) {
+        const nuevaDescripcion = [archivo.descripcionManual?.trim(), ...nuevas]
           .filter(Boolean)
           .join("\n\n");
         await actualizarDescripcionManual(archivo.id, nuevaDescripcion, usuarioId);
       }
+
+      throw new AppError(
+        422,
+        opts.pista?.trim()
+          ? "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). He guardado lo que indicaste como descripción del archivo."
+          : "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica qué contiene en la pista — se guardará como descripción.",
+      );
     }
 
     const facturaRepo = AppDataSource.getRepository(Factura);
