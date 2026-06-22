@@ -132,9 +132,9 @@ interface Arrastre {
                   <input type="checkbox" [checked]="todosSeleccionados()" (change)="toggleTodo()" />
                 </th>
                 <th>Nombre</th>
-                <th>Tamaño</th>
-                <th>Subido</th>
-                <th>Estado</th>
+                <th class="col-tamano">Tamaño</th>
+                <th class="col-subido">Subido</th>
+                <th class="col-estado">Estado</th>
               </tr>
             </thead>
             <tbody>
@@ -153,21 +153,21 @@ interface Arrastre {
                     <input type="checkbox" [checked]="estaSeleccionado(claveCarpeta(c))" (change)="toggleSeleccion($event, claveCarpeta(c))" />
                   </td>
                   <td class="nombre">📁 {{ nombreHoja(c) }}</td>
-                  <td>
+                  <td class="col-tamano">
                     @if (tamanoCarpeta(c); as t) {
                       {{ t | fileSize }}
                     } @else {
                       0 KB
                     }
                   </td>
-                  <td class="muted">
+                  <td class="muted col-subido">
                     @if (fechaCarpeta(c); as f) {
                       {{ f | date: 'dd/MM/yy HH:mm' }}
                     } @else {
                       —
                     }
                   </td>
-                  <td></td>
+                  <td class="col-estado"></td>
                 </tr>
               }
               <!-- Archivos después -->
@@ -181,9 +181,9 @@ interface Arrastre {
                     <input type="checkbox" [checked]="estaSeleccionado(claveArchivo(a.id))" (change)="toggleSeleccion($event, claveArchivo(a.id))" />
                   </td>
                   <td class="nombre">📄 {{ a.nombre }}</td>
-                  <td>{{ a.tamanoBytes | fileSize }}</td>
-                  <td class="muted">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
-                  <td class="estado">
+                  <td class="col-tamano">{{ a.tamanoBytes | fileSize }}</td>
+                  <td class="muted col-subido">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
+                  <td class="col-estado">
                     @switch (a.estadoEscaneo) {
                       @case ('escaneando') {
                         <span class="spinner" title="Escaneando…"></span>
@@ -704,12 +704,20 @@ interface Arrastre {
         color: var(--green-dark);
         margin-right: 4px;
       }
-      /* Columna "Estado": solo se marca lo que necesita atención (en proceso
-         o fallido); pendiente/no-factura/no-aplica se dejan en blanco a propósito. */
-      .estado {
+      .col-tamano,
+      .col-subido {
         text-align: center;
       }
-      .estado .spinner {
+      /* Columna "Estado": ancho fijo y pequeño (antes crecía de más) y el
+         icono centrado de verdad con flex, no solo text-align (con eso el
+         glifo del check quedaba descentrado hacia la derecha). Solo se marca
+         lo que necesita atención (en proceso o fallido); pendiente/no-factura/
+         no-aplica se dejan en blanco a propósito. */
+      .col-estado {
+        width: 60px;
+        text-align: center;
+      }
+      .col-estado .spinner {
         display: inline-block;
         width: 13px;
         height: 13px;
@@ -718,13 +726,21 @@ interface Arrastre {
         border-radius: 50%;
         animation: archivos-girar 0.8s linear infinite;
       }
-      .estado .estado-ok {
-        color: var(--green);
+      .col-estado .estado-ok,
+      .col-estado .estado-error {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
         font-weight: 700;
+        line-height: 1;
       }
-      .estado .estado-error {
+      .col-estado .estado-ok {
+        color: var(--green);
+      }
+      .col-estado .estado-error {
         color: var(--danger);
-        font-weight: 700;
       }
       @keyframes archivos-girar {
         to {
