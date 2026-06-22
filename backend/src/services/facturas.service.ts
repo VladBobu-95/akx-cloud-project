@@ -1,34 +1,23 @@
 import { AppDataSource } from "../config/database";
 import { env } from "../config/env";
-import { minioClient } from "../config/minio";
 import { Archivo } from "../entities/Archivo";
 import { Usuario } from "../entities/Usuario";
 import { Factura } from "../entities/Factura";
 import { LineaFactura } from "../entities/LineaFactura";
 import { AppError } from "../utils/errors";
-import { extraerTexto } from "./extraccion.service";
-import { crearArchivoTexto, borrarPermanente } from "./archivos.service";
+import { crearArchivoTexto, borrarPermanente, combinarContenido } from "./archivos.service";
 
 const CARPETA_FACTURAS = "/facturas";
 
-// Lee un objeto de MinIO completo a un Buffer.
-const obtenerBufferMinio = async (archivo: Archivo): Promise<Buffer> => {
-  const stream = await minioClient.getObject(env.MINIO_BUCKET, archivo.claveMinio);
-  const chunks: Buffer[] = [];
-  for await (const c of stream) chunks.push(c as Buffer);
-  return Buffer.concat(chunks);
-};
-
-// Obtiene el texto de la factura. Si el archivo ya se indexó para RAG (subida
-// normal: PDF/imagen pasan por extraerTexto, que ya hace OCR de imágenes),
-// reutiliza ese texto en vez de volver a leer el binario y repetir el OCR.
+// Contenido de la factura: el texto ya extraído (OCR/PDF/DOCX) combinado con
+// la descripción manual del usuario, si la hay (ver `combinarContenido`). NO
+// vuelve a lanzar el OCR aquí: el pipeline de subida (`indexarArchivo`) ya lo
+// intentó siempre antes de llegar a este punto — repetirlo aquí solo duplicaba
+// el coste de deepseek-ocr en imágenes sin texto real, sin ningún beneficio
+// (mismo archivo, misma IA con temperature 0 → mismo resultado vacío otra vez).
 // Añade la "pista" del usuario si la hay. Lanza si no consigue nada.
-const leerContenidoFactura = async (archivo: Archivo, pista?: string): Promise<string> => {
-  let texto = archivo.textoExtraido ?? "";
-  if (!texto) {
-    const buffer = await obtenerBufferMinio(archivo);
-    texto = (await extraerTexto(buffer, archivo.mimeType, archivo.nombre)) ?? "";
-  }
+const leerContenidoFactura = (archivo: Archivo, pista?: string): string => {
+  const texto = combinarContenido(archivo.textoExtraido, archivo.descripcionManual);
   const extra = pista?.trim() ? `\n\nINFO ADICIONAL DEL USUARIO: ${pista.trim()}` : "";
   const completo = (texto + extra).trim();
   if (!completo) {
@@ -167,12 +156,10 @@ const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
   return actual;
 };
 
-// Prioridad de la cola global de subida: 0 = alta (PDFs y demás, rápidos:
-// pdf-parse/texto plano, sin IA de visión), 1 = baja (imágenes, que pasan por
-// OCR de visión y pueden tardar minutos). Si llegan PDFs e imágenes a la vez,
-// los PDFs adelantan en la cola a las imágenes que AÚN NO han empezado a
-// procesarse — la que ya está en marcha no se interrumpe, no hay preferencia
-// de verdad mientras se está ejecutando, solo en el orden de inicio.
+// Prioridad dentro de cada cola: 0 = alta (PDFs y demás, rápidos: pdf-parse/
+// texto plano, sin IA de visión), 1 = baja (imágenes, o trabajo derivado de
+// ellas). Dentro de `colaExtraccion`, una factura PDF nueva (alta) siempre se
+// atiende antes que una imagen ya OCR'eada (baja) que llegó primero.
 export const PRIORIDAD_ALTA = 0;
 export const PRIORIDAD_BAJA = 1;
 
@@ -180,33 +167,68 @@ interface TareaCola {
   prioridad: number;
   ejecutar: () => Promise<void>;
 }
-const colaSubida: TareaCola[] = [];
-let procesandoColaSubida = false;
 
-const procesarColaSubida = async (): Promise<void> => {
-  if (procesandoColaSubida) return;
-  procesandoColaSubida = true;
-  while (colaSubida.length > 0) {
-    // Array.prototype.sort es estable desde ES2019: dentro de la misma
-    // prioridad se mantiene el orden de llegada (FIFO).
-    colaSubida.sort((a, b) => a.prioridad - b.prioridad);
-    const siguiente = colaSubida.shift()!;
-    await siguiente.ejecutar();
-  }
-  procesandoColaSubida = false;
+// Dos colas en vez de una: `colaOcr` (imágenes, necesitan deepseek-ocr) y
+// `colaExtraccion` (extracción de datos de factura con qwen — PDFs directos,
+// o imágenes ya OCR'eadas). El motivo: deepseek-ocr (~9.4GB de VRAM medidos
+// en una 4070) y qwen2.5-coder:14b no caben juntos en la GPU, así que cada
+// vez que el pipeline de UN archivo pasa de OCR a extracción, Ollama tiene que
+// descargar un modelo para cargar el otro. Procesando por fases en vez de por
+// archivo (todo el OCR pendiente con deepseek-ocr cargado, luego toda la
+// extracción pendiente con qwen cargado) ese cambio de modelo pasa de "uno
+// por imagen" a "uno por lote".
+const colaOcr: TareaCola[] = [];
+const colaExtraccion: TareaCola[] = [];
+let procesandoColas = false;
+
+// Array.prototype.sort es estable desde ES2019: dentro de la misma prioridad
+// se mantiene el orden de llegada (FIFO).
+const sacarSiguiente = (cola: TareaCola[]): TareaCola | undefined => {
+  if (cola.length === 0) return undefined;
+  cola.sort((a, b) => a.prioridad - b.prioridad);
+  return cola.shift();
 };
 
-// Encola una tarea de indexado+escaneo para que se ejecute de una en una (no
-// en paralelo: el OCR/IA de visión es pesado y compite por la misma GPU entre
-// archivos distintos), respetando la prioridad dada.
-export const encolarProcesamientoSubida = <T>(
+// Antes de cada paso de OCR, si ha llegado una factura nueva (prioridad alta)
+// a `colaExtraccion`, se atiende primero — así una factura nunca espera a que
+// termine un lote entero de imágenes, solo a que termine la que esté en
+// marcha en ese instante (no hay interrupción de una request ya en marcha
+// con Ollama: se descartó por demasiado costosa/arriesgada, ver conversación).
+const procesarColas = async (): Promise<void> => {
+  if (procesandoColas) return;
+  procesandoColas = true;
+  while (colaOcr.length > 0 || colaExtraccion.length > 0) {
+    const urgente = colaExtraccion.some((t) => t.prioridad === PRIORIDAD_ALTA)
+      ? sacarSiguiente(colaExtraccion)
+      : undefined;
+    const siguiente = urgente ?? sacarSiguiente(colaOcr) ?? sacarSiguiente(colaExtraccion);
+    if (!siguiente) break;
+    await siguiente.ejecutar();
+  }
+  procesandoColas = false;
+};
+
+const encolarEnCola = <T>(
+  cola: TareaCola[],
+  prioridad: number,
   tarea: () => Promise<T>,
-  prioridad: number = PRIORIDAD_ALTA,
 ): Promise<T> =>
   new Promise<T>((resolve, reject) => {
-    colaSubida.push({ prioridad, ejecutar: () => tarea().then(resolve, reject) });
-    void procesarColaSubida();
+    cola.push({ prioridad, ejecutar: () => tarea().then(resolve, reject) });
+    void procesarColas();
   });
+
+// Encola una tarea de OCR/indexado de una imagen (fase 1: deepseek-ocr).
+export const encolarOcr = <T>(tarea: () => Promise<T>): Promise<T> =>
+  encolarEnCola(colaOcr, PRIORIDAD_BAJA, tarea);
+
+// Encola una tarea de extracción de datos de factura (fase 2: qwen). Alta
+// prioridad por defecto (PDFs); pasar PRIORIDAD_BAJA para las que vienen de
+// una imagen ya OCR'eada.
+export const encolarExtraccion = <T>(
+  tarea: () => Promise<T>,
+  prioridad: number = PRIORIDAD_ALTA,
+): Promise<T> => encolarEnCola(colaExtraccion, prioridad, tarea);
 
 // --- API pública del servicio ---
 
@@ -230,7 +252,7 @@ export const escanearFactura = async (
 
   await archivoRepo.update(archivo.id, { estadoEscaneo: "escaneando" });
   try {
-    const contenido = await leerContenidoFactura(archivo, opts.pista);
+    const contenido = leerContenidoFactura(archivo, opts.pista);
     const datos = await extraerDatosFactura(contenido);
     datos.archivoNombre = archivo.nombre;
 
@@ -317,10 +339,14 @@ export const escanearFactura = async (
       resumen: resumenFacturaMd(datos),
     };
   } catch (err) {
-    // AppError = resultado esperado (ej. 422 "no es factura"), ya tiene su
-    // propio estado puesto arriba. Cualquier otra cosa es un fallo técnico
-    // (Ollama caído, MinIO, etc.) que sí marcamos como error real.
-    if (!(err instanceof AppError)) {
+    // Los 422 ("no parece factura", venga de aquí o del chequeo de importes
+    // de más arriba que ya pone su propio "no_factura") son un resultado
+    // esperado, no un fallo técnico — sin esto, "sin contenido legible" dejaba
+    // el estado en "escaneando" para siempre (nunca pasaba a "no_factura").
+    // Cualquier otra cosa sí es un fallo técnico real (Ollama caído, MinIO...).
+    if (err instanceof AppError && err.statusCode === 422) {
+      await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" }).catch(() => {});
+    } else if (!(err instanceof AppError)) {
       await archivoRepo.update(archivo.id, { estadoEscaneo: "error" }).catch(() => {});
     }
     throw err;

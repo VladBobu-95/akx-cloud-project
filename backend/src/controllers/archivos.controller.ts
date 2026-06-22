@@ -29,8 +29,8 @@ import {
   marcarPendiente,
   marcarEnProceso,
   limpiarEstadoSiNoEsFactura,
-  encolarProcesamientoSubida,
-  PRIORIDAD_ALTA,
+  encolarOcr,
+  encolarExtraccion,
   PRIORIDAD_BAJA,
 } from "../services/facturas.service";
 import { AppError } from "../utils/errors";
@@ -129,32 +129,46 @@ export const ctrlSubir = async (
     await marcarPendiente(archivo);
     res.status(201).json(archivo);
 
-    // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO y EN ESTE ORDEN:
-    // no esperamos a que terminen para responder (el OCR/embeddings pueden tardar).
-    // El indexado va primero porque ya hace el OCR de imágenes (vía extraerTexto) y
-    // lo guarda en archivo.textoExtraido; el auto-escaneo lo reutiliza en vez de
-    // repetir el OCR (escanearFactura relee el archivo de BD, así que ya lo ve).
-    // Encolado (uno detrás de otro, no en paralelo): si se suben varios archivos
-    // a la vez, cada uno lanzaba su propio OCR/IA de visión en paralelo y todos
-    // competían por la misma GPU (más lento en total, riesgo de agotar memoria).
-    // Las imágenes van con prioridad BAJA: el OCR de visión tarda mucho más que
-    // procesar un PDF/texto, así que si se suben mezclados, los PDFs no se
-    // quedan esperando detrás de imágenes lentas que aún no han empezado.
+    // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO: no esperamos
+    // a que terminen para responder (el OCR/embeddings pueden tardar). Encolado
+    // (uno detrás de otro, no en paralelo): si se suben varios archivos a la vez,
+    // cada uno lanzaba su propio OCR/IA de visión en paralelo y todos competían
+    // por la misma GPU (más lento en total, riesgo de agotar memoria).
+    //
+    // Dos fases en colas separadas (`encolarOcr`/`encolarExtraccion`, ver
+    // facturas.service.ts): deepseek-ocr (OCR de imágenes) y qwen (extracción de
+    // datos de factura) no caben juntos en la VRAM de una GPU de 12GB, así que
+    // agrupar TODO el OCR pendiente antes de pasar a TODA la extracción pendiente
+    // evita un cambio de modelo por archivo. Los PDFs no necesitan OCR: van
+    // directos a la fase de extracción con prioridad alta, así que una factura
+    // PDF nunca espera a que termine un lote de imágenes en cola (solo a la que
+    // esté en marcha en ese instante).
     const buffer = req.file.buffer;
     const usuarioId = req.usuario!.id;
-    const esImagen = /^image\//.test(archivo.mimeType);
-    void encolarProcesamientoSubida(async () => {
-      await marcarEnProceso(archivo);
-      await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
-        console.error(`Error indexando "${archivo.nombre}":`, err),
-      );
-      await autoEscanearArchivo(usuarioId, archivo).catch((err) =>
-        console.error(`Error auto-escaneando "${archivo.nombre}":`, err),
-      );
-      // Si no es candidato a factura, escanearFactura ni se ha llegado a llamar:
-      // sin esto el spinner se quedaría encendido para siempre en .txt/.docx/etc.
-      await limpiarEstadoSiNoEsFactura(archivo);
-    }, esImagen ? PRIORIDAD_BAJA : PRIORIDAD_ALTA);
+    const tareaExtraccion = () =>
+      autoEscanearArchivo(usuarioId, archivo)
+        .catch((err) => console.error(`Error auto-escaneando "${archivo.nombre}":`, err))
+        // Si no es candidato a factura, escanearFactura ni se ha llegado a
+        // llamar: sin esto el spinner se quedaría encendido para siempre.
+        .then(() => limpiarEstadoSiNoEsFactura(archivo));
+
+    if (/^image\//.test(archivo.mimeType)) {
+      void encolarOcr(async () => {
+        await marcarEnProceso(archivo);
+        await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
+          console.error(`Error indexando "${archivo.nombre}":`, err),
+        );
+        void encolarExtraccion(tareaExtraccion, PRIORIDAD_BAJA);
+      });
+    } else {
+      void encolarExtraccion(async () => {
+        await marcarEnProceso(archivo);
+        await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
+          console.error(`Error indexando "${archivo.nombre}":`, err),
+        );
+        await tareaExtraccion();
+      });
+    }
   } catch (error) {
     next(error);
   }

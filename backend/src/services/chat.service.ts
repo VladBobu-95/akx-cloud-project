@@ -43,7 +43,7 @@ import {
   clientesTopMd,
   listadoFacturasMd,
   formatearFecha,
-  encolarProcesamientoSubida,
+  encolarExtraccion,
   PRIORIDAD_ALTA,
   PRIORIDAD_BAJA,
   type FiltroFacturas,
@@ -1065,8 +1065,11 @@ const ejecutarTool = async (
       }
       case "escanear_todas_facturas": {
         // Busca todos los PDFs e imágenes. Se escanean de uno en uno (vía la
-        // misma cola global que usa la subida): el OCR/IA de visión es pesado
-        // y escanearlos todos en paralelo competiría por la misma GPU.
+        // misma cola de extracción que usa la subida): el OCR/IA de visión es
+        // pesado y escanearlos todos en paralelo competiría por la misma GPU.
+        // No se relanza el OCR aquí (eso solo pasa al subir, vía encolarOcr):
+        // si una imagen no tiene texto extraído es porque ya se intentó y no
+        // encontró nada (o el usuario aún no la describió a mano).
         const todos = (await listarArchivos(usuarioId, undefined, 1, 200)).archivos;
         const facturas = todos.filter((a) =>
           /\.(pdf|jpg|jpeg|png|webp|tiff?)$/i.test(a.nombre) ||
@@ -1081,7 +1084,7 @@ const ejecutarTool = async (
             // (OCR de visión, mucho más lento) que aún no hayan empezado.
             const prioridad = /^image\//.test(a.mimeType) ? PRIORIDAD_BAJA : PRIORIDAD_ALTA;
             try {
-              await encolarProcesamientoSubida(() => escanearFactura(usuarioId, a.id), prioridad);
+              await encolarExtraccion(() => escanearFactura(usuarioId, a.id), prioridad);
               ok++;
             } catch {
               errores++;
