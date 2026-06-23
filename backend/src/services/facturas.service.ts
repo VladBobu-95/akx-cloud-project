@@ -279,12 +279,14 @@ export const escanearFactura = async (
 
       // Escaneo MANUAL de algo que no es factura: ya no hay modal obligatorio
       // al subir una imagen, así que esta es la única forma de describirla a
-      // mano. Se guarda lo que el usuario haya puesto en la pista + el texto
-      // que se haya podido extraer (OCR), junto a la descripción que ya
-      // hubiera, sin duplicar si se repite el escaneo.
-      const piezas = [opts.pista?.trim(), archivo.textoExtraido?.trim()].filter(
-        (p): p is string => !!p,
-      );
+      // mano. Solo se guarda la PISTA que el usuario haya dado (texto real
+      // escrito por él), nunca una copia de archivo.textoExtraido — ese texto
+      // ya está disponible por su cuenta (combinarContenido lo muestra como
+      // "Texto detectado (OCR)"); copiarlo aquí también dejaba la descripción
+      // manual idéntica al OCR sin que el usuario hubiera escrito nada, y se
+      // mostraba mal etiquetada como "Descripción:" en vez de "Texto detectado
+      // (OCR)" la próxima vez que se abriera el archivo.
+      const piezas = [opts.pista?.trim()].filter((p): p is string => !!p);
       const nuevas = piezas.filter((p) => !archivo.descripcionManual?.includes(p));
       if (nuevas.length > 0) {
         const nuevaDescripcion = [archivo.descripcionManual?.trim(), ...nuevas]
