@@ -160,9 +160,30 @@ const obtenerWorkerTesseract = (): Promise<Worker> => {
   return workerTesseract;
 };
 
+// Preprocesado clásico de Tesseract: a diferencia de los modelos de visión (que
+// reescalan la entrada a una resolución fija interna, ver aPng — el preprocesado
+// no la sortea), Tesseract sí lee la imagen a su tamaño real. Gris (sin color que
+// distraiga), más resolución si la imagen es pequeña (más píxeles por carácter
+// en texto denso) y normalizar contraste mejoran la lectura en la práctica.
+const ANCHO_MIN_TESSERACT = 2000;
+const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer> => {
+  try {
+    const { width = 0 } = await sharp(buffer).metadata();
+    let imagen = sharp(buffer).grayscale().normalize();
+    if (width > 0 && width < ANCHO_MIN_TESSERACT) {
+      imagen = imagen.resize({ width: Math.round(width * (ANCHO_MIN_TESSERACT / width)) });
+    }
+    return await imagen.png().toBuffer();
+  } catch (err) {
+    console.error("[extraccion] no se pudo preprocesar la imagen para Tesseract, se usa tal cual:", err);
+    return buffer;
+  }
+};
+
 const ocrConTesseract = async (buffer: Buffer): Promise<string> => {
   const worker = await obtenerWorkerTesseract();
-  const { data } = await worker.recognize(buffer);
+  const preparado = await prepararParaTesseract(buffer);
+  const { data } = await worker.recognize(preparado);
   return data.text ?? "";
 };
 
