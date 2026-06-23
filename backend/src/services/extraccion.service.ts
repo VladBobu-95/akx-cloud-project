@@ -136,22 +136,28 @@ const pareceFacturaConImportes = (texto: string): boolean => {
 };
 
 // ¿Lo que sacaron granite/deepseek se queda corto para ser un documento real?
-// Cubre tanto el vacío como respuestas cortas poco útiles tipo "Factura" (granite
-// reconoce el tipo de documento pero no llega a transcribirlo) o "No hay texto en
-// el documento" (granite alucina que no hay texto en una imagen perfectamente
-// legible — visto con una factura real de prueba). Es la señal para probar
-// Tesseract como último recurso.
-const UMBRAL_RESULTADO_POBRE = 15;
-// Granite a veces, ante un documento que no llega a transcribir, "se rinde" con
-// una META-descripción que habla SOBRE el documento en vez de citarlo (ej. "La
-// imagen contiene texto... incluye detalles como la fecha de emisión, monto
-// total..."). Tiene de sobra 15+ palabras (así que el chequeo de arriba no lo
-// pilla), pero no es contenido real, solo comentario — y al mencionar "factura"
-// dispara igualmente la escalada a deepseek-ocr, que si también falla deja esto
-// como resultado final, sin darle nunca su oportunidad a Tesseract.
+// OJO: NO es solo "pocas palabras" — una foto sin texto real con una buena
+// descripción corta ("Un árbol solitario con ramas largas.", 9 palabras) es un
+// resultado BUENO, y un umbral de longitud a secas lo trataba igual que un
+// fallo, disparando Tesseract sobre una foto sin nada que leer (que devuelve
+// ruido aleatorio... con muchas más "palabras" que la descripción buena, así que
+// ese ruido terminaba sustituyéndola). Se usan señales más específicas:
+//  - vacío,
+//  - una "meta-descripción" que habla SOBRE el documento en vez de citarlo (ej.
+//    "La imagen contiene texto... incluye detalles como la fecha de emisión..."),
+//  - una negación explícita de que haya texto (granite puede alucinar esto ante
+//    una factura perfectamente legible — visto con una factura real de prueba),
+//  - o una respuesta de un puñado de palabras sueltas sin verbo/frase real (ej.
+//    "Factura": reconoce el tipo de documento pero no llega a transcribirlo).
 const METADESCRIPCION = /^\s*(la imagen|esta imagen|el documento|la fotograf[ií]a|la foto)\s+(contiene|muestra|presenta|incluye|describe|parece)/i;
-const pareceResultadoPobre = (texto: string): boolean =>
-  texto.trim().split(/\s+/).filter(Boolean).length < UMBRAL_RESULTADO_POBRE || METADESCRIPCION.test(texto);
+const NEGACION_TEXTO = /\bno\s+(hay|contiene|se\s+(ve|aprecia)|tiene)\b[^.]{0,30}\btexto\b/i;
+const UMBRAL_MUY_CORTO = 4;
+const pareceResultadoPobre = (texto: string): boolean => {
+  const limpio = texto.trim();
+  if (!limpio) return true;
+  if (METADESCRIPCION.test(limpio) || NEGACION_TEXTO.test(limpio)) return true;
+  return limpio.split(/\s+/).filter(Boolean).length < UMBRAL_MUY_CORTO;
+};
 
 // Tesseract.js: OCR clásico (no es un LLM de visión), corre en CPU y no compite
 // por la VRAM con Ollama. Es la red de seguridad final cuando ni granite ni
