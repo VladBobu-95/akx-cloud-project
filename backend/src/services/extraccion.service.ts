@@ -1,6 +1,7 @@
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import sharp from "sharp";
+import { createWorker, type Worker } from "tesseract.js";
 import { env } from "../config/env";
 
 // MIME de un .docx (Word moderno).
@@ -134,6 +135,37 @@ const pareceFacturaConImportes = (texto: string): boolean => {
   return (t.match(/\d/g) ?? []).length >= 12;
 };
 
+// ¿Lo que sacaron granite/deepseek se queda corto para ser un documento real?
+// Cubre tanto el vacío como respuestas cortas poco útiles tipo "Factura" (granite
+// reconoce el tipo de documento pero no llega a transcribirlo) o "No hay texto en
+// el documento" (granite alucina que no hay texto en una imagen perfectamente
+// legible — visto con una factura real de prueba). Es la señal para probar
+// Tesseract como último recurso.
+const UMBRAL_RESULTADO_POBRE = 15;
+const pareceResultadoPobre = (texto: string): boolean =>
+  texto.trim().split(/\s+/).filter(Boolean).length < UMBRAL_RESULTADO_POBRE;
+
+// Tesseract.js: OCR clásico (no es un LLM de visión), corre en CPU y no compite
+// por la VRAM con Ollama. Es la red de seguridad final cuando ni granite ni
+// deepseek-ocr consiguen leer un documento bien impreso y legible — los modelos
+// de visión reescalan la imagen a una resolución de entrada fija internamente, y
+// con texto denso/pequeño pierden legibilidad por el camino; Tesseract procesa la
+// imagen a su tamaño real, así que es buen complemento justo donde esos modelos
+// fallan (texto impreso, buen contraste). Al revés, es peor que ellos con fotos o
+// fondos complejos — por eso va el último, no el primero, y solo se usa su
+// resultado si de verdad aporta más que lo que ya había (ver ocrImagen).
+let workerTesseract: Promise<Worker> | null = null;
+const obtenerWorkerTesseract = (): Promise<Worker> => {
+  if (!workerTesseract) workerTesseract = createWorker("spa");
+  return workerTesseract;
+};
+
+const ocrConTesseract = async (buffer: Buffer): Promise<string> => {
+  const worker = await obtenerWorkerTesseract();
+  const { data } = await worker.recognize(buffer);
+  return data.text ?? "";
+};
+
 // Refuerzo final por si el prompt de visionPrimeraPasada no basta: heurística
 // simple para detectar que el texto cayó (total o parcialmente) en inglés, por
 // densidad de stopwords inglesas muy comunes. OJO: granite a veces mezcla los
@@ -203,6 +235,13 @@ const aPng = async (buffer: Buffer): Promise<Buffer> => {
 //      los dígitos; si deepseek falla o alucina, nos quedamos con lo de granite.
 //   3. Si no parece factura (foto, o texto sin importes), se usa lo de granite —
 //      sin pagar la pasada lenta de deepseek.
+//   4. Si lo que queda hasta aquí es pobre (vacío, "Factura", "No hay texto"...),
+//      se prueba Tesseract (CPU, sin tocar la GPU) como último recurso — visto en
+//      la práctica: granite puede alucinar "no hay texto" ante una factura
+//      perfectamente legible porque su entrada de visión tiene una resolución
+//      fija y pierde el texto pequeño/denso por el camino; Tesseract no tiene
+//      ese límite. Solo se adopta su resultado si de verdad aporta más texto que
+//      lo que ya había (si también sale pobre, era de verdad una foto sin texto).
 // Si OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL (máquinas con un solo VLM), la 2ª
 // pasada se desactiva sola.
 const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
@@ -216,15 +255,26 @@ const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
   }
   primera = pareceBucleDegenerado(primera) ? "" : limpiarTablasHtml(primera.trim());
 
+  let resultado = primera;
   if (env.OLLAMA_OCR_MODEL !== env.OLLAMA_CAPTION_MODEL && pareceFacturaConImportes(primera)) {
     try {
       const ocr = await ocrConOllama(buffer);
-      if (ocr.trim() && !pareceBucleDegenerado(ocr)) return await asegurarEspanol(limpiarTablasHtml(ocr.trim()));
+      if (ocr.trim() && !pareceBucleDegenerado(ocr)) resultado = limpiarTablasHtml(ocr.trim());
     } catch (err) {
       console.error("[extraccion] OCR especialista (2ª pasada) falló:", err);
     }
   }
-  return await asegurarEspanol(primera);
+
+  if (pareceResultadoPobre(resultado)) {
+    try {
+      const tess = await ocrConTesseract(buffer);
+      if (!pareceResultadoPobre(tess)) resultado = limpiarTablasHtml(tess.trim());
+    } catch (err) {
+      console.error("[extraccion] Tesseract (3ª red) falló:", err);
+    }
+  }
+
+  return await asegurarEspanol(resultado);
 };
 
 // Carácter NUL: hay que quitarlo del texto extraído porque Postgres no admite
