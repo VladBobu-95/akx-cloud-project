@@ -98,6 +98,50 @@ const pareceFacturaConImportes = (texto: string): boolean => {
   return (t.match(/\d/g) ?? []).length >= 12;
 };
 
+// Refuerzo final por si el prompt de visionPrimeraPasada no basta: heurística
+// simple para detectar que el texto se quedó en inglés (sin tildes/ñ/¿/¡ y con
+// varias stopwords inglesas muy comunes). No es perfecta (frases cortas o muy
+// técnicas pueden colar falsos positivos/negativos), pero es suficiente como
+// red de seguridad antes de pagar una llamada extra de traducción.
+const STOPWORDS_INGLES = /\b(the|and|with|this|that|is|are|was|were|has|have|of|in|on|its|an|to|for)\b/gi;
+const pareceIngles = (texto: string): boolean => {
+  if (/[ñáéíóúÁÉÍÓÚ¿¡]/.test(texto)) return false; // marcas claras de español
+  const matches = texto.match(STOPWORDS_INGLES) ?? [];
+  return matches.length >= 2;
+};
+
+// Traduce con el modelo de chat principal (OLLAMA_MODEL: más grande y mucho más
+// obediente con instrucciones que el modelo de visión) solo cuando la heurística
+// anterior detecta inglés. Si la llamada falla, se devuelve el texto original sin
+// traducir en vez de perderlo.
+const traducirAlEspanol = async (texto: string): Promise<string> => {
+  try {
+    const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: env.OLLAMA_MODEL,
+        messages: [
+          {
+            role: "user",
+            content: `Traduce el siguiente texto al español. Si ya está en español, devuélvelo exactamente igual. No añadas explicaciones ni comentarios.\n\n${texto}`,
+          },
+        ],
+        stream: false,
+        options: { temperature: 0 },
+      }),
+    });
+    const data = (await res.json()) as { message?: { content?: string } };
+    return data.message?.content?.trim() || texto;
+  } catch (err) {
+    console.error("[extraccion] no se pudo traducir la descripción al español:", err);
+    return texto;
+  }
+};
+
+const asegurarEspanol = (texto: string): Promise<string> =>
+  pareceIngles(texto) ? traducirAlEspanol(texto) : Promise.resolve(texto);
+
 // Los modelos de visión de Ollama (vía llama.cpp) no decodifican WEBP de forma
 // fiable: con un WEBP normal (VP8, sin animación ni alpha) la 1ª pasada devolvía
 // "Failed to load image or audio file" en CPU, y llegó a tirar el proceso entero
@@ -136,12 +180,12 @@ const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
   if (env.OLLAMA_OCR_MODEL !== env.OLLAMA_CAPTION_MODEL && pareceFacturaConImportes(primera)) {
     try {
       const ocr = await ocrConOllama(buffer);
-      if (ocr.trim() && !pareceBucleDegenerado(ocr)) return ocr.trim();
+      if (ocr.trim() && !pareceBucleDegenerado(ocr)) return await asegurarEspanol(ocr.trim());
     } catch (err) {
       console.error("[extraccion] OCR especialista (2ª pasada) falló:", err);
     }
   }
-  return primera;
+  return await asegurarEspanol(primera);
 };
 
 // Carácter NUL: hay que quitarlo del texto extraído porque Postgres no admite
