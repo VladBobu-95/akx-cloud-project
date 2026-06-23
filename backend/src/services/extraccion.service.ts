@@ -1,5 +1,6 @@
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
+import sharp from "sharp";
 import { env } from "../config/env";
 
 // MIME de un .docx (Word moderno).
@@ -93,6 +94,21 @@ const pareceFacturaConImportes = (texto: string): boolean => {
   return (t.match(/\d/g) ?? []).length >= 12;
 };
 
+// Los modelos de visión de Ollama (vía llama.cpp) no decodifican WEBP de forma
+// fiable: con un WEBP normal (VP8, sin animación ni alpha) la 1ª pasada devolvía
+// "Failed to load image or audio file" en CPU, y llegó a tirar el proceso entero
+// del runner en GPU. Reconvertir siempre a PNG antes de mandarla evita el
+// problema de raíz para WEBP y de paso normaliza cualquier otro formato (JPEG
+// con orientación EXIF rara, etc.) a algo que el decodificador soporta bien.
+const aPng = async (buffer: Buffer): Promise<Buffer> => {
+  try {
+    return await sharp(buffer).png().toBuffer();
+  } catch (err) {
+    console.error("[extraccion] no se pudo normalizar la imagen a PNG, se manda tal cual:", err);
+    return buffer;
+  }
+};
+
 // OCR/descripción de una imagen, cascada "ligero primero":
 //   1. granite (rápido) transcribe el texto o describe la foto.
 //   2. Si lo que sacó parece una factura con importes Y hay un modelo de OCR
@@ -102,7 +118,9 @@ const pareceFacturaConImportes = (texto: string): boolean => {
 //      sin pagar la pasada lenta de deepseek.
 // Si OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL (máquinas con un solo VLM), la 2ª
 // pasada se desactiva sola.
-const ocrImagen = async (buffer: Buffer): Promise<string> => {
+const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
+  const buffer = await aPng(bufferOriginal);
+
   let primera = "";
   try {
     primera = await visionPrimeraPasada(buffer);
