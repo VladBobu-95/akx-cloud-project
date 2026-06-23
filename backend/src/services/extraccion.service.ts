@@ -1,7 +1,7 @@
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import sharp from "sharp";
-import { createWorker, type Worker } from "tesseract.js";
+import { createWorker, PSM, type Worker } from "tesseract.js";
 import { env } from "../config/env";
 
 // MIME de un .docx (Word moderno).
@@ -180,11 +180,27 @@ const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer> => {
   }
 };
 
+// Dos pasadas con distinto modo de segmentación de página (PSM), no una sola:
+// probado con dos facturas reales, el modo automático (AUTO, el de por defecto)
+// lee bien la mayoría del documento pero en una tabla con bordes puede saltarse
+// FILAS ENTERAS (pasaba directo de la cabecera de la tabla al subtotal, sin
+// ninguna línea de artículo); el modo "texto disperso" (SPARSE_TEXT) sí las
+// recupera, pero pierde precisión en otras partes de OTRO documento (cantidades,
+// algún dígito mal leído). Ningún modo gana siempre, así que se combinan los dos
+// resultados en vez de escoger uno — la extracción de datos de factura (IA, más
+// adelante) ya tolera texto redundante/ruidoso y se queda con los datos reales
+// que encuentre en cualquiera de los dos.
 const ocrConTesseract = async (buffer: Buffer): Promise<string> => {
   const worker = await obtenerWorkerTesseract();
   const preparado = await prepararParaTesseract(buffer);
-  const { data } = await worker.recognize(preparado);
-  return data.text ?? "";
+
+  await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+  const auto = await worker.recognize(preparado);
+
+  await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+  const disperso = await worker.recognize(preparado);
+
+  return `${auto.data.text ?? ""}\n\n${disperso.data.text ?? ""}`.trim();
 };
 
 // Refuerzo final por si el prompt de visionPrimeraPasada no basta: heurística
