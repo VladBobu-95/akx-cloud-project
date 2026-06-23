@@ -60,6 +60,17 @@ export class ChatService {
     this.persistir();
   }
 
+  // Borra TODO el estado del chat: el historial y el borrador en memoria (este
+  // servicio es un singleton que sobrevive al logout porque la SPA no recarga) y
+  // también lo persistido en localStorage. Lo llama AuthService al cerrar sesión
+  // y al iniciar una nueva, para que el chat de un usuario no se filtre al
+  // siguiente que use el mismo navegador.
+  reset() {
+    this.mensajes.set([]);
+    this.borrador.set('');
+    localStorage.removeItem(CHAT_KEY);
+  }
+
   // Envía el historial de la conversación y devuelve la respuesta del asistente.
   enviar(mensajes: MensajeChat[]) {
     return this.http.post<RespuestaChat>(this.base, { mensajes });

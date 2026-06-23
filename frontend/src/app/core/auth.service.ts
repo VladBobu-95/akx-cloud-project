@@ -4,6 +4,7 @@ import { Router } from '@angular/router';
 import { tap } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { AuthResponse, Usuario } from './models';
+import { ChatService } from './chat.service';
 
 const TOKEN_KEY = 'akx_token';
 const USER_KEY = 'akx_user';
@@ -12,6 +13,7 @@ const USER_KEY = 'akx_user';
 export class AuthService {
   private http = inject(HttpClient);
   private router = inject(Router);
+  private chat = inject(ChatService);
   private base = `${environment.apiUrl}/api/auth`;
 
   // Usuario actual reactivo (para mostrar el email en la navbar, etc.)
@@ -39,6 +41,7 @@ export class AuthService {
   logout(): void {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    this.chat.reset(); // que el chat no se filtre al siguiente usuario
     this.usuario.set(null);
     this.router.navigate(['/login']);
   }
@@ -52,6 +55,9 @@ export class AuthService {
   }
 
   private guardarSesion(r: AuthResponse): void {
+    // Arranca una sesión nueva en limpio: si el navegador traía chat de otro
+    // usuario (o el mismo sin haber cerrado sesión), no debe heredarse.
+    this.chat.reset();
     localStorage.setItem(TOKEN_KEY, r.token);
     this.guardarUsuario(r.usuario);
   }
