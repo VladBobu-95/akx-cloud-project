@@ -93,6 +93,24 @@ const pareceBucleDegenerado = (texto: string): boolean => {
   return unicas.size / palabras.length < 0.15;
 };
 
+// deepseek-ocr transcribe las tablas de una factura como HTML (<table><td>...),
+// pero pdf-parse (el otro origen posible de este mismo texto) nunca devuelve
+// HTML, solo texto plano. Sin esto, el contenido guardado (lo que se ve al
+// "abrir"/"leer" el archivo en el chat, lo que se indexa para RAG, y lo que se
+// le pasa a la extracción de datos de la factura) sale con pinta distinta según
+// si vino de OCR o de un PDF. Se aplica DESPUÉS de pareceBucleDegenerado (que sí
+// necesita ver las etiquetas originales para distinguir tabla legítima de sopa
+// de tags vacía) y solo sobre el texto que ya se decidió conservar.
+const limpiarTablasHtml = (texto: string): string =>
+  texto
+    .replace(/<\/tr\s*>/gi, "\n")
+    .replace(/<\/td\s*>/gi, " | ")
+    .replace(/<[^>]*>/g, "")
+    .replace(/ \|\s*\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 // ¿El texto de la 1ª pasada parece una factura/recibo con importes? Es la señal
 // para escalar al OCR especialista (deepseek-ocr), que no se equivoca con los
 // dígitos. Una descripción de foto o un texto sin importes no lo dispara, así nos
@@ -185,12 +203,12 @@ const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
   } catch (err) {
     console.error("[extraccion] visión (1ª pasada) falló:", err);
   }
-  primera = pareceBucleDegenerado(primera) ? "" : primera.trim();
+  primera = pareceBucleDegenerado(primera) ? "" : limpiarTablasHtml(primera.trim());
 
   if (env.OLLAMA_OCR_MODEL !== env.OLLAMA_CAPTION_MODEL && pareceFacturaConImportes(primera)) {
     try {
       const ocr = await ocrConOllama(buffer);
-      if (ocr.trim() && !pareceBucleDegenerado(ocr)) return await asegurarEspanol(ocr.trim());
+      if (ocr.trim() && !pareceBucleDegenerado(ocr)) return await asegurarEspanol(limpiarTablasHtml(ocr.trim()));
     } catch (err) {
       console.error("[extraccion] OCR especialista (2ª pasada) falló:", err);
     }
