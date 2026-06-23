@@ -1032,7 +1032,13 @@ export const chatear = async (
   // sin pasar por Ollama; si no está escaneada, se dice al instante en vez de
   // escanearla sin que el usuario lo pidiera.
   const tieneIntencionAbrirFactura = new RegExp(`\\b${VERBO_ABRIR}\\b`).test(msgSinTildes);
-  const matchNombreFactura = msgLower.match(/\bfactura[\w.-]*\b/);
+  // OJO: el sufijo tiene que exigir un separador (dígito/_/-) justo tras
+  // "factura(s)", no cualquier letra — sin esto, "facturajpg.jpg" (un archivo
+  // cualquiera que solo tiene la mala suerte de empezar por "factura") se
+  // tragaba entero como nombre de factura, y al no tener fila en la tabla
+  // Factura (porque no es una factura real) se le decía "escanéala primero" en
+  // vez de simplemente abrirlo como el archivo normal que es.
+  const matchNombreFactura = msgLower.match(/\bfacturas?(?:[\d_-]\w*)?\b/);
   const esAbrirFactura =
     tieneIntencionAbrirFactura &&
     !!matchNombreFactura &&
@@ -1067,7 +1073,7 @@ export const chatear = async (
   // todas las nombradas. Si se mencionan 2+ identificadores de factura junto a
   // "total(es)"/"facturado", se resuelve aquí directamente con "totales_facturas".
   const pideTotales = /\btotal(es)?\b/.test(msgLower) || /\bfacturado\b/.test(msgLower);
-  const nombresFactura = [...msgLower.matchAll(/\bfactura[\w.-]*\b/g)].map((m) => m[0]);
+  const nombresFactura = [...msgLower.matchAll(/\bfacturas?(?:[\d_-]\w*)?\b/g)].map((m) => m[0]);
   const esTotalesMultiple =
     pideTotales &&
     nombresFactura.length >= 2 &&
