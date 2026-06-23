@@ -573,6 +573,11 @@ const ejecutarTool = async (
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
         if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        // Mismo criterio que el pre-flight de "abre/lee X": si ya hay una factura
+        // escaneada en BD para este archivo, su resumen (datos estructurados) es
+        // mucho más legible que el texto crudo de OCR/pdf-parse.
+        const factura = await obtenerFactura(usuarioId, res.archivo!.id, res.archivo!.nombre);
+        if (factura.encontrada) return { ok: true, resumen: factura.resumen };
         const contenido = await leerTextoArchivo(res.archivo!.id, usuarioId);
         return { nombre: res.archivo!.nombre, contenido };
       }
@@ -1236,6 +1241,15 @@ export const chatear = async (
     // dejamos pasar al flujo normal (era una pregunta, no un "abre X").
     if (res.archivo) {
       const archivoBoton = [{ id: res.archivo.id, nombre: res.archivo.nombre }];
+      // Si el archivo YA tiene una factura escaneada en BD (datos estructurados:
+      // numero/fecha/importes/líneas), se muestra ese resumen limpio en vez del
+      // texto crudo de OCR/pdf-parse — el mismo formato que usan obtener_factura
+      // y el .md de resumen, mucho más legible que el texto plano con el ruido
+      // típico de una tabla escaneada (columnas mezcladas, etc).
+      const factura = await obtenerFactura(usuarioId, res.archivo.id, res.archivo.nombre);
+      if (factura.encontrada) {
+        return { respuesta: factura.resumen!, acciones, archivos: archivoBoton };
+      }
       try {
         const contenido = await leerTextoArchivo(res.archivo.id, usuarioId);
         return { respuesta: `**${res.archivo.nombre}**:\n\n${contenido}`, acciones, archivos: archivoBoton };
