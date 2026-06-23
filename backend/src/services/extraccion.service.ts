@@ -136,27 +136,37 @@ const pareceFacturaConImportes = (texto: string): boolean => {
 };
 
 // ¿Lo que sacaron granite/deepseek se queda corto para ser un documento real?
-// OJO: NO es solo "pocas palabras" — una foto sin texto real con una buena
-// descripción corta ("Un árbol solitario con ramas largas.", 9 palabras) es un
-// resultado BUENO, y un umbral de longitud a secas lo trataba igual que un
-// fallo, disparando Tesseract sobre una foto sin nada que leer (que devuelve
-// ruido aleatorio... con muchas más "palabras" que la descripción buena, así que
-// ese ruido terminaba sustituyéndola). Se usan señales más específicas:
-//  - vacío,
-//  - una "meta-descripción" que habla SOBRE el documento en vez de citarlo (ej.
-//    "La imagen contiene texto... incluye detalles como la fecha de emisión..."),
-//  - una negación explícita de que haya texto (granite puede alucinar esto ante
-//    una factura perfectamente legible — visto con una factura real de prueba),
-//  - o una respuesta de un puñado de palabras sueltas sin verbo/frase real (ej.
+// OJO: NO es solo "pocas palabras", ni basta con buscar una frase concreta EN
+// CUALQUIER PARTE del texto — una buena descripción real de una foto sin texto
+// también puede empezar con "La imagen presenta..." (forma normal de describir
+// algo) o terminar con "No hay texto presente en la imagen" (el propio prompt le
+// pide confirmarlo), sin que eso la convierta en basura. Si se descarta solo por
+// contener esa frase, se pierde una respuesta buena y se dispara Tesseract sobre
+// una foto sin nada que leer — que devuelve ruido aleatorio con MÁS "palabras"
+// que la descripción buena, y ese ruido termina sustituyéndola (regresión real).
+// Por eso:
+//  - la meta-descripción ("habla SOBRE la estructura del documento citando los
+//    NOMBRES de los campos, no sus valores": "incluye detalles como la fecha de
+//    emisión...", "está dirigida a un cliente llamado...") se caza por frases
+//    concretas de ESE patrón, no por cómo empieza la frase — esas frases no
+//    aparecen en una descripción real de una foto;
+//  - la negación de texto ("no hay texto...") solo cuenta si el RESTO de la
+//    respuesta es corto — si va seguida de una descripción larga real, no es un
+//    fallo, es la conclusión normal de una buena respuesta;
+//  - y una respuesta de un puñado de palabras sueltas sin verbo/frase real (ej.
 //    "Factura": reconoce el tipo de documento pero no llega a transcribirlo).
-const METADESCRIPCION = /^\s*(la imagen|esta imagen|el documento|la fotograf[ií]a|la foto)\s+(contiene|muestra|presenta|incluye|describe|parece)/i;
+const METADESCRIPCION =
+  /\b(detalles como|estructurad[oa] en formato|columnas para|secciones para|menciona que|se proporciona un|dirigid[oa] a un cliente llamado|relacionad[oa] con una factura)\b/i;
 const NEGACION_TEXTO = /\bno\s+(hay|contiene|se\s+(ve|aprecia)|tiene)\b[^.]{0,30}\btexto\b/i;
 const UMBRAL_MUY_CORTO = 4;
+const UMBRAL_NEGACION = 15;
 const pareceResultadoPobre = (texto: string): boolean => {
   const limpio = texto.trim();
   if (!limpio) return true;
-  if (METADESCRIPCION.test(limpio) || NEGACION_TEXTO.test(limpio)) return true;
-  return limpio.split(/\s+/).filter(Boolean).length < UMBRAL_MUY_CORTO;
+  if (METADESCRIPCION.test(limpio)) return true;
+  const palabras = limpio.split(/\s+/).filter(Boolean).length;
+  if (NEGACION_TEXTO.test(limpio) && palabras < UMBRAL_NEGACION) return true;
+  return palabras < UMBRAL_MUY_CORTO;
 };
 
 // Tesseract.js: OCR clásico (no es un LLM de visión), corre en CPU y no compite
