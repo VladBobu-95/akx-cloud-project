@@ -71,6 +71,7 @@ const visionPrimeraPasada = (buffer: Buffer): Promise<string> =>
 // CONTENIDO tras quitar las etiquetas: si apenas queda texto real, o si lo que
 // queda es muy repetitivo, es un bucle/placeholder y se descarta.
 const pareceBucleDegenerado = (texto: string): boolean => {
+  const teniaTags = /<[^>]*>/.test(texto);
   const sinTags = texto
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
@@ -78,8 +79,14 @@ const pareceBucleDegenerado = (texto: string): boolean => {
   // "None" (placeholder de Python/JS) como prácticamente todo el contenido.
   if (/^\W*None\W*$/i.test(sinTags)) return true;
   const palabras = sinTags.toLowerCase().split(/\s+/).filter(Boolean);
-  // Tras quitar etiquetas casi no queda texto → era sopa de tags vacía.
-  if (palabras.length < 3) return true;
+  if (palabras.length === 0) return true; // no quedó nada
+  // Tras quitar etiquetas casi no queda texto → era sopa de tags vacía. OJO: esto
+  // solo tiene sentido si el texto original tenía etiquetas — granite a veces da
+  // una respuesta corta pero válida sin ninguna etiqueta (ej. "Factura" ante un
+  // documento denso que no llegó a transcribir), y esa NO es basura: descartarla
+  // aquí le cortaba el paso a la escalada a deepseek-ocr, que es la que de verdad
+  // tenía que leer la factura.
+  if (teniaTags && palabras.length < 3) return true;
   if (palabras.length < 30) return false;
   // Texto largo pero con muy poca variedad de palabras → repetición degenerada.
   const unicas = new Set(palabras);
