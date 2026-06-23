@@ -99,13 +99,16 @@ const pareceFacturaConImportes = (texto: string): boolean => {
 };
 
 // Refuerzo final por si el prompt de visionPrimeraPasada no basta: heurística
-// simple para detectar que el texto se quedó en inglés (sin tildes/ñ/¿/¡ y con
-// varias stopwords inglesas muy comunes). No es perfecta (frases cortas o muy
-// técnicas pueden colar falsos positivos/negativos), pero es suficiente como
-// red de seguridad antes de pagar una llamada extra de traducción.
+// simple para detectar que el texto cayó (total o parcialmente) en inglés, por
+// densidad de stopwords inglesas muy comunes. OJO: granite a veces mezcla los
+// dos idiomas en la misma frase ("La imagen muestra un árbol... under a clear
+// blue sky"), así que NO se puede descartar inglés solo por encontrar una tilde
+// suelta en otra parte del texto — eso dejaba pasar justo los casos mixtos que
+// más interesa traducir. No es perfecta (frases cortas o muy técnicas pueden
+// colar falsos positivos/negativos), pero es suficiente como red de seguridad
+// antes de pagar una llamada extra de traducción.
 const STOPWORDS_INGLES = /\b(the|and|with|this|that|is|are|was|were|has|have|of|in|on|its|an|to|for)\b/gi;
 const pareceIngles = (texto: string): boolean => {
-  if (/[ñáéíóúÁÉÍÓÚ¿¡]/.test(texto)) return false; // marcas claras de español
   const matches = texto.match(STOPWORDS_INGLES) ?? [];
   return matches.length >= 2;
 };
