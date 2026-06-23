@@ -232,8 +232,14 @@ export const combinarContenido = (
   descripcionManual?: string | null,
 ): string => {
   const partes: string[] = [];
-  if (descripcionManual?.trim()) partes.push(`Descripción: ${descripcionManual.trim()}`);
-  if (textoExtraido?.trim()) partes.push(`Texto detectado (OCR):\n${textoExtraido.trim()}`);
+  const ocr = textoExtraido?.trim();
+  const manual = descripcionManual?.trim();
+  if (manual) partes.push(`Descripción: ${manual}`);
+  // Si el OCR ya está copiado dentro de la descripción manual (el escaneo
+  // manual de algo que no es factura lo guarda ahí como sustituto del modal de
+  // descripción), no se repite por separado — mostrarlo dos veces es ruido, no
+  // información nueva.
+  if (ocr && !(manual && manual.includes(ocr))) partes.push(`Texto detectado (OCR):\n${ocr}`);
   return partes.join("\n\n");
 };
 
