@@ -1,0 +1,31 @@
+<header class="navbar">
+  <div class="container nav-inner">
+    <a class="logo" routerLink="/inicio">
+      <span class="logo-mark">▲</span> AKX <span class="logo-light">Cloud</span>
+    </a>
+
+    <nav class="nav-links">
+      <a routerLink="/inicio" routerLinkActive="active">Inicio</a>
+      <a routerLink="/archivos" routerLinkActive="active">Mis archivos</a>
+      <a routerLink="/papelera" routerLinkActive="active">Papelera</a>
+    </nav>
+
+    <span class="spacer"></span>
+
+    <a class="perfil" routerLink="/perfil" title="Mi perfil">
+      <span class="avatar">
+        @if (auth.usuario()?.avatar) {
+          <img [src]="auth.usuario()?.avatar" alt="avatar" />
+        } @else {
+          {{ inicial() }}
+        }
+      </span>
+      <span class="user-nombre">{{ auth.usuario()?.nombre || auth.usuario()?.email }}</span>
+    </a>
+    <button class="btn btn-outline btn-sm" (click)="auth.logout()">Cerrar sesión</button>
+  </div>
+</header>
+
+<main class="container page">
+  <router-outlet />
+</main>

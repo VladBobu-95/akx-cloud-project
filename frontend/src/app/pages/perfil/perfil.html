@@ -1,0 +1,73 @@
+    <div class="head">
+      <h1>Mi perfil</h1>
+    </div>
+
+    <!-- Avatar -->
+    <div class="card seccion">
+      <h2>Imagen de perfil</h2>
+      <div class="avatar-row">
+        <span class="avatar-grande">
+          @if (auth.usuario()?.avatar) {
+            <img [src]="auth.usuario()?.avatar" alt="avatar" />
+          } @else {
+            {{ inicial() }}
+          }
+        </span>
+        <div class="avatar-acciones">
+          <label class="file-pick">
+            <input type="file" accept="image/*" (change)="seleccionarAvatar($event)" hidden />
+            <span class="btn btn-outline">{{ subiendo() ? 'Guardando…' : 'Cambiar imagen' }}</span>
+          </label>
+          @if (auth.usuario()?.avatar) {
+            <button class="btn btn-ghost" (click)="quitarAvatar()">Quitar</button>
+          }
+        </div>
+      </div>
+    </div>
+
+    <!-- Apariencia -->
+    <div class="card seccion">
+      <h2>Apariencia</h2>
+      <label class="switch-row">
+        <span>Modo oscuro</span>
+        <input type="checkbox" [checked]="theme.oscuro()" (change)="theme.alternar()" />
+      </label>
+    </div>
+
+    <!-- Nombre -->
+    <div class="card seccion">
+      <h2>Nombre de usuario</h2>
+      <div class="field">
+        <input class="input" [(ngModel)]="nombre" placeholder="Tu nombre" />
+      </div>
+      <button class="btn btn-primary" (click)="guardarNombre()" [disabled]="!nombre.trim()">
+        Guardar nombre
+      </button>
+    </div>
+
+    <!-- Contraseña -->
+    <div class="card seccion">
+      <h2>Cambiar contraseña</h2>
+      <div class="field">
+        <input
+          class="input"
+          type="password"
+          [(ngModel)]="password"
+          placeholder="Nueva contraseña (mín. 8)"
+          autocomplete="new-password"
+        />
+      </div>
+      <button class="btn btn-primary" (click)="guardarPassword()" [disabled]="password.length < 8">
+        Cambiar contraseña
+      </button>
+    </div>
+
+    <!-- Info de cuenta -->
+    <div class="card seccion">
+      <h2>Información de la cuenta</h2>
+      <p class="info"><span class="muted">Email:</span> {{ auth.usuario()?.email }}</p>
+      <p class="info">
+        <span class="muted">Miembro desde:</span>
+        {{ auth.usuario()?.creadoEn ? (auth.usuario()?.creadoEn | date: 'dd/MM/yyyy') : '—' }}
+      </p>
+    </div>

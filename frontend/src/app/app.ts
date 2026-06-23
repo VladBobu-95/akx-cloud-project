@@ -6,10 +6,7 @@ import { ThemeService } from './core/theme.service';
 @Component({
   selector: 'app-root',
   imports: [RouterOutlet, ToastsComponent],
-  template: `
-    <router-outlet />
-    <app-toasts />
-  `,
+  templateUrl: './app.html',
 })
 export class App {
   // Instanciar el servicio de tema aplica el modo (claro/oscuro) guardado al arrancar.

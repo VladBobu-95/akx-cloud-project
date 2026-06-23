@@ -1,0 +1,5 @@
+<div class="toasts">
+  @for (t of toast.toasts(); track t.id) {
+    <div class="toast" [class.error]="t.tipo === 'error'">{{ t.texto }}</div>
+  }
+</div>

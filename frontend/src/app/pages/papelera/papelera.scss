@@ -1,0 +1,17 @@
+      .head {
+        margin-bottom: 18px;
+      }
+      .list {
+        padding: 6px 8px;
+      }
+      .nombre {
+        font-weight: 600;
+      }
+      .acciones {
+        display: flex;
+        gap: 6px;
+        justify-content: flex-end;
+      }
+      .acciones-col {
+        text-align: right;
+      }

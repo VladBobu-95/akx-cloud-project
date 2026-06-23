@@ -1,0 +1,91 @@
+      .auth-wrap {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background:
+          radial-gradient(1200px 500px at 50% -10%, var(--green-soft), transparent), var(--bg);
+      }
+      .auth-card {
+        width: 100%;
+        max-width: 500px;
+        padding: 38px;
+        font-size: 1.15rem;
+      }
+      .auth-card .input {
+        padding: 14px 16px;
+        font-size: 1.05rem;
+      }
+      .auth-card .btn {
+        padding: 14px;
+        font-size: 1.05rem;
+      }
+      .auth-card label {
+        font-size: 0.95rem;
+      }
+      .brand {
+        text-align: center;
+        font-weight: 800;
+        font-size: 2.9rem;
+        letter-spacing: -0.02em;
+        margin-bottom: 24px;
+      }
+      .brand .green,
+      .logo-mark {
+        color: var(--green);
+      }
+      .tabs {
+        display: flex;
+        background: var(--surface);
+        border-radius: 999px;
+        padding: 4px;
+        margin-bottom: 22px;
+      }
+      .tabs button {
+        flex: 1;
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-weight: 600;
+        color: var(--muted);
+        padding: 12px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .tabs button.active {
+        background: var(--bg);
+        color: var(--green-dark);
+        box-shadow: var(--shadow-sm);
+      }
+      .full {
+        width: 100%;
+        margin-top: 4px;
+      }
+      .error-msg {
+        text-align: center;
+        font-size: 0.95rem;
+        color: #d33;
+      }
+      .input-pass {
+        position: relative;
+      }
+      .input-pass .input {
+        padding-right: 42px;
+      }
+      .ojo {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--muted);
+        padding: 4px;
+        display: flex;
+        align-items: center;
+      }
+      .ojo:hover {
+        color: var(--text);
+      }

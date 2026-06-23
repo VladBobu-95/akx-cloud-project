@@ -3,13 +3,7 @@ import { ToastService } from '../core/toast.service';
 
 @Component({
   selector: 'app-toasts',
-  template: `
-    <div class="toasts">
-      @for (t of toast.toasts(); track t.id) {
-        <div class="toast" [class.error]="t.tipo === 'error'">{{ t.texto }}</div>
-      }
-    </div>
-  `,
+  templateUrl: './toasts.component.html',
 })
 export class ToastsComponent {
   protected toast = inject(ToastService);
