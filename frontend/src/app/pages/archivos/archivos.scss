@@ -278,16 +278,10 @@
       .col-subido {
         text-align: center;
       }
-      /* Columna "Estado": ancho fijo y pequeño (antes crecía de más) y el
-         icono centrado de verdad con flex, no solo text-align (con eso el
-         glifo del check quedaba descentrado hacia la derecha). Solo se marca
-         lo que necesita atención (en proceso o fallido); pendiente/no-factura/
-         no-aplica se dejan en blanco a propósito. */
       .col-estado {
         width: 120px;
         text-align: center;
       }
-      /* "Escaneando" con su animación al lado mientras se procesa. */
       .col-estado .estado-prog {
         display: inline-flex;
         align-items: center;
@@ -325,4 +319,57 @@
         to {
           transform: rotate(360deg);
         }
+      }
+      .paginacion {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 8px 6px;
+        flex-wrap: wrap;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      .paginacion .pag-size,
+      .paginacion .pag-jump {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .paginacion select,
+      .paginacion input {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 4px 8px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      .paginacion select {
+        cursor: pointer;
+      }
+      .paginacion input {
+        width: 40px;
+        text-align: center;
+        cursor: text;
+      }
+      .paginacion input[type='number'] {
+        -moz-appearance: textfield;
+        appearance: textfield;
+      }
+      .paginacion input[type='number']::-webkit-outer-spin-button,
+      .paginacion input[type='number']::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      /* Feedback al pasar el ratón / enfocar. */
+      .paginacion input:hover,
+      .paginacion select:hover {
+        border-color: var(--green);
+      }
+      .paginacion input:focus,
+      .paginacion select:focus {
+        outline: none;
+        border-color: var(--green);
+        box-shadow: 0 0 0 2px var(--green-soft);
       }

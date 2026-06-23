@@ -1,4 +1,4 @@
-import { Component, DestroyRef, HostListener, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, HostListener, computed, effect, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin, of, map, catchError, finalize } from 'rxjs';
@@ -119,12 +119,66 @@ export class ArchivosPage {
     this.todos().filter((a) => this.normalizar(a.carpeta) === this.rutaActual()),
   );
 
+  // --- Paginación (en cliente) ---
+  // Todo el listado ya está en memoria (el árbol se construye en cliente), así
+  // que paginamos la vista de la carpeta actual sin tocar el backend. Carpetas y
+  // archivos se tratan como UNA secuencia (carpetas primero) que se parte en
+  // páginas de PAGE_SIZE filas.
+  protected readonly OPCIONES_TAMANO = [10, 15, 20, 50];
+  protected tamanoPagina = signal(15);
+  protected pagina = signal(0);
+
+  protected totalFilas = computed(() => this.subcarpetas().length + this.archivosActuales().length);
+  protected totalPaginas = computed(() => Math.max(1, Math.ceil(this.totalFilas() / this.tamanoPagina())));
+
+  // Rebanada visible en la página actual de la secuencia global [carpetas…, archivos…].
+  protected subcarpetasPag = computed(() => {
+    const f = this.subcarpetas().length;
+    const ini = this.pagina() * this.tamanoPagina();
+    return this.subcarpetas().slice(Math.min(ini, f), Math.min(ini + this.tamanoPagina(), f));
+  });
+  protected archivosActualesPag = computed(() => {
+    const f = this.subcarpetas().length;
+    const a = this.archivosActuales().length;
+    const ini = this.pagina() * this.tamanoPagina();
+    const desde = Math.max(0, Math.min(ini - f, a));
+    const hasta = Math.max(0, Math.min(ini + this.tamanoPagina() - f, a));
+    return this.archivosActuales().slice(desde, hasta);
+  });
+
+  protected paginaAnterior() {
+    if (this.pagina() > 0) this.pagina.update((p) => p - 1);
+  }
+  protected paginaSiguiente() {
+    if (this.pagina() < this.totalPaginas() - 1) this.pagina.update((p) => p + 1);
+  }
+  // Cambiar el nº de filas por página: vuelve a la primera para no quedar en una
+  // página que ya no existe con el nuevo tamaño.
+  protected cambiarTamano(valor: number) {
+    this.tamanoPagina.set(valor);
+    this.pagina.set(0);
+  }
+  // Saltar a una página escrita a mano (1-based). Acota a [1, totalPaginas]; ignora
+  // texto no numérico o valores < 1.
+  protected irAPagina(valor: string | number) {
+    const n = Math.trunc(Number(valor));
+    if (!Number.isFinite(n) || n < 1) return;
+    this.pagina.set(Math.min(n, this.totalPaginas()) - 1);
+  }
+
   constructor() {
     this.cargar();
     const id = setInterval(() => {
       if (this.hayEscaneoEnCurso()) this.refrescarEstados();
     }, 3000);
     inject(DestroyRef).onDestroy(() => clearInterval(id));
+    // Si se reduce el nº de filas (borrados) y la página actual queda fuera de
+    // rango, la fijamos a la última válida. (Al cambiar de carpeta se resetea a
+    // 0 desde los métodos de navegación.)
+    effect(() => {
+      const tp = this.totalPaginas();
+      this.pagina.update((p) => (p > tp - 1 ? tp - 1 : p));
+    });
   }
 
   // Refresco silencioso (sin tocar `cargando`, que mostraría "Cargando…" y
@@ -204,17 +258,20 @@ export class ArchivosPage {
   // Lleva a la carpeta donde está el archivo del resultado.
   irAArchivo(carpeta: string) {
     this.rutaActual.set(this.normalizar(carpeta));
+    this.pagina.set(0);
     this.limpiarBusqueda();
   }
 
   // --- Navegación ---
   entrar(ruta: string) {
     this.rutaActual.set(ruta);
+    this.pagina.set(0);
     this.limpiarSeleccion();
   }
   volver() {
     if (this.rutaActual() !== '/') {
       this.rutaActual.set(this.padre(this.rutaActual()));
+      this.pagina.set(0);
       this.limpiarSeleccion();
     }
   }

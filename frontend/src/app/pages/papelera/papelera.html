@@ -29,7 +29,7 @@
             </tr>
           </thead>
           <tbody>
-            @for (a of archivos(); track a.id) {
+            @for (a of archivosPag(); track a.id) {
               <tr>
                 <td class="nombre">{{ a.nombre }}</td>
                 <td><span class="badge badge-muted">{{ a.carpeta }}</span></td>
@@ -49,6 +49,33 @@
             }
           </tbody>
         </table>
+        @if (archivos().length > 0) {
+          <div class="paginacion">
+            <label class="pag-size">
+              Por página:
+              <select [ngModel]="tamanoPagina()" (ngModelChange)="cambiarTamano($event)">
+                @for (n of OPCIONES_TAMANO; track n) {
+                  <option [ngValue]="n">{{ n }}</option>
+                }
+              </select>
+            </label>
+            <span class="spacer"></span>
+            <button class="btn btn-outline btn-sm" [disabled]="pagina() === 0" (click)="paginaAnterior()" >←</button>
+            <span class="pag-jump">
+              Página
+              <input
+                type="number"
+                min="1"
+                [max]="totalPaginas()"
+                [value]="pagina() + 1"
+                (change)="irAPagina($any($event.target).value)"
+                (keyup.enter)="irAPagina($any($event.target).value)"
+              />
+              de {{ totalPaginas() }}
+            </span>
+            <button class="btn btn-outline btn-sm" [disabled]="pagina() >= totalPaginas() - 1" (click)="paginaSiguiente()" >→</button>
+          </div>
+        }
       }
     </div>
 

@@ -117,7 +117,7 @@
             </thead>
             <tbody>
               <!-- Carpetas primero -->
-              @for (c of subcarpetas(); track c) {
+              @for (c of subcarpetasPag(); track c) {
                 <tr
                   class="fila-carpeta"
                   [class.drop]="destinoHover() === c"
@@ -149,7 +149,7 @@
                 </tr>
               }
               <!-- Archivos después -->
-              @for (a of archivosActuales(); track a.id) {
+              @for (a of archivosActualesPag(); track a.id) {
                 <tr
                   [class.seleccionada]="estaSeleccionado(claveArchivo(a.id))"
                   (pointerdown)="iniciarPosibleArrastre($event, 'archivo', a.id, a.nombre)"
@@ -174,6 +174,33 @@
               }
             </tbody>
           </table>
+          @if (totalFilas() > 0) {
+            <div class="paginacion">
+              <label class="pag-size">
+                Por página:
+                <select [ngModel]="tamanoPagina()" (ngModelChange)="cambiarTamano($event)">
+                  @for (n of OPCIONES_TAMANO; track n) {
+                    <option [ngValue]="n">{{ n }}</option>
+                  }
+                </select>
+              </label>
+              <span class="spacer"></span>
+              <button class="btn btn-outline btn-sm" [disabled]="pagina() === 0" (click)="paginaAnterior()" >←</button>
+              <span class="pag-jump">
+                Página
+                <input
+                  type="number"
+                  min="1"
+                  [max]="totalPaginas()"
+                  [value]="pagina() + 1"
+                  (change)="irAPagina($any($event.target).value)"
+                  (keyup.enter)="irAPagina($any($event.target).value)"
+                />
+                de {{ totalPaginas() }}
+              </span>
+              <button class="btn btn-outline btn-sm" [disabled]="pagina() >= totalPaginas() - 1" (click)="paginaSiguiente()" >→</button>
+            </div>
+          }
         }
       </div>
     </div>

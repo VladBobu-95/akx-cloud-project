@@ -1,5 +1,6 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { ArchivosService } from '../../core/archivos.service';
 import { ToastService } from '../../core/toast.service';
 import { Archivo } from '../../core/models';
@@ -8,7 +9,7 @@ import { mensajeError } from '../../shared/errores';
 
 @Component({
   selector: 'app-papelera',
-  imports: [DatePipe, FileSizePipe],
+  imports: [DatePipe, FileSizePipe, FormsModule],
   templateUrl: './papelera.html',
   styleUrl: './papelera.scss',
 })
@@ -25,6 +26,31 @@ export class PapeleraPage {
     onOk: () => void;
   } | null>(null);
 
+  // --- Paginación (en cliente: la papelera trae todos los eliminados) ---
+  protected readonly OPCIONES_TAMANO = [10, 15, 20, 50];
+  protected tamanoPagina = signal(15);
+  protected pagina = signal(0);
+  protected totalPaginas = computed(() => Math.max(1, Math.ceil(this.archivos().length / this.tamanoPagina())));
+  protected archivosPag = computed(() => {
+    const ini = this.pagina() * this.tamanoPagina();
+    return this.archivos().slice(ini, ini + this.tamanoPagina());
+  });
+  protected paginaAnterior() {
+    if (this.pagina() > 0) this.pagina.update((p) => p - 1);
+  }
+  protected paginaSiguiente() {
+    if (this.pagina() < this.totalPaginas() - 1) this.pagina.update((p) => p + 1);
+  }
+  protected cambiarTamano(valor: number) {
+    this.tamanoPagina.set(valor);
+    this.pagina.set(0);
+  }
+  protected irAPagina(valor: string | number) {
+    const n = Math.trunc(Number(valor));
+    if (!Number.isFinite(n) || n < 1) return;
+    this.pagina.set(Math.min(n, this.totalPaginas()) - 1);
+  }
+
   ejecutarConfirmacion() {
     const c = this.confirmacion();
     this.confirmacion.set(null);
@@ -33,6 +59,12 @@ export class PapeleraPage {
 
   constructor() {
     this.cargar();
+    // Si al restaurar/borrar la lista se acorta y la página queda fuera de rango,
+    // la fijamos a la última válida.
+    effect(() => {
+      const tp = this.totalPaginas();
+      this.pagina.update((p) => (p > tp - 1 ? tp - 1 : p));
+    });
   }
 
   cargar() {
