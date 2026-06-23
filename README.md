@@ -11,8 +11,8 @@ buscar por el **contenido** de los documentos (RAG con embeddings en pgvector).
 | Servidor HTTP / rutas | Express 5 + TypeScript (ts-node en dev, `tsc` en build) |
 | ORM / base de datos | TypeORM + PostgreSQL 16 (imagen **pgvector**) |
 | Almacenamiento de archivos | **MinIO** (S3-compatible), descarga por streaming desde la API |
-| IA / asistente | **Ollama**: chat `qwen2.5-coder:14b` (*tool calling*) + embeddings `bge-m3` (RAG) + visión `granite3.2-vision` (rápido) → `deepseek-ocr` (OCR fiel de facturas) |
-| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: cascada de visión — granite transcribe/describe y, si parece factura, deepseek-ocr re-lee para no fallar dígitos. Se puede añadir una descripción a mano (`PATCH .../descripcion`) |
+| IA / asistente | **Ollama**: chat `qwen2.5-coder:14b` (*tool calling*) + embeddings `bge-m3` (RAG) + visión `granite3.2-vision` (rápido) → `deepseek-ocr` (OCR fiel de facturas) → **Tesseract.js** (red de seguridad por CPU si los dos modelos anteriores se quedan cortos) |
+| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: cascada de 3 pasadas — granite transcribe/describe, si parece factura deepseek-ocr re-lee para no fallar dígitos, y si ninguno de los dos da algo aprovechable entra Tesseract.js (OCR clásico, preprocesado con sharp). Se puede añadir una descripción a mano (`PATCH .../descripcion`) |
 | Subida de ficheros | Multer (en memoria, filtro MIME, límite 50 MB) |
 | Auth | JWT (`jsonwebtoken`) + bcrypt |
 | Validación | Zod (entrada y variables de entorno) |
@@ -228,8 +228,10 @@ con ejemplos reales de frases que entiende:
   - "escanea la factura foto.jpg" (con pista opcional si es difícil de leer; si no
     hay datos reales de una factura, ya no se inventa una)
   - Las fotos se describen **automáticamente** al subir (1ª pasada de visión con
-    granite). Si quieres afinar esa descripción para encontrarla mejor en el buscador,
-    en el explorador: clic derecho → **Añadir descripción**.
+    granite; si esa pasada se queda corta —vacía, una meta-descripción sin contenido
+    real, o una negación de texto sin nada más detrás—, entra Tesseract.js como red de
+    seguridad por CPU). Si quieres afinar esa descripción para encontrarla mejor en el
+    buscador, en el explorador: clic derecho → **Añadir descripción**.
 
 **Limitaciones conocidas del chatbot** (verificadas probando todas las frases de
 arriba contra el modelo real): copiar/mover con la frase exacta "a **la carpeta**
@@ -328,4 +330,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 1 — Drive básico:** auth JWT, subir/descargar/listar/carpetas, papelera, tests
 - [x] **Fase 2 — Chatbot:** Ollama + tool calling sobre archivos y carpetas
 - [x] **Fase 3 — RAG:** extracción de texto (PDF/Word/texto), embeddings (bge-m3 + pgvector), búsqueda híbrida
-- [x] **Fase 4 — Facturas:** visión en cascada (granite3.2-vision → deepseek-ocr para facturas), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción de fotos a mano opcional
+- [x] **Fase 4 — Facturas:** visión en cascada de 3 pasadas (granite3.2-vision → deepseek-ocr para facturas → Tesseract.js como red de seguridad por CPU), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción de fotos a mano opcional

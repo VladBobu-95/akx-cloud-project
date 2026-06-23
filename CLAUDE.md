@@ -27,7 +27,7 @@ akx-cloud-project/
 | Objetos | MinIO (S3-compatible) |
 | IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5:3b/7b` como fallback en máquinas pequeñas |
 | IA embeddings | Ollama — `bge-m3` (1024 dims, multilingüe) |
-| Visión imágenes | Cascada Ollama: **granite3.2-vision** (`OLLAMA_CAPTION_MODEL`, 1ª pasada rápida: transcribe o describe) → **deepseek-ocr** (`OLLAMA_OCR_MODEL`, 2ª pasada solo si parece factura, OCR fiel de importes). Ver "OCR y descripción de imágenes" |
+| Visión imágenes | Cascada de 3 pasadas: **granite3.2-vision** (`OLLAMA_CAPTION_MODEL`, transcribe o describe) → **deepseek-ocr** (`OLLAMA_OCR_MODEL`, solo si parece factura) → **Tesseract.js** (clásico, CPU, red de seguridad si las dos anteriores se quedan cortas). Ver "OCR y descripción de imágenes" |
 | Extracción PDF | pdf-parse v2 |
 | Extracción DOCX | mammoth |
 | Auth | JWT + bcrypt |
@@ -245,8 +245,8 @@ frontend lo usa para mostrar un botón "Abrir `<nombre>`" por archivo bajo la re
    - **Listado combinado**: "lista/pásame todo lo que tengo" (archivos + carpetas), con soporte para acotar a una carpeta concreta o solo la raíz.
    - **¿Qué hay en la papelera?**: el prompt de facturas es grande y sesgaba al modelo hacia esas tools para esta pregunta (devolvía contenido random no relacionado); se resuelve aquí con `listar_papelera`.
    - **Existencia/ubicación de un archivo** ("¿tengo/hay/existe... archivo X?", "dónde está/busca el archivo X"): comprobación instantánea con `buscar_archivos`. Sin esto, el modelo a veces decidía "comprobar" escaneando con OCR (lento, y en servidores sin GPU puede acabar tirando el proceso — se ve como "no se puede conectar con el servidor" en el front). La respuesta incluye un botón "Abrir" por cada coincidencia encontrada.
-   - **Abrir/mostrar una factura** ("abre/muéstrame factura_X"): lee siempre de BD vía `obtener_factura`, nunca relanza un escaneo OCR. Si la factura no se ha escaneado, lo dice al instante en vez de escanearla sin que se pida (antes parecía que la petición "no funcionaba" cuando en realidad el modelo se había puesto a escanear por su cuenta).
-   - **Abrir/mostrar/leer un archivo NORMAL** ("lee/muestra/ábreme X" sin nada más en el mensaje): igual que con facturas, lee el contenido directamente (`leerTextoArchivo`) sin pasar por el modelo, y la respuesta trae el botón "Abrir `<nombre>`". "Muestra X" ya funcionaba por sí solo vía el modelo, pero "abre X" (sin pre-flight) lo rechazaba con "no puedo abrir archivos en este chat" — el modelo no seguía de forma fiable la aclaración del prompt de que "abrir" = "leer/mostrar" en este chat, así que "abre"/"abrir" se añadió directamente al pre-flight (reutilizando `VERBO_ABRIR`) en vez de depender de esa instrucción.
+   - **Abrir/mostrar una factura** ("abre/muéstrame factura_X"): lee siempre de BD vía `obtener_factura`, nunca relanza un escaneo OCR. Si la factura no se ha escaneado, lo dice al instante en vez de escanearla sin que se pida (antes parecía que la petición "no funcionaba" cuando en realidad el modelo se había puesto a escanear por su cuenta). El patrón que detecta el identificador de factura es `\bfacturas?(?:[\d_-]\w*)?\b` (exige un separador — dígito, `_` o `-` — antes de cualquier sufijo): con el patrón anterior, más laxo (`\bfactura[\w.-]*\b`), "abre facturajpg.png" se interpretaba como el nombre de una factura ("facturajpg") y fallaba con "no tiene una factura escaneada todavía" en vez de caer en el pre-flight genérico de archivos.
+   - **Abrir/mostrar/leer un archivo NORMAL** ("lee/muestra/ábreme X" sin nada más en el mensaje): igual que con facturas, lee el contenido directamente (`leerTextoArchivo`) sin pasar por el modelo, y la respuesta trae el botón "Abrir `<nombre>`". "Muestra X" ya funcionaba por sí solo vía el modelo, pero "abre X" (sin pre-flight) lo rechazaba con "no puedo abrir archivos en este chat" — el modelo no seguía de forma fiable la aclaración del prompt de que "abrir" = "leer/mostrar" en este chat, así que "abre"/"abrir" se añadió directamente al pre-flight (reutilizando `VERBO_ABRIR`) en vez de depender de esa instrucción. Antes de leer el texto en crudo, comprueba con `obtenerFactura` si el archivo resuelto ya tiene una factura escaneada en BD — si la tiene, devuelve el resumen markdown de la factura (`##` con totales/líneas) en vez del texto/OCR sin formatear; evita que "abre factura_03.pdf" muestre el contenido plano del PDF cuando ya existe un resumen mejor.
    - **Palabras prohibidas como nombre de archivo** (`STOPWORDS_NOMBRE`: `todo`, `eso`, `mi`, `la`, `el`...): tanto este pre-flight como el de borrar un archivo concreto capturan "lo que sigue al verbo" como nombre de archivo — sin esta lista, "muestra todo lo que tengo" se interpretaba como "lee un archivo llamado 'todo'" (error "no encontré ningún archivo que coincida con todo") en vez de caer en el pre-flight de listado de más abajo, que va DESPUÉS en el código.
    - **Totales de varias facturas nombradas** ("totales de factura_01 y factura_02" sin un verbo como "dame"): el modelo podía interpretarlo como abrir solo la primera factura mencionada en vez de sumar el total de todas; se detecta y se llama `totales_facturas` directamente con el array de identificadores.
    - **Ranking de ventas con periodo** ("qué es lo que más se vende en julio", "lo más/menos vendido", "producto más vendido", "qué vendí más", "ranking de ventas"): el modelo pequeño a veces acertaba los argumentos (`{mes:7, orden:"mas"}`) pero NO llamaba a la tool — los escupía como JSON en texto al usuario. Se resuelve con `ventas_top`, parseando el mes por su NOMBRE (enero…diciembre) y el año si aparece. No captura cuando se nombra un producto concreto ("cuánto he vendido de X") ni los rankings de cliente.
@@ -310,32 +310,74 @@ gesto de clic directo se bloquea.
 
 ## OCR y descripción de imágenes (`backend/src/services/extraccion.service.ts`)
 
-`ocrImagen()` usa una **cascada "ligero primero"** de dos modelos (configurables por `.env`):
+`ocrImagen()` usa una **cascada "ligero primero"** de tres niveles (los dos primeros son
+modelos Ollama configurables por `.env`; el tercero es CPU pura, sin Ollama):
 
-1. **1ª pasada — granite3.2-vision** (`OLLAMA_CAPTION_MODEL`): modelo de visión ligero
+1. **Normalización a PNG** (`aPng`, sharp): TODA imagen se reconvierte a PNG antes de
+   mandarla a Ollama, sea cual sea su formato original. Sin esto, **WEBP** hacía fallar la
+   decodificación en llama.cpp (`Failed to load image or audio file`; en el servidor con
+   GPU llegaba a tirar el proceso entero de Ollama, no solo la petición).
+2. **1ª pasada — granite3.2-vision** (`OLLAMA_CAPTION_MODEL`): modelo de visión ligero
    (~2.4GB, cabe entero en GPU). Rápido y hace las dos cosas en una sola llamada —
    transcribe el texto si lo hay, o describe la foto si no — sin el bucle degenerado de
-   un modelo solo-OCR.
-2. **¿Parece factura con importes?** (`pareceFacturaConImportes`): si el texto de la 1ª
+   un modelo solo-OCR. El prompt fuerza explícitamente que la descripción sea **siempre en
+   español**: el modelo a veces ignoraba esa instrucción y devolvía inglés, o mezclaba los
+   dos idiomas en la misma frase.
+3. **¿Parece factura con importes?** (`pareceFacturaConImportes`): si el texto de la 1ª
    pasada tiene símbolos de moneda / palabras clave (factura, IVA, total…) o muchos
    dígitos, se escala a la 2ª pasada. Si no (una foto, o texto sin importes), se queda con
    lo de granite — sin pagar la pasada lenta.
-3. **2ª pasada — deepseek-ocr** (`OLLAMA_OCR_MODEL`): OCR especialista, la transcripción
+4. **2ª pasada — deepseek-ocr** (`OLLAMA_OCR_MODEL`): OCR especialista, la transcripción
    más fiel de tablas/importes (no se equivoca con los dígitos). Solo se lanza para lo que
-   parece factura. Si falla o alucina, se conserva lo de granite.
+   parece factura. Si falla o alucina, se conserva lo de granite. Su salida puede traer
+   tablas en HTML (`<table><tr><td>…`); `limpiarTablasHtml()` las convierte a texto plano
+   con `|` como separador de columna, para que el formato sea consistente con lo que
+   produce `pdf-parse` (que nunca emite HTML).
+5. **¿El resultado se queda corto?** (`pareceResultadoPobre`): si lo anterior (granite o
+   deepseek) es vacío, una "meta-descripción" (habla SOBRE la estructura del documento
+   citando NOMBRES de campos en vez de sus valores reales — ej. "incluye detalles como la
+   fecha de emisión...", "dirigida a un cliente llamado...") o una negación de texto
+   ("no hay texto...") **sin nada útil detrás** (menos de 15 palabras en total), se pasa a
+   la 3ª red. **Cuidado con falsos positivos**: una descripción real de una foto también
+   puede empezar con "La imagen presenta..." o terminar con "No hay texto presente en la
+   imagen" (el propio prompt le pide confirmarlo) — por eso la meta-descripción se detecta
+   por frases concretas de ESE patrón (no por cómo empieza la frase) y la negación de texto
+   solo cuenta si el resto de la respuesta es corto (ver historial de bugs: una respuesta
+   buena de 40+ palabras sobre un árbol se descartaba igual por contener "no hay texto" al
+   final, y el ruido de Tesseract la sustituía).
+6. **3ª red — Tesseract.js** (`ocrConTesseract`, worker singleton `createWorker("spa")`):
+   OCR clásico por CPU, sin alucinaciones — si no encuentra nada, devuelve poco o nada, no
+   se inventa contenido. Antes de leer, la imagen se preprocesa (`prepararParaTesseract`:
+   escala de grises + normalización de contraste + reescalado a un ancho mínimo de 2000px
+   con sharp) y se ejecutan **dos pasadas con distinto modo de segmentación** (`PSM.AUTO` +
+   `PSM.SPARSE_TEXT`), concatenando ambos resultados: en pruebas reales con una tabla de
+   factura con bordes, `PSM.AUTO` se saltaba todas las líneas de artículos (pasaba
+   directamente de la cabecera a "Subtotal"), mientras que `PSM.SPARSE_TEXT` las recuperaba
+   pero perdía precisión en otros datos (cantidades, "IVA" mal leído como "16V") en otra
+   factura distinta — ningún modo por sí solo cubre ambos casos, así que se quedan los dos
+   resultados y la IA de extracción de facturas tolera el ruido/redundancia y escoge el
+   dato correcto de cualquiera de los dos.
+7. **Español garantizado** (`asegurarEspanol`/`pareceIngles`/`traducirAlEspanol`): red de
+   seguridad final — si el resultado (de cualquiera de las 3 pasadas) tiene 2+ palabras
+   típicas inglesas (`the`, `and`, `with`...), se traduce al español con el modelo de chat
+   principal (`OLLAMA_MODEL`) antes de guardarlo.
 
 Si `OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL`, la 2ª pasada se desactiva sola (máquinas
 con un solo VLM). Esta cascada sustituyó al esquema anterior (solo deepseek-ocr +
 descripción manual obligatoria): se comprobó con pruebas reales que **ningún modelo
 pequeño iguala a deepseek-ocr en fidelidad de OCR** (granite acertaba importes pero
 fallaba dígitos finos como un teléfono), mientras que deepseek **alucina** ante fotos sin
-texto — de ahí el reparto: granite clasifica/describe barato, deepseek afina las facturas.
+texto (a veces entra en un bucle degenerado repitiendo la misma etiqueta hasta agotar
+tokens) — de ahí el reparto: granite clasifica/describe barato, deepseek afina las
+facturas, y Tesseract entra solo cuando ninguno de los dos VLM dio algo aprovechable.
 
 `pareceBucleDegenerado()` descarta la basura de un modelo solo-OCR ante una imagen sin
 texto (bucle repitiendo `<table:tr><td>…`, o `None`). **Importante:** juzga el contenido
-**tras quitar las etiquetas HTML**, no la mera presencia de `<table>/<td>` — porque
-deepseek emite esas etiquetas también para transcribir tablas de factura LEGÍTIMAS
-(tratarlas como basura descartaba transcripciones buenas).
+**tras quitar las etiquetas HTML**, y la regla de "menos de 3 palabras → basura" solo se
+aplica si el texto original TENÍA etiquetas — porque deepseek emite esas etiquetas también
+para transcribir tablas de factura LEGÍTIMAS, y una respuesta corta SIN etiquetas (ej.
+"Factura", granite reconociendo el tipo de documento sin llegar a transcribirlo) es un
+resultado pobre por otra razón, no un bucle degenerado.
 
 En una GPU de 8GB, deepseek-ocr no entra entero (corre parcialmente en CPU, ~2 min por
 imagen) — pero con esta cascada solo se invoca en imágenes que parecen factura, no en
@@ -344,12 +386,22 @@ toda foto. Todo en segundo plano, no bloquea la subida.
 ### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
 Ya **no** hay modal obligatorio al subir (se quitó: estorbaba en cada subida de fotos).
 Con la cascada de visión, una foto sin texto ya se **describe automáticamente** al subir
-(la 1ª pasada de granite, ver arriba), así que normalmente es buscable sin hacer nada. El
-endpoint `PATCH .../descripcion` queda para **corregir/afinar** esa descripción a mano (o
-escaneándola desde el explorador: si no es factura, la "pista" + el OCR se guardan como
-`descripcionManual`, ver `escanearFactura`). Lo que se guarde se reindexa para RAG
+(la 1ª pasada de granite, o Tesseract si granite/deepseek se quedaron cortos — ver arriba),
+así que normalmente es buscable sin hacer nada. El endpoint `PATCH .../descripcion` queda
+para **corregir/afinar** esa descripción a mano. Lo que se guarde se reindexa para RAG
 (`indexarTexto` en `rag.service.ts`, combinado con el texto extraído vía
 `combinarContenido`), para que "muéstrame"/la búsqueda semántica lo encuentren.
+`combinarContenido` omite repetir el texto OCR si ya está contenido dentro de la
+descripción manual (puede pasar si se escaneó manualmente algo que no resultó ser factura
+— ver más abajo), para no mostrar el mismo contenido dos veces bajo "Descripción:" y
+"Texto detectado (OCR):".
+
+Escanear manualmente (vía chat, "escanea X") algo que **no** resulta ser una factura ya no
+copia `textoExtraido` dentro de `descripcionManual` — solo se guarda ahí la **pista** real
+que el usuario haya dado en ese momento. Antes, sin pista, se copiaba el OCR ya existente
+de todas formas, dejando `descripcionManual` idéntica a `textoExtraido` sin que el usuario
+hubiera escrito nada, y la próxima vez que se abría el archivo se mostraba mal etiquetada
+como "Descripción:" en vez de "Texto detectado (OCR):".
 
 ---
 
@@ -456,11 +508,12 @@ npm start    # ng serve → http://localhost:4200
 - **Cambiar de modelo**: editar `OLLAMA_MODEL` en `.env` y `docker compose up -d api` (recarga .env, sin rebuild). El modelo debe estar descargado en el Ollama correspondiente.
 - **"Copia/mueve X a LA CARPETA Y"**: con esa frase exacta (la palabra "carpeta" antes del destino) el modelo no llama a ninguna tool de forma consistente, incluso con `qwen2.5-coder:7b`. Decir la ruta directa ("a /Y" o "a Y") sí funciona. No hay pre-flight para esto todavía.
 - **"Lee X" con contenido muy corto**: a veces el modelo solo confirma "lo he leído" en vez de mostrar el contenido cuando este es trivial (una sola frase corta); con contenido más rico (una factura completa) sí lo resume bien. Se intentó un ajuste de prompt sin éxito total.
-- **PDFs escaneados (sin capa de texto)**: se leen con `pdf-parse`, que no hace OCR; solo las **imágenes** pasan por deepseek-ocr. Si una factura es un PDF puramente escaneado, habría que rasterizar las páginas a imagen antes del OCR (pendiente).
+- **PDFs escaneados (sin capa de texto)**: se leen con `pdf-parse`, que no hace OCR; solo las **imágenes** pasan por la cascada de visión (granite/deepseek/Tesseract). Si una factura es un PDF puramente escaneado, habría que rasterizar las páginas a imagen antes del OCR (pendiente).
 - **Auto-escaneo al subir**: se ejecuta para todo PDF/imagen subido; con la guardia `soloSiFactura` no guarda los que no parecen factura, pero igualmente consume cómputo de OCR+IA por cada uno.
 - **GPU pequeña (8GB)**: deepseek-ocr (6.7GB) no entra entero y corre parcial en CPU
   (~2 min por imagen) — no bloquea la subida (es en segundo plano), pero conviene
-  saberlo al probar en máquinas sin una GPU más grande.
+  saberlo al probar en máquinas sin una GPU más grande. Tesseract (la 3ª red) corre
+  siempre en CPU, así que no añade presión sobre la GPU cuando entra en juego.
 - **Tipos de archivo permitidos**: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máximo 50 MB.
 - **Subida**: un archivo por petición HTTP; múltiples archivos → peticiones paralelas en el frontend.
 - El chat renderiza la respuesta del bot como markdown real (con `marked`, igual que el visor de `.md` del explorador): títulos, tablas, listas y negritas se ven formateados, no como texto plano con `#`/`**`/`|`. Los mensajes del usuario sí se muestran tal cual (texto plano, `white-space: pre-wrap`). Se usa `breaks: true` para que las líneas `✓ ...` de las acciones respeten el salto de línea simple en vez de fundirse en un párrafo.
