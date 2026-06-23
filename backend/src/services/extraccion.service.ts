@@ -51,10 +51,14 @@ const ocrConOllama = (buffer: Buffer): Promise<string> =>
 // 1ª pasada: modelo de visión ligero (granite3.2-vision). Rápido, cabe entero en
 // GPU y hace las dos cosas — transcribe el texto si lo hay, o describe la foto si
 // no — sin entrar en el bucle degenerado de un modelo solo-OCR.
+// El refuerzo de idioma va solo en la rama de descripción libre: al transcribir,
+// el idioma de salida ya viene dado por el propio documento; pero generando una
+// descripción desde cero, granite3.2-vision (modelo pequeño) a veces ignora "en
+// español" y cae al inglés, su idioma dominante de entrenamiento para captioning.
 const visionPrimeraPasada = (buffer: Buffer): Promise<string> =>
   consultarVision(
     env.OLLAMA_CAPTION_MODEL,
-    "Si la imagen contiene texto (factura, recibo, documento), transcríbelo TODO tal cual aparece, con sus números e importes. Si NO contiene texto, describe brevemente en español lo que se ve. No añadas explicaciones.",
+    "Si la imagen contiene texto (factura, recibo, documento), transcríbelo TODO tal cual aparece, con sus números e importes. Si NO contiene texto, describe brevemente lo que se ve. IMPORTANTE: la descripción debe estar SIEMPRE en español, nunca en inglés ni en otro idioma. No añadas explicaciones.",
     buffer,
   );
 
