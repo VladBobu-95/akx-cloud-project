@@ -7,6 +7,7 @@ import { LineaFactura } from "../entities/LineaFactura";
 import { AppError } from "../utils/errors";
 import { crearArchivoTexto, borrarPermanente, combinarContenido } from "./archivos.service";
 import { actualizarDescripcionManual } from "./rag.service";
+import { pareceFacturaConImportes } from "./extraccion.service";
 
 const CARPETA_FACTURAS = "/facturas";
 
@@ -68,7 +69,12 @@ const SCHEMA_FACTURA = {
       },
     },
   },
-  required: ["numero", "fecha", "emisor", "cliente", "subtotal", "iva", "total", "lineas"],
+  // NO se marca ningún campo como required: con la decodificación restringida de
+  // Ollama, exigir todos los campos obliga al modelo a INVENTAR valores cuando el
+  // texto no los tiene (una foto sin factura salía como factura completa). Dejándolos
+  // opcionales, la IA puede devolver lo que de verdad encuentre (o nada), y la guarda
+  // de `escanearFactura` decide si hay datos suficientes para ser una factura.
+  required: [],
 };
 
 const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => {
@@ -254,7 +260,17 @@ export const escanearFactura = async (
   await archivoRepo.update(archivo.id, { estadoEscaneo: "escaneando" });
   try {
     const contenido = leerContenidoFactura(archivo, opts.pista);
-    const datos = await extraerDatosFactura(contenido);
+    // Gate previo a la IA: solo extraemos si el contenido tiene ALGUNA señal de
+    // factura (importes/palabras clave/dígitos). El SCHEMA_FACTURA marca todos
+    // los campos como required, así que la decodificación restringida de Ollama
+    // FUERZA al modelo a rellenarlos aunque el texto sea la descripción de una
+    // foto sin facturas — y entonces inventa emisor/cliente/importes de la nada
+    // (visto en producción: una foto de unos materiales salía como "Factura 1,
+    // Empresa S.A., 141.60 €"). Si no parece factura, no llamamos a la IA y
+    // dejamos que la guarda de abajo lo trate como "no_factura".
+    const datos: DatosFactura = pareceFacturaConImportes(contenido)
+      ? await extraerDatosFactura(contenido)
+      : { lineas: [] };
     datos.archivoNombre = archivo.nombre;
 
     // ¿Parece una factura real? Exige TANTO un importe real (no solo líneas con
@@ -275,6 +291,14 @@ export const escanearFactura = async (
     );
     if (!tieneImportes || !tieneIdentificacion) {
       await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
+      // Si un escaneo anterior llegó a guardar una factura (inventada) para este
+      // archivo, ahora que sabemos que NO es factura la eliminamos: si no, seguiría
+      // apareciendo en "abre X" y en la analítica pese a este resultado.
+      await AppDataSource.getRepository(Factura)
+        .createQueryBuilder()
+        .delete()
+        .where(`"archivoId" = :a AND "propietarioId" = :u`, { a: archivo.id, u: usuarioId })
+        .execute();
       if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
 
       // Escaneo MANUAL de algo que no es factura: ya no hay modal obligatorio

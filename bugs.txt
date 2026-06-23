@@ -1,5 +1,6 @@
 
 - si borras factura se tiene que borrar tmb desde resumen(/facturas)
+- problemas con 123 (ficheros grandes?)
 - cuando se escanean cosas (el chat tiene que prohibir o infomrar)
 - mejorrar errores (abre mientras escanea)
 - el buscador tarda mucho, es por si se escanea algo al mismo tiempo?

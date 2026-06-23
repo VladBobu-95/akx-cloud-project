@@ -99,6 +99,13 @@ const pareceBucleDegenerado = (texto: string): boolean => {
   // aquí le cortaba el paso a la escalada a deepseek-ocr, que es la que de verdad
   // tenía que leer la factura.
   if (teniaTags && palabras.length < 3) return true;
+  // Ristra de números sueltos ("1 2 3 ... 64"): un modelo de OCR que se cuelga
+  // contando (visto al echar el prompt + contar). Todos los enteros son distintos,
+  // así que el chequeo de repetición de abajo NO lo caza por variedad; pero no es
+  // texto real — una factura trae importes con decimales y palabras, no enteros
+  // consecutivos sueltos.
+  const enteros = palabras.filter((p) => /^\d+$/.test(p));
+  if (enteros.length >= 15 && enteros.length / palabras.length > 0.5) return true;
   if (palabras.length < 30) return false;
   // Texto largo pero con muy poca variedad de palabras → repetición degenerada.
   const unicas = new Set(palabras);
@@ -127,12 +134,20 @@ const limpiarTablasHtml = (texto: string): string =>
 // para escalar al OCR especialista (deepseek-ocr), que no se equivoca con los
 // dígitos. Una descripción de foto o un texto sin importes no lo dispara, así nos
 // ahorramos la pasada lenta de deepseek en todo lo que no es factura.
-const pareceFacturaConImportes = (texto: string): boolean => {
+export const pareceFacturaConImportes = (texto: string): boolean => {
   const t = texto.toLowerCase();
-  if (/[€$]|\beuros?\b|\biva\b|\bfactura\b|\bsubtotal\b|\btotal\b|\bimporte\b|\bprecio\b|\bcantidad\b|\brecibo\b/.test(t))
-    return true;
-  // Muchos dígitos → probable tabla/documento numérico.
-  return (t.match(/\d/g) ?? []).length >= 12;
+  // Señal FIABLE de factura/recibo: un importe monetario de verdad — símbolo de
+  // moneda pegado a dígitos (€ 120 / 120€) o un número con decimales de céntimos
+  // (120,00 / 1.234,56 / 50.00). El umbral antiguo ("una palabra suelta como
+  // 'total'/'importe', o ≥12 dígitos cualesquiera") colaba con basura: el eco del
+  // prompt del OCR ("...número, importe, fecha... 1 2 3 ... 64") contiene
+  // "importe" y 60+ dígitos, y una descripción normal de foto dice "total"/
+  // "cantidad" sin ser una factura. Pedir un importe con formato monetario evita
+  // ambos falsos positivos.
+  if (/[€$]\s*\d|\d\s*[€$]|\b\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\b/.test(t)) return true;
+  // Sin importe explícito, solo cuentan términos INEQUÍVOCOS de factura (no
+  // "total"/"precio"/"cantidad", que salen en descripciones de fotos cualesquiera).
+  return /\bfactura\b|\biva\b|\bsubtotal\b|\bbase imponible\b|\brecibo\b/.test(t);
 };
 
 // ¿Lo que sacaron granite/deepseek se queda corto para ser un documento real?
