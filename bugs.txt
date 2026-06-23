@@ -1,7 +1,15 @@
 
+- si borras factura se tiene que borrar tmb desde resumen(/facturas)
+- cuando se escanean cosas (el chat tiene que prohibir o infomrar)
+- mejorrar errores (abre mientras escanea)
+- el buscador tarda mucho, es por si se escanea algo al mismo tiempo?
+- bugs que puedes salir con la carpeta facturas
+- puede ser que al aparecer la carpeta facuturas se resaturo arboles qunue lo hya borrado?
+- highlight palabra en buscador
 - el texto del chat se guarda de un usuario  otro
 - si se sube un archiv oque no reconoce ,error. El chat si no sabe algo error
 - un pdf con imagenes como sabe si utilizar pdf parse o no
+- si subes imagen i factura a la vez , factura tiene prioridad
 - escanear despues de subir(añadir estado)
 -el cambiar nombre no va en ficheros
 - al selecionar autocompletado en login  usuario y depsues contraseña desaparece la linea vertical
