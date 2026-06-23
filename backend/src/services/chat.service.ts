@@ -573,9 +573,15 @@ const ejecutarTool = async (
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
         if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
-        // Mismo criterio que el pre-flight de "abre/lee X": si ya hay una factura
-        // escaneada en BD para este archivo, su resumen (datos estructurados) es
-        // mucho más legible que el texto crudo de OCR/pdf-parse.
+        // Mismo criterio que el pre-flight de "abre/lee X": si todavía se está
+        // indexando/escaneando en segundo plano, el texto puede no existir o
+        // estar a medias — se avisa en vez de devolver eso.
+        if (res.archivo!.estadoEscaneo === "pendiente" || res.archivo!.estadoEscaneo === "escaneando") {
+          return { error: `"${res.archivo!.nombre}" todavía se está procesando. Inténtalo de nuevo en unos segundos.` };
+        }
+        // Si ya hay una factura escaneada en BD para este archivo, su resumen
+        // (datos estructurados) es mucho más legible que el texto crudo de
+        // OCR/pdf-parse.
         const factura = await obtenerFactura(usuarioId, res.archivo!.id, res.archivo!.nombre);
         if (factura.encontrada) return { ok: true, resumen: factura.resumen };
         const contenido = await leerTextoArchivo(res.archivo!.id, usuarioId);
@@ -1058,6 +1064,13 @@ export const chatear = async (
         .join("\n");
       return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
     }
+    if (res.archivo!.estadoEscaneo === "pendiente" || res.archivo!.estadoEscaneo === "escaneando") {
+      return {
+        respuesta: `"${res.archivo!.nombre}" todavía se está escaneando. Inténtalo de nuevo en unos segundos.`,
+        acciones,
+        archivos: [{ id: res.archivo!.id, nombre: res.archivo!.nombre }],
+      };
+    }
     const r = await obtenerFactura(usuarioId, res.archivo!.id, res.archivo!.nombre);
     if (!r.encontrada) {
       return {
@@ -1241,6 +1254,18 @@ export const chatear = async (
     // dejamos pasar al flujo normal (era una pregunta, no un "abre X").
     if (res.archivo) {
       const archivoBoton = [{ id: res.archivo.id, nombre: res.archivo.nombre }];
+      // El indexado RAG (OCR) y el auto-escaneo de factura corren en segundo
+      // plano al subir; mientras estadoEscaneo sea "pendiente"/"escaneando",
+      // textoExtraido puede no existir todavía o tener un resultado intermedio
+      // (ej. el ruido de Tesseract antes de que termine el resumen de factura
+      // bonito) — se avisa en vez de devolver ese contenido a medias.
+      if (res.archivo.estadoEscaneo === "pendiente" || res.archivo.estadoEscaneo === "escaneando") {
+        return {
+          respuesta: `"${res.archivo.nombre}" todavía se está procesando. Inténtalo de nuevo en unos segundos.`,
+          acciones,
+          archivos: archivoBoton,
+        };
+      }
       // Si el archivo YA tiene una factura escaneada en BD (datos estructurados:
       // numero/fecha/importes/líneas), se muestra ese resumen limpio en vez del
       // texto crudo de OCR/pdf-parse — el mismo formato que usan obtener_factura
