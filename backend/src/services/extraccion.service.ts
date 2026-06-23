@@ -31,9 +31,20 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
       options: { temperature: 0, num_predict: MAX_TOKENS_OCR },
     }),
   });
-  const data = (await res.json()) as { message?: { content?: string }; error?: string };
+  const data = (await res.json()) as {
+    message?: { content?: string };
+    error?: string;
+    done?: boolean;
+    done_reason?: string;
+  };
   if (!res.ok || data.error || !data.message?.content) {
-    throw new Error(`Modelo de visión (${modelo}) falló: ${data.error ?? res.status}`);
+    // res.status solo no basta para diagnosticar: Ollama puede responder 200 con
+    // el contenido vacío (ej. el modelo no llegó a generar nada por falta de
+    // VRAM al tener que cargar otro modelo grande a la vez). done_reason ayuda a
+    // distinguir ese caso de un error real de la API.
+    throw new Error(
+      `Modelo de visión (${modelo}) falló: status=${res.status} error=${data.error ?? "-"} done=${data.done ?? "-"} done_reason=${data.done_reason ?? "-"}`,
+    );
   }
   return data.message.content;
 };
