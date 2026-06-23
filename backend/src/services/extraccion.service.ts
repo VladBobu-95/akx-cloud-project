@@ -142,8 +142,16 @@ const pareceFacturaConImportes = (texto: string): boolean => {
 // legible — visto con una factura real de prueba). Es la señal para probar
 // Tesseract como último recurso.
 const UMBRAL_RESULTADO_POBRE = 15;
+// Granite a veces, ante un documento que no llega a transcribir, "se rinde" con
+// una META-descripción que habla SOBRE el documento en vez de citarlo (ej. "La
+// imagen contiene texto... incluye detalles como la fecha de emisión, monto
+// total..."). Tiene de sobra 15+ palabras (así que el chequeo de arriba no lo
+// pilla), pero no es contenido real, solo comentario — y al mencionar "factura"
+// dispara igualmente la escalada a deepseek-ocr, que si también falla deja esto
+// como resultado final, sin darle nunca su oportunidad a Tesseract.
+const METADESCRIPCION = /^\s*(la imagen|esta imagen|el documento|la fotograf[ií]a|la foto)\s+(contiene|muestra|presenta|incluye|describe|parece)/i;
 const pareceResultadoPobre = (texto: string): boolean =>
-  texto.trim().split(/\s+/).filter(Boolean).length < UMBRAL_RESULTADO_POBRE;
+  texto.trim().split(/\s+/).filter(Boolean).length < UMBRAL_RESULTADO_POBRE || METADESCRIPCION.test(texto);
 
 // Tesseract.js: OCR clásico (no es un LLM de visión), corre en CPU y no compite
 // por la VRAM con Ollama. Es la red de seguridad final cuando ni granite ni
