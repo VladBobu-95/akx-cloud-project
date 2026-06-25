@@ -1,19 +1,22 @@
 # AKX Cloud — Monorepo (akx-cloud-project)
 
-## Descripción
-
-App de almacenamiento en la nube con chatbot IA. Monorepo con backend Node/TypeScript y frontend Angular 22.
+App de almacenamiento en la nube con chatbot IA. Backend Node/TypeScript + frontend Angular 22.
 
 **Repo:** `https://github.com/VladBobu-95/akx-cloud-project`
 
+> El **detalle y el porqué** de cada decisión (pre-flights del chat, cascada OCR, RAG,
+> historial de bugs, limitaciones) está en **`NOTAS.md`** — que NO se carga cada sesión.
+> Este `CLAUDE.md` es la referencia compacta de uso frecuente; consulta `NOTAS.md` cuando
+> toques chat/OCR/RAG en profundidad.
+
 ```
 akx-cloud-project/
-  backend/                  ← API REST (Express + TypeORM + pgvector + MinIO + Ollama)
-  frontend/                 ← SPA Angular 22
-  docker-compose.yml        ← Producción: db, minio, api, web
+  backend/                    ← API REST (Express + TypeORM + pgvector + MinIO + Ollama)
+  frontend/                   ← SPA Angular 22
+  docker-compose.yml          ← Producción: db, minio, api, web
   docker-compose.override.yml ← Solo local: añade ollama y adminer
-  .env                      ← Secretos (no commitear, ver .env.example)
-  CLAUDE.md
+  .env                        ← Secretos (no commitear, ver .env.example)
+  CLAUDE.md / NOTAS.md
 ```
 
 ---
@@ -23,505 +26,182 @@ akx-cloud-project/
 | Capa | Tecnología |
 |---|---|
 | API | Node 22, Express 5, TypeScript 6 |
-| ORM | TypeORM 1.x + PostgreSQL 16 + pgvector |
+| ORM | TypeORM + PostgreSQL 16 + pgvector |
 | Objetos | MinIO (S3-compatible) |
-| IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5:3b/7b` como fallback en máquinas pequeñas |
-| IA embeddings | Ollama — `bge-m3` (1024 dims, multilingüe) |
-| Visión imágenes | Cascada de 3 pasadas: **granite3.2-vision** (`OLLAMA_CAPTION_MODEL`, transcribe o describe) → **deepseek-ocr** (`OLLAMA_OCR_MODEL`, solo si parece factura) → **Tesseract.js** (clásico, CPU, red de seguridad si las dos anteriores se quedan cortas). Ver "OCR y descripción de imágenes" |
-| Extracción PDF | pdf-parse v2 |
-| Extracción DOCX | mammoth |
-| Auth | JWT + bcrypt |
-| Validación | Zod |
-| Frontend | Angular 22, signals, standalone components |
-| Estilos | SCSS inline + CSS custom properties (tema verde) |
-| Markdown | marked v18 |
+| IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5-coder:7b`/`3b` en máquinas pequeñas |
+| IA embeddings | Ollama — `bge-m3` (1024 dims) |
+| Visión/OCR | Cascada granite3.2-vision → deepseek-ocr → Tesseract.js (ver `NOTAS.md`) |
+| Extracción | pdf-parse v2 (PDF), mammoth (DOCX) |
+| Auth / Validación | JWT + bcrypt / Zod |
+| Frontend | Angular 22 (signals, standalone), SCSS, marked v18 |
 
 ---
 
-## Arrancar en local
+## Arrancar
 
+### Stack completo en Docker
 ```bash
-# 1. Copiar y rellenar el .env
-cp .env.example .env   # editar con valores reales
-
-# 2. Levantar todos los servicios
+cp .env.example .env                          # rellenar valores reales
 docker compose up -d
-
-# 3. Descargar modelos de Ollama (solo la primera vez)
-docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # o qwen2.5:3b en máquinas pequeñas
+# modelos Ollama (solo 1ª vez):
+docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # o :7b/3b
 docker exec clouddrive-ollama ollama pull bge-m3
-docker exec clouddrive-ollama ollama pull deepseek-ocr        # OCR de facturas
+docker exec clouddrive-ollama ollama pull deepseek-ocr
+docker exec clouddrive-ollama ollama pull granite3.2-vision
 ```
 
 | URL | Servicio |
 |---|---|
 | `http://localhost` | Frontend (nginx) |
 | `http://localhost:3000` | API |
-| `http://localhost:8080` | Adminer (gestor BD) |
+| `http://localhost:8080` | Adminer |
 | `http://localhost:9001` | MinIO Console |
+
+### Dev loop (rápido, sin rebuilds) — recomendado para desarrollar
+```bash
+docker compose up -d db minio ollama adminer   # solo infraestructura
+docker compose stop api web                     # liberar puertos 3000 y 80
+cd backend && npm run dev                        # nodemon+ts-node → localhost:3000, recarga al guardar
+cd frontend && npm start                         # ng serve → localhost:4200 (proxy /api → :3000)
+```
+Editas `.ts`/`.html`/`.scss` y ves el cambio al instante, sin tocar contenedores. Para
+desplegar al final: `docker compose build api web && docker compose up -d api web`.
 
 ---
 
 ## Variables de entorno (.env)
-
 ```env
-# Postgres
-DB_USER=clouddrive
-DB_PASSWORD=rootpass
-DB_NAME=clouddrive
-DB_PORT_HOST=5433
-
-# MinIO
-MINIO_USER=minioadmin
-MINIO_PASSWORD=rootpass
-MINIO_BUCKET=archivos
-MINIO_PORT_HOST=9000
-MINIO_CONSOLE_HOST=9001
-
-# API
-API_PORT_HOST=3000
-JWT_SECRET=<mínimo 32 chars aleatorios>
-CORS_ORIGIN=*   # "*" o lista separada por comas; en prod fija el dominio del front
-
-# Ollama (en local lo sobreescribe el override a http://ollama:11434;
-# en el servidor apunta al Ollama externo con GPU vía host.docker.internal)
-OLLAMA_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=qwen2.5-coder:14b
+DB_USER, DB_PASSWORD, DB_NAME, DB_PORT_HOST=5433
+MINIO_USER, MINIO_PASSWORD, MINIO_BUCKET=archivos, MINIO_PORT_HOST=9000, MINIO_CONSOLE_HOST=9001
+API_PORT_HOST=3000, JWT_SECRET=<min 32 chars>, CORS_ORIGIN=*   # en prod: dominio del front
+OLLAMA_URL=http://host.docker.internal:11434                   # local override → http://ollama:11434
+OLLAMA_MODEL=qwen2.5-coder:14b                                 # chat (7b/3b en máquinas pequeñas)
 OLLAMA_EMBED_MODEL=bge-m3
-OLLAMA_CAPTION_MODEL=granite3.2-vision  # 1ª pasada de visión (transcribe o describe)
-OLLAMA_OCR_MODEL=deepseek-ocr           # 2ª pasada: OCR fiel solo si parece factura
+OLLAMA_CAPTION_MODEL=granite3.2-vision                         # 1ª pasada visión
+OLLAMA_OCR_MODEL=deepseek-ocr                                  # 2ª pasada (solo si parece factura)
 ```
-
-> El servicio `api` del `docker-compose.yml` incluye `extra_hosts: host.docker.internal:host-gateway`
-> para que el contenedor pueda alcanzar el Ollama del host/servidor en Linux.
-
----
+`env.ts` valida con Zod y **falla al arrancar** si falta algo. Cambiar de modelo: editar
+`.env` + `docker compose up -d api` (recarga .env, sin rebuild).
 
 ## Docker Compose
-
-- `docker-compose.yml` — producción: db, minio, api, web
-- `docker-compose.override.yml` — solo local: ollama + adminer, cambia OLLAMA_URL a `http://ollama:11434`
-
 ```bash
-docker compose up -d                        # levantar todo
-docker compose build api                    # rebuild imagen API tras cambios de código
-docker compose up -d api                    # recrear contenedor API (recarga .env)
-docker compose restart api                  # SOLO reinicia, NO recarga .env ni código
-docker compose build web && docker compose up -d web       # rebuild frontend (servicio "web")
-docker compose logs -f api                  # logs en tiempo real
+docker compose build api && docker compose up -d api   # cambios de CÓDIGO backend
+docker compose up -d api                                # cambios de .env (sin rebuild)
+docker compose build web && docker compose up -d web    # frontend
+docker compose logs -f api
 ```
-
-**Importante:** `restart` no recarga .env ni código. Para cambios de código: `build` + `up -d`. Para cambios de .env: solo `up -d`.
+`restart` NO recarga .env ni código (solo reinicia). Código → `build` + `up -d`; .env → `up -d`.
 
 ---
 
-## Estructura backend (`backend/`)
-
+## Estructura backend (`backend/src/`)
 ```
-src/
-  config/
-    database.ts      ← TypeORM DataSource (pgvector habilitado)
-    env.ts           ← Zod schema de env vars (falla al arrancar si falta algo)
-    minio.ts         ← Cliente MinIO + inicialización del bucket
-  controllers/       ← Entrada HTTP, delegan en services
-  entities/
-    Archivo.ts       ← Metadatos de fichero (binario en MinIO), soft delete
-    Carpeta.ts       ← Carpetas virtuales persistidas en BD
-    Factura.ts       ← Cabecera de factura escaneada
-    LineaFactura.ts  ← Líneas de una factura
-    Usuario.ts       ← Usuario con hash bcrypt
-  middlewares/
-    auth.middleware.ts        ← Verifica JWT → req.usuario
-    errorHandler.middleware.ts ← AppError → respuesta JSON con statusCode
-  migrations/        ← TypeORM migrations (ejecutadas automáticamente al arrancar)
-  routes/
-  services/
-    archivos.service.ts   ← CRUD, papelera, carpetas zip, texto RAG
-    auth.service.ts       ← Registro/login JWT
-    carpetas.service.ts   ← Carpetas: mover/copiar/vaciar/borrar con contenido
-    chat.service.ts       ← Chatbot IA (ver sección CHAT)
-    extraccion.service.ts ← Extrae texto de PDF/DOCX/txt/imagen
-    facturas.service.ts   ← Escaneo (OCR deepseek-ocr), auto-escaneo al subir,
-                            analítica filtrable (ventasTop, totalesFacturado)
-    rag.service.ts        ← Embeddings bge-m3, indexación, búsqueda semántica
+config/      database.ts (TypeORM+pgvector), env.ts (Zod), minio.ts
+controllers/ entrada HTTP, delegan en services
+entities/    Archivo, Carpeta, Factura, LineaFactura, Usuario
+middlewares/ auth (JWT→req.usuario), errorHandler (AppError→JSON)
+migrations/  TypeORM, se ejecutan al arrancar
+services/
+  archivos.service.ts    CRUD, papelera, carpetas zip, leerTextoArchivo (RAG)
+  auth.service.ts        registro/login JWT
+  carpetas.service.ts    mover/copiar/vaciar/borrar con contenido
+  chat.service.ts        chatbot IA (ver abajo + NOTAS.md)
+  extraccion.service.ts  texto de PDF/DOCX/txt + cascada OCR de imágenes
+  facturas.service.ts    escaneo, auto-escaneo, analítica filtrable, listados paginados
+  rag.service.ts         embeddings bge-m3, indexación, búsqueda semántica
 ```
 
 ---
 
 ## API Routes
-
 Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 
 ### `/api/auth`
 | Método | Ruta | Body |
 |---|---|---|
-| POST | `/registro` | `{email, password, nombre}` — máx. 5/hora por IP (solo en producción) |
-| POST | `/login` | `{email, password}` → `{usuario, token}` — máx. 10/15min por IP (solo en producción) |
-| GET | `/perfil` 🔒 | → `{usuario}` |
-| PATCH | `/perfil` 🔒 | `{nombre?, avatar?, password?}` — `avatar` es un data URL base64 (`""` para quitarlo); `password` min. 8 chars |
+| POST | `/registro` | `{email, password, nombre}` (máx 5/h por IP en prod) |
+| POST | `/login` | `{email, password}` → `{usuario, token}` (máx 10/15min en prod) |
+| GET/PATCH | `/perfil` 🔒 | PATCH `{nombre?, avatar?, password?}` — avatar = data URL base64 (`""` quita) |
 
 ### `/api/archivos`
 | Método | Ruta | Notas |
 |---|---|---|
-| POST | `/subir` | multipart: campo `archivo` + `carpeta` opcional |
-| GET | `/` | query: `carpeta`, `pagina`, `limite` |
-| GET | `/buscar` | Búsqueda semántica RAG — query: `q` |
-| GET | `/papelera` | |
-| DELETE | `/papelera` | Vacía papelera |
-| GET | `/carpeta/descargar` | .zip — query: `ruta` |
-| GET/POST | `/carpetas` | Listar / Crear `{ruta}` |
-| PATCH | `/carpetas` | Mover/renombrar `{origen, destino}` |
-| DELETE | `/carpetas` | query: `ruta` |
-| GET | `/:id` | Metadata del archivo (sin descargar el binario) |
+| POST | `/subir` | multipart: `archivo` + `carpeta` opcional |
+| GET | `/` | query `carpeta`, `pagina`, `limite` → body = `Archivo[]`, totales en headers `X-Total-Count`/`X-Total-Pages`/`X-Current-Page` |
+| GET | `/buscar` | búsqueda semántica RAG — query `q` |
+| GET/DELETE | `/papelera` | listar / vaciar |
+| GET | `/carpeta/descargar` | .zip — query `ruta` |
+| GET/POST/PATCH/DELETE | `/carpetas` | listar / crear `{ruta}` / mover `{origen,destino}` / borrar `?ruta=` |
+| GET | `/:id` | metadata (sin binario) |
 | PATCH | `/:id` | `{nombre?, carpeta?}` |
 | POST | `/:id/copiar` | `{carpeta?, nombre?}` |
-| PATCH | `/:id/restaurar` | Restaurar de papelera (si ya hay un activo con el mismo nombre, le pone sufijo "(restaurado)") |
-| PATCH | `/:id/descripcion` | `{descripcion}` — describe a mano una imagen sin texto legible; se indexa como su contenido (RAG) |
-| GET | `/:id/descargar` | Streaming del binario a través de la API (no es un redirect a MinIO) |
-| DELETE | `/:id/permanente` | Borrado definitivo |
-| DELETE | `/:id` | Soft delete (papelera) |
+| PATCH | `/:id/restaurar` | de papelera (sufijo "(restaurado)" si colisiona) |
+| PATCH | `/:id/descripcion` | `{descripcion}` — describe imagen a mano, se reindexa (RAG) |
+| GET | `/:id/descargar` | streaming del binario por la API |
+| DELETE | `/:id` / `/:id/permanente` | soft delete / borrado definitivo |
 
 ### `/api/chat`
-| Método | Ruta | Body |
+| Método | Ruta | Body / Respuesta |
 |---|---|---|
-| POST | `/` | `{mensajes: [{rol: "usuario"\|"bot", contenido}]}` → `{respuesta, acciones[], archivos?: {id, nombre}[]}` |
+| POST | `/` | `{mensajes: [{rol, contenido}]}` → `{respuesta, acciones[], archivos?, tablaFacturas?, tablaArchivos?, tablaCarpetas?}` |
 
-`archivos` solo viene cuando la respuesta resolvió uno o varios archivos concretos
-(p. ej. `obtener_factura`, "abre/muestra/busca X", "facturas de [mes/año]"): el
-frontend lo usa para mostrar un botón "Abrir `<nombre>`" por archivo bajo la respuesta.
+`archivos` = `{id,nombre}[]` cuando la respuesta resolvió archivos concretos (front muestra botón "Abrir"). Las `tabla*` son listados paginados (ver `NOTAS.md` › paginación).
 
 ### `/api/facturas`
-| Método | Ruta | Body |
+| Método | Ruta | Notas |
 |---|---|---|
-| POST | `/escanear` | `{archivoId, pista?}` — **asíncrono**: valida propiedad/existencia (404/403 al instante), marca el archivo `pendiente`, encola el escaneo en segundo plano y responde **202** sin esperar. El resultado se ve en la columna "Estado" del explorador vía polling. Sin caller en la UI (todo se escanea solo al subir); queda como API de re-escaneo manual. |
+| POST | `/escanear` | `{archivoId, pista?}` — **asíncrono** (202): valida, marca `pendiente`, encola en background; resultado vía polling de la columna "Estado" |
+| GET | `/` | listado paginado — query `cliente`/`emisor`/`carpeta`/`desde`/`hasta`/`facturas`/`papelera`/`pagina`/`limite` → `{filas, total, paginas}`. Lo usa la paginación de tablas del chat |
 
 ---
 
 ## Schema de BD
-
-### `usuarios`
-- `id` UUID, `email` unique, `nombre`, `avatar` (data URL base64, nullable)
-- `passwordHash` (bcrypt), `rol` (`"user"` | `"admin"`, default `"user"`) — existe un
-  middleware `soloAdmin` para rutas de admin, pero ninguna ruta lo usa todavía. El
-  registro **no acepta `rol` del cliente** (se ignora si se envía y siempre se crea
-  como `"user"`): así nadie puede auto-registrarse como admin. Un admin solo se crea
-  por otra vía controlada (seed/SQL).
-- `creadoEn`
-
-### `archivos` — metadatos de fichero
-- `id` UUID, `nombre`, `carpeta` (ruta `/facturas/2026`), `mimeType`
-- `tamanoBytes` bigint, `claveMinio` (clave S3), `hashSha256`
-- `textoExtraido` text (para RAG, primeros 20k chars)
-- `eliminadoEn` DeleteDateColumn (soft delete)
-- `propietario` → `usuarios` CASCADE
-
-### `carpetas` — carpetas vacías persistidas
-- `id` UUID, `ruta` unique por propietario, `creadoEn`
-
-### `facturas`
-- `propietario`, `archivo` (nullable, CASCADE)
-- `numero`, `fecha` date, `emisor`, `cliente`
-- `subtotal`, `iva`, `total` numeric(12,2)
-- `lineas` → `lineas_factura` cascade
-
-### `lineas_factura`
-- `descripcion`, `cantidad`, `precioUnit`, `total` numeric
-
-### `fragmentos` — chunks para RAG
-- `archivoId`, `propietarioId`, `indice` int
-- `texto` text, `embedding` vector(1024) (bge-m3)
+- **usuarios**: `id`, `email` unique, `nombre`, `avatar` (base64, null), `passwordHash`, `rol` (`user`|`admin`, default `user`; el registro ignora `rol` del cliente), `creadoEn`.
+- **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256`, `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `eliminadoEn` (soft delete), `propietario` CASCADE.
+- **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
+- **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `cliente`, `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade.
+- **lineas_factura**: `descripcion`, `cantidad`, `precioUnit`, `total`.
+- **fragmentos** (RAG): `archivoId`, `propietarioId`, `indice`, `texto`, `embedding vector(1024)`.
 
 ---
 
-## Servicio de Chat (`backend/src/services/chat.service.ts`)
+## Chat (`chat.service.ts`) — resumen
+1. **Solo el último mensaje del usuario** se envía al modelo (reenviar el historial hacía que modelos pequeños re-ejecutaran acciones, p. ej. repetir `borrar_todo`).
+2. **Pre-flights deterministas por regex**: las frases comunes (borrados masivos, listados, abrir/leer, facturas por periodo/cliente, analítica, crear nota, restaurar vs. borrar...) se resuelven directo contra la BD sin llamar a Ollama. **Lista completa y rationale en `NOTAS.md`.**
+3. **Bucle de tools** (máx 15, temp 0): con parser de respaldo (tool calls como texto JSON), remapeo de nombres alucinados, resolución flexible de nombres, y **bypass de resumen** (si las tools devuelven `resumen`, se retorna ese markdown sin re-llamar al modelo). Detalle en `NOTAS.md`.
+4. **Listados paginados** (`tablaFacturas`/`tablaArchivos`/`tablaCarpetas`): ver `NOTAS.md`.
 
-### Flujo principal
+**Tools:** buscar/copiar/mover/renombrar/eliminar/crear archivo, crear/listar/eliminar/vaciar/mover/renombrar/copiar carpeta, borrar_todo/_todas_carpetas/_todos_archivos, listar_papelera, restaurar_archivo/_todo, borrar_permanente, vaciar_papelera, leer_archivo, estadisticas, buscar_semantica, escanear_factura/_todas, obtener_factura, ventas_top, totales_facturas, clientes_top.
 
-1. **Solo el último mensaje**: al modelo se le envía únicamente el último mensaje del usuario (no el historial). Reenviar turnos previos hacía que modelos pequeños **re-ejecutaran** acciones anteriores (p. ej. repetir `borrar_todo` al pedir cualquier cosa). Cada orden de archivos es independiente.
-
-2. **Pre-flights deterministas por regex**: para frases muy comunes, no se confía en que el modelo elija la tool correcta — se resuelven directamente contra la BD, sin llamar a Ollama:
-   - **Borrados masivos**: distingue "borra todo" (`borrar_todo`, incluida la raíz), "borra todas las carpetas" (`borrar_todas_carpetas`, con su contenido, sin tocar lo suelto en la raíz) y "borra todos los archivos/ficheros" (`borrar_todos_archivos`, sin tocar carpetas).
-   - **Restaurar TODA la papelera** ("restaura/recupera todos los archivos/ficheros", "restaura toda la papelera"): sin este pre-flight, el modelo no tenía ninguna tool de "restaurar todo" entre las que conocía y "resolvía" la frase con la única tool masiva de papelera que sí conocía, `vaciar_papelera` — justo la acción opuesta (provocó una pérdida real de datos en una cuenta de prueba: "restaura todos los ficheros" vació la papelera en vez de recuperarla). Se añadió `restaurar_todo` (recupera todos, uno a uno con `restaurarArchivo` para que aplique igual el sufijo "(restaurado)" en colisiones) y este pre-flight, además de remarcar en las descripciones de ambas tools que son opuestas, como refuerzo si alguna frase se le escapa al pre-flight.
-   - **Listado combinado**: "lista/pásame todo lo que tengo" (archivos + carpetas), con soporte para acotar a una carpeta concreta o solo la raíz.
-   - **¿Qué hay en la papelera?**: el prompt de facturas es grande y sesgaba al modelo hacia esas tools para esta pregunta (devolvía contenido random no relacionado); se resuelve aquí con `listar_papelera`.
-   - **Existencia/ubicación de un archivo** ("¿tengo/hay/existe... archivo X?", "dónde está/busca el archivo X"): comprobación instantánea con `buscar_archivos`. Sin esto, el modelo a veces decidía "comprobar" escaneando con OCR (lento, y en servidores sin GPU puede acabar tirando el proceso — se ve como "no se puede conectar con el servidor" en el front). La respuesta incluye un botón "Abrir" por cada coincidencia encontrada.
-   - **Abrir/mostrar una factura** ("abre/muéstrame factura_X"): lee siempre de BD vía `obtener_factura`, nunca relanza un escaneo OCR. Si la factura no se ha escaneado, lo dice al instante en vez de escanearla sin que se pida (antes parecía que la petición "no funcionaba" cuando en realidad el modelo se había puesto a escanear por su cuenta). El patrón que detecta el identificador de factura es `\bfacturas?(?:[\d_-]\w*)?\b` (exige un separador — dígito, `_` o `-` — antes de cualquier sufijo): con el patrón anterior, más laxo (`\bfactura[\w.-]*\b`), "abre facturajpg.png" se interpretaba como el nombre de una factura ("facturajpg") y fallaba con "no tiene una factura escaneada todavía" en vez de caer en el pre-flight genérico de archivos.
-   - **Abrir/mostrar/leer un archivo NORMAL** ("lee/muestra/ábreme X" sin nada más en el mensaje): igual que con facturas, lee el contenido directamente (`leerTextoArchivo`) sin pasar por el modelo, y la respuesta trae el botón "Abrir `<nombre>`". "Muestra X" ya funcionaba por sí solo vía el modelo, pero "abre X" (sin pre-flight) lo rechazaba con "no puedo abrir archivos en este chat" — el modelo no seguía de forma fiable la aclaración del prompt de que "abrir" = "leer/mostrar" en este chat, así que "abre"/"abrir" se añadió directamente al pre-flight (reutilizando `VERBO_ABRIR`) en vez de depender de esa instrucción. Antes de leer el texto en crudo, comprueba con `obtenerFactura` si el archivo resuelto ya tiene una factura escaneada en BD — si la tiene, devuelve el resumen markdown de la factura (`##` con totales/líneas) en vez del texto/OCR sin formatear; evita que "abre factura_03.pdf" muestre el contenido plano del PDF cuando ya existe un resumen mejor.
-   - **Palabras prohibidas como nombre de archivo** (`STOPWORDS_NOMBRE`: `todo`, `eso`, `mi`, `la`, `el`...): tanto este pre-flight como el de borrar un archivo concreto capturan "lo que sigue al verbo" como nombre de archivo — sin esta lista, "muestra todo lo que tengo" se interpretaba como "lee un archivo llamado 'todo'" (error "no encontré ningún archivo que coincida con todo") en vez de caer en el pre-flight de listado de más abajo, que va DESPUÉS en el código.
-   - **Totales de varias facturas nombradas** ("totales de factura_01 y factura_02" sin un verbo como "dame"): el modelo podía interpretarlo como abrir solo la primera factura mencionada en vez de sumar el total de todas; se detecta y se llama `totales_facturas` directamente con el array de identificadores.
-   - **Ranking de ventas con periodo** ("qué es lo que más se vende en julio", "lo más/menos vendido", "producto más vendido", "qué vendí más", "ranking de ventas"): el modelo pequeño a veces acertaba los argumentos (`{mes:7, orden:"mas"}`) pero NO llamaba a la tool — los escupía como JSON en texto al usuario. Se resuelve con `ventas_top`, parseando el mes por su NOMBRE (enero…diciembre) y el año si aparece. No captura cuando se nombra un producto concreto ("cuánto he vendido de X") ni los rankings de cliente.
-   - **Listado de facturas de un periodo** ("búscame todas las facturas de abril", "facturas de 2026"): distinto de `ventas_top` (ranking agregado de productos) y `totales_facturas` (suma agregada) — esto LISTA las facturas concretas de ese mes/año (número, fecha, total) vía `listarFacturas`/`listadoFacturasMd`, con un botón "Abrir" por cada una. Se excluye si el mensaje además pide totales/facturado/vendido/ranking (esos ya tienen su propio pre-flight).
-   - **Borrar UN archivo/carpeta concreto** ("borra el archivo X" / "borra la carpeta X"): el modelo casi nunca llamaba a `eliminar_archivo`/`eliminar_carpeta` para esto — a veces no emitía ninguna tool call válida, a veces (sin la palabra "archivo") confundía "borra X" con "lee X". Se resuelve aquí con el mismo `resolverArchivo`/`resolverCarpeta` que usan las tools reales.
-   - **Crear una nota/archivo de texto** ("créame una nota llamada X.md con esto: ..."): el modelo intentaba *buscar/leer* un archivo que aún no existía en vez de llamar a `crear_archivo`. Extrae nombre (con extensión, o por "llamado X" con `.md` por defecto) y contenido (tras "con esto"/"que diga"/etc.) y llama a `crearArchivoTexto` directamente.
-   - **Restaurar vs. borrar definitivamente de la papelera**: son acciones opuestas que el modelo confundía pese a la instrucción explícita de más abajo en el prompt — se llegó a ver "borra X de la papelera" *restaurando* el archivo en vez de borrarlo para siempre. Se distingue por verbo (restaura/recupera/saca → `restaurar_archivo`; borra/elimina/quita + mención de "papelera" → `borrar_permanente`) y se resuelve sin pasar por el modelo.
-   - **Búsqueda semántica por tema** ("resume lo que tengo sobre X", "qué documento(s) habla(n) de X"): el modelo a veces pedía más detalles al usuario en vez de llamar a `buscar_semantica`; se detecta el tema tras "sobre"/"de"/"acerca de" y se construye la respuesta con los fragmentos encontrados.
-   - **Verbos con pronombre enclítico pegado y tildes**: "borra todo" funcionaba pero "bórralo todo" no — ni el patrón literal con tilde casaba ("bórralo" desplaza el acento respecto a "borra"), ni había límite de palabra (`\b`) entre "borra" y el "lo" pegado. Todos los verbos de los pre-flights anteriores (borrar, restaurar/borrar-permanente, abrir/mostrar, buscar, crear, listar, resumir) se comparan sobre una versión del mensaje **sin tildes** (`quitarTildes`, NFD + strip de marcas diacríticas) con patrones que aceptan el pronombre pegado (`borra(?:r|lo|la|los|las)?`, etc.); el nombre de archivo/carpeta capturado después conserva sus tildes originales (`grupoOriginal`, recupera el rango del match original a partir de los índices del match sobre el texto sin tildes).
-
-3. **Bucle de herramientas** (máx 15 iter): llama Ollama → si hay `tool_calls` → ejecuta → repite. Varios refuerzos:
-   - **Parser de respaldo de tool calls**: si el modelo escribe las llamadas como **texto JSON** en `content` (en vez de en `tool_calls`), se extraen con un escáner de llaves balanceadas (admite varias pegadas) y se ejecutan igual.
-   - **Remapeo de nombres alucinados** (`remapearNombreTool`): el modelo a veces se inventa nombres como `mover_factura`/`copiar_factura` en vez de los reales `mover_archivo`/`copiar_archivo` (una factura es un archivo normal, no hay tools específicas). Se remapea por regex (`<verbo>_facturas?` → `<verbo>_archivo`, `borrar` → `eliminar`) tanto en el parser de texto como en `tool_calls` reales, así la acción se ejecuta de verdad en vez de devolver un error genérico.
-   - **Resolución flexible de nombres** (`resolverArchivo`/`resolverCarpeta`): búsqueda por nombre/leaf-name (no hace falta la ruta completa) en **todas las carpetas**, con fallback archivo↔carpeta cuando una operación de carpeta en realidad apunta a un archivo (y viceversa), y fallback a búsqueda por nombre suelto si el modelo antepone "/" a algo que no es una ruta absoluta real (ej. pasa "/tmp" cuando la carpeta está en "/demo/tmp" — antes fallaba con "no existe" en vez de encontrarla por nombre). Si hay varias coincidencias, la tool devuelve `necesita_aclaracion` con las opciones reales.
-   - **Bypass de aclaración**: cuando una tool devuelve `necesita_aclaracion` con `opciones`, la lista se construye **en el servidor** y se devuelve directa — dejarlo en manos del modelo a veces resultaba en "¿cuál quieres?" sin listar ninguna opción real. Además, se **recuerda en memoria** (`pendientesAclaracion`, por usuario, TTL 5 min) qué tool/argumentos se estaban pidiendo, para completarlo en el turno siguiente si el usuario responde con la opción ofrecida — antes esa respuesta se trataba como un mensaje nuevo sin contexto (solo se envía el último mensaje) y el modelo hacía otra cosa distinta a lo pedido originalmente (ej. escanear una factura en vez de completar el renombrado).
-   - **Bypass de resumen**: si TODAS las herramientas de una iteración devuelven `resumen: string`, se retorna ese markdown directamente sin otra llamada al modelo (evita que reformatee mal, use `$` en vez de `€`, o invente datos). Se usa en facturas y en **todas** las operaciones de archivos/carpetas/papelera (`resumen: "Hecho."`).
-
-`temperature: 0` y `keep_alive: 30m`.
-
-### Herramientas disponibles al modelo
-`buscar_archivos`, `copiar_archivo`, `mover_archivo`, `renombrar_archivo`, `eliminar_archivo`, `crear_archivo`, `crear_carpeta`, `listar_carpetas`, `eliminar_carpeta`, `vaciar_carpeta`, `mover_carpeta`, `renombrar_carpeta`, `copiar_carpeta`, `borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`, `listar_papelera`, `restaurar_archivo`, `restaurar_todo`, `borrar_permanente`, `vaciar_papelera`, `leer_archivo`, `estadisticas`, `buscar_semantica`, `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`, `ventas_top`, `totales_facturas`, `clientes_top`
-
-### Analítica de facturas (`ventas_top`, `totales_facturas`, `clientes_top`)
-Las tres aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre de archivo; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo `ventas_top`), `mes`/`anio` o `desde`/`hasta`, `orden` (más/menos). Si se nombran facturas concretas que aún **no están escaneadas**, se **escanean al vuelo** (`asegurarFacturasEscaneadas`) antes de agregar (excepto en `clientes_top`, que no acepta filtro por facturas concretas — no tendría sentido rankear por cliente sobre un conjunto ya elegido). Los filtros de texto (`cliente`/`emisor`/`producto`) usan `unaccent()` de Postgres en ambos lados del `ILIKE` para que "Tecnologias" (sin tilde) encuentre igual "Tecnologías" — requiere la extensión `unaccent` (migración `HabilitarUnaccent`). El filtro base excluye facturas cuyo archivo está en la papelera (`a."eliminadoEn" IS NULL`) — antes una factura borrada seguía contando en los totales porque el registro de `Factura` en BD no depende del archivo para "existir" en estas consultas. `clientes_top` agrupa por `f."cliente"` y suma `f."total"`, sin JOIN con `lineas_factura` (como `totales_facturas`).
-
-### Leer el contenido de un archivo (`leer_archivo`)
-`leerTextoArchivo` (`archivos.service.ts`) acepta texto plano directamente, y para
-PDF/DOCX/imágenes **reutiliza `archivo.textoExtraido`** (el mismo texto que ya se
-extrajo al subir el archivo para indexarlo en el RAG, vía `pdf-parse`/`mammoth`/OCR)
-en vez de intentar decodificar el binario como UTF-8. Antes rechazaba cualquier
-archivo que no fuera `text/*`/json/xml/markdown con "el archivo no es de texto, no
-puedo leer su contenido" — rompía "¿qué dice el contrato.docx?"/"qué dice
-factura_01.pdf". Para imágenes, el contenido que se lee aquí es la descripción que
-se generó al subir (OCR si tenía texto real, o la descripción manual obligatoria si
-no — ver "OCR y descripción de imágenes" más abajo).
-
-### Tools con bypass (devuelven markdown preconstruido, con € server-side)
-- `escanear_factura` → OCR (deepseek-ocr) + extracción JSON forzada con Ollama → guarda en BD → markdown. Rechaza con error (422) en vez de inventar datos si no hay importes ni número/fecha/emisor reales en el contenido — antes esta comprobación (`soloSiFactura`) solo se aplicaba al auto-escaneo; el escaneo manual con una pista vacía o una imagen sin contenido real podía acabar guardando una factura completa inventada (cliente, importes...) de la nada.
-- `obtener_factura` → resuelve el archivo con `resolverArchivo` (mismo buscador que el resto de tools, con manejo de ambigüedad/no-encontrado) y lee de BD directamente, sin re-escanear el PDF. Antes buscaba con `ILIKE %nombre%` sin validar nombre vacío/ambiguo y se podía quedar con un archivo arbitrario (devolvía la factura de **otro** archivo); ahora no puede pasar.
-- `ventas_top` → ranking de productos (SQL GROUP BY sobre `lineas_factura`)
-- `totales_facturas` → totales (nº facturas, subtotal, IVA, total) filtrados
-
-El markdown de una factura (`resumenFacturaMd`, usado tanto en el chat como en el
-`.md` de resumen que se genera al escanear) usa `##` igual que `ventas_top`/
-`totales_facturas`, y el título incluye el nombre del archivo junto al número de
-factura (`## Factura 2026-2003 — factura_03.pdf`) para que no haya desconexión entre
-lo que se pidió y lo que aparece.
-
-### Abrir archivo desde el chat
-Cuando una tool/pre-flight resuelve uno o varios archivos concretos (`obtener_factura`,
-"abre/muestra/busca X", listado de facturas por periodo...), `chatear()` devuelve
-`archivos: {id, nombre}[]` además de la respuesta. El frontend (`pages/inicio/inicio.ts`)
-muestra un botón "Abrir `<nombre>`" por cada archivo bajo el mensaje (no solo uno: una
-búsqueda o un listado de facturas puede traer varios); al pulsar uno abre ESE archivo en
-una pestaña nueva igual que en el explorador (PDF/imagen/texto se previsualizan, el resto
-se descarga). La ventana se abre en blanco **en el momento del clic** (antes de pedir el
-blob) para que el navegador no la bloquee como pop-up — abrir una pestaña fuera de un
-gesto de clic directo se bloquea.
+## OCR y RAG — resumen
+- **OCR imágenes** (`extraccion.service.ts`): cascada de 3 pasadas (granite → deepseek si parece factura → Tesseract si los VLM se quedan cortos), normalizando a PNG primero. Detalle completo en `NOTAS.md`.
+- **RAG** (`rag.service.ts`): al subir → extrae texto → chunks de **1000 chars / solape 150** → embeddings **bge-m3 (1024)** → tabla `fragmentos`. Búsqueda híbrida (coseno `<=>` OR `ILIKE`), `MIN_SCORE = 0.50`, un fragmento por archivo.
+- **Auto-escaneo de facturas al subir**: `ctrlSubir` dispara `autoEscanearArchivo` en background; solo persiste si parece factura (`soloSiFactura`).
 
 ---
 
-## OCR y descripción de imágenes (`backend/src/services/extraccion.service.ts`)
-
-`ocrImagen()` usa una **cascada "ligero primero"** de tres niveles (los dos primeros son
-modelos Ollama configurables por `.env`; el tercero es CPU pura, sin Ollama):
-
-1. **Normalización a PNG** (`aPng`, sharp): TODA imagen se reconvierte a PNG antes de
-   mandarla a Ollama, sea cual sea su formato original. Sin esto, **WEBP** hacía fallar la
-   decodificación en llama.cpp (`Failed to load image or audio file`; en el servidor con
-   GPU llegaba a tirar el proceso entero de Ollama, no solo la petición).
-2. **1ª pasada — granite3.2-vision** (`OLLAMA_CAPTION_MODEL`): modelo de visión ligero
-   (~2.4GB, cabe entero en GPU). Rápido y hace las dos cosas en una sola llamada —
-   transcribe el texto si lo hay, o describe la foto si no — sin el bucle degenerado de
-   un modelo solo-OCR. El prompt fuerza explícitamente que la descripción sea **siempre en
-   español**: el modelo a veces ignoraba esa instrucción y devolvía inglés, o mezclaba los
-   dos idiomas en la misma frase.
-3. **¿Parece factura con importes?** (`pareceFacturaConImportes`): si el texto de la 1ª
-   pasada tiene símbolos de moneda / palabras clave (factura, IVA, total…) o muchos
-   dígitos, se escala a la 2ª pasada. Si no (una foto, o texto sin importes), se queda con
-   lo de granite — sin pagar la pasada lenta.
-4. **2ª pasada — deepseek-ocr** (`OLLAMA_OCR_MODEL`): OCR especialista, la transcripción
-   más fiel de tablas/importes (no se equivoca con los dígitos). Solo se lanza para lo que
-   parece factura. Si falla o alucina, se conserva lo de granite. Su salida puede traer
-   tablas en HTML (`<table><tr><td>…`); `limpiarTablasHtml()` las convierte a texto plano
-   con `|` como separador de columna, para que el formato sea consistente con lo que
-   produce `pdf-parse` (que nunca emite HTML).
-5. **¿El resultado se queda corto?** (`pareceResultadoPobre`): si lo anterior (granite o
-   deepseek) es vacío, una "meta-descripción" (habla SOBRE la estructura del documento
-   citando NOMBRES de campos en vez de sus valores reales — ej. "incluye detalles como la
-   fecha de emisión...", "dirigida a un cliente llamado...") o una negación de texto
-   ("no hay texto...") **sin nada útil detrás** (menos de 15 palabras en total), se pasa a
-   la 3ª red. **Cuidado con falsos positivos**: una descripción real de una foto también
-   puede empezar con "La imagen presenta..." o terminar con "No hay texto presente en la
-   imagen" (el propio prompt le pide confirmarlo) — por eso la meta-descripción se detecta
-   por frases concretas de ESE patrón (no por cómo empieza la frase) y la negación de texto
-   solo cuenta si el resto de la respuesta es corto (ver historial de bugs: una respuesta
-   buena de 40+ palabras sobre un árbol se descartaba igual por contener "no hay texto" al
-   final, y el ruido de Tesseract la sustituía).
-6. **3ª red — Tesseract.js** (`ocrConTesseract`, worker singleton `createWorker("spa")`):
-   OCR clásico por CPU, sin alucinaciones — si no encuentra nada, devuelve poco o nada, no
-   se inventa contenido. Antes de leer, la imagen se preprocesa (`prepararParaTesseract`:
-   escala de grises + normalización de contraste + reescalado a un ancho mínimo de 2000px
-   con sharp) y se ejecutan **dos pasadas con distinto modo de segmentación** (`PSM.AUTO` +
-   `PSM.SPARSE_TEXT`), concatenando ambos resultados: en pruebas reales con una tabla de
-   factura con bordes, `PSM.AUTO` se saltaba todas las líneas de artículos (pasaba
-   directamente de la cabecera a "Subtotal"), mientras que `PSM.SPARSE_TEXT` las recuperaba
-   pero perdía precisión en otros datos (cantidades, "IVA" mal leído como "16V") en otra
-   factura distinta — ningún modo por sí solo cubre ambos casos, así que se quedan los dos
-   resultados y la IA de extracción de facturas tolera el ruido/redundancia y escoge el
-   dato correcto de cualquiera de los dos.
-7. **Español garantizado** (`asegurarEspanol`/`pareceIngles`/`traducirAlEspanol`): red de
-   seguridad final — si el resultado (de cualquiera de las 3 pasadas) tiene 2+ palabras
-   típicas inglesas (`the`, `and`, `with`...), se traduce al español con el modelo de chat
-   principal (`OLLAMA_MODEL`) antes de guardarlo.
-
-Si `OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL`, la 2ª pasada se desactiva sola (máquinas
-con un solo VLM). Esta cascada sustituyó al esquema anterior (solo deepseek-ocr +
-descripción manual obligatoria): se comprobó con pruebas reales que **ningún modelo
-pequeño iguala a deepseek-ocr en fidelidad de OCR** (granite acertaba importes pero
-fallaba dígitos finos como un teléfono), mientras que deepseek **alucina** ante fotos sin
-texto (a veces entra en un bucle degenerado repitiendo la misma etiqueta hasta agotar
-tokens) — de ahí el reparto: granite clasifica/describe barato, deepseek afina las
-facturas, y Tesseract entra solo cuando ninguno de los dos VLM dio algo aprovechable.
-
-`pareceBucleDegenerado()` descarta la basura de un modelo solo-OCR ante una imagen sin
-texto (bucle repitiendo `<table:tr><td>…`, o `None`). **Importante:** juzga el contenido
-**tras quitar las etiquetas HTML**, y la regla de "menos de 3 palabras → basura" solo se
-aplica si el texto original TENÍA etiquetas — porque deepseek emite esas etiquetas también
-para transcribir tablas de factura LEGÍTIMAS, y una respuesta corta SIN etiquetas (ej.
-"Factura", granite reconociendo el tipo de documento sin llegar a transcribirlo) es un
-resultado pobre por otra razón, no un bucle degenerado.
-
-En una GPU de 8GB, deepseek-ocr no entra entero (corre parcialmente en CPU, ~2 min por
-imagen) — pero con esta cascada solo se invoca en imágenes que parecen factura, no en
-toda foto. Todo en segundo plano, no bloquea la subida.
-
-### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
-Ya **no** hay modal obligatorio al subir (se quitó: estorbaba en cada subida de fotos).
-Con la cascada de visión, una foto sin texto ya se **describe automáticamente** al subir
-(la 1ª pasada de granite, o Tesseract si granite/deepseek se quedaron cortos — ver arriba),
-así que normalmente es buscable sin hacer nada. El endpoint `PATCH .../descripcion` queda
-para **corregir/afinar** esa descripción a mano. Lo que se guarde se reindexa para RAG
-(`indexarTexto` en `rag.service.ts`, combinado con el texto extraído vía
-`combinarContenido`), para que "muéstrame"/la búsqueda semántica lo encuentren.
-`combinarContenido` omite repetir el texto OCR si ya está contenido dentro de la
-descripción manual (puede pasar si se escaneó manualmente algo que no resultó ser factura
-— ver más abajo), para no mostrar el mismo contenido dos veces bajo "Descripción:" y
-"Texto detectado (OCR):".
-
-Escanear manualmente (vía chat, "escanea X") algo que **no** resulta ser una factura ya no
-copia `textoExtraido` dentro de `descripcionManual` — solo se guarda ahí la **pista** real
-que el usuario haya dado en ese momento. Antes, sin pista, se copiaba el OCR ya existente
-de todas formas, dejando `descripcionManual` idéntica a `textoExtraido` sin que el usuario
-hubiera escrito nada, y la próxima vez que se abría el archivo se mostraba mal etiquetada
-como "Descripción:" en vez de "Texto detectado (OCR):".
-
----
-
-## Pipeline RAG (`backend/src/services/rag.service.ts`)
-
-Al subir un archivo se indexa en background:
-1. Extrae texto (`extraccion.service.ts`: pdf-parse / mammoth / OCR-o-descripción de imágenes en cascada, ver arriba)
-2. Trocea en chunks de **1000 chars con solape de 150**
-3. Genera embeddings con **bge-m3** (1024 dims) vía `POST /api/embed` de Ollama
-4. Guarda en tabla `fragmentos` con columna `embedding vector(1024)`
-
-Búsqueda semántica:
-- Genera embedding de la consulta
-- Búsqueda **híbrida**: distancia coseno (`<=>`) OR `ILIKE` para keywords exactas
-- `MIN_SCORE = 0.50` calibrado para bge-m3 en español
-- Devuelve un fragmento representativo por archivo (deduplicado por archivoId)
-
----
-
-## Auto-escaneo de facturas al subir
-
-Al subir un PDF/imagen, además de indexarlo para RAG, el controlador (`ctrlSubir`) dispara
-`autoEscanearArchivo` **en segundo plano** (fire-and-forget, igual que el RAG):
-
-1. Si el archivo es PDF/imagen, se escanea con `escanearFactura(..., { soloSiFactura: true })`.
-2. **Guardia**: solo persiste la factura si la extracción parece factura (tiene líneas o
-   importes > 0). Así no se crean facturas basura a partir de PDFs/imágenes cualesquiera.
-
-Resultado: la analítica de facturas funciona sin pasos manuales. Para facturas ya subidas
-antes de esta función, usar "escanea todas las facturas" en el chat (o nombrarlas, que se
-auto-escanean al consultarlas).
-
----
-
-## Estructura frontend (`frontend/`)
-
+## Estructura frontend (`frontend/src/app/`)
 ```
-src/
-  app/
-    core/
-      archivos.service.ts   ← CRUD archivos, carpetas, escanear factura, búsqueda RAG, obtener metadata
-      auth.service.ts       ← Login/registro, token en localStorage, signal usuario
-      auth.guard.ts         ← Redirige a /login si no hay token
-      auth.interceptor.ts   ← Añade Authorization: Bearer a todas las peticiones
-      chat.service.ts       ← Historial en signal + localStorage (clave: akx_chat)
-      models.ts             ← Interfaces TS: Usuario, Archivo, ListaArchivos, ResultadoBusqueda
-      theme.service.ts      ← Toggle dark mode (clase body.dark)
-      toast.service.ts      ← Cola de notificaciones toast (signal)
-    layout/
-      shell.ts              ← Navbar: logo, nav links, avatar, cerrar sesión
-    pages/
-      login/login.ts        ← Login + registro en tabs
-      inicio/inicio.ts      ← Chat con el asistente IA; botón "Abrir" por cada archivo que la respuesta resuelva; scroll al fondo también al volver a la página (no solo al enviar/recibir)
-      archivos/archivos.ts  ← Explorador: tabla, carpetas, drag&drop, menú contextual, RAG
-      papelera/papelera.ts  ← Restaurar / borrar permanente / vaciar
-      perfil/perfil.ts      ← Editar nombre y avatar
-    shared/
-      file-size.pipe.ts     ← Formatea bytes → KB/MB/GB
-      toasts.component.ts   ← Renderiza cola de toasts
-      errores.ts            ← mensajeError(err): extrae string legible de HttpErrorResponse
-    app.routes.ts           ← /login, /inicio, /archivos, /papelera, /perfil
-    app.config.ts           ← provideRouter + provideHttpClient con interceptor JWT
-  styles.scss               ← CSS custom properties (verde/blanco + modo oscuro)
+core/    archivos/auth/chat/theme/toast .service.ts, auth.guard, auth.interceptor (JWT), models.ts
+layout/  shell (navbar)
+pages/   login, inicio (chat), archivos (explorador), papelera, perfil   [cada uno .ts/.html/.scss]
+shared/  file-size.pipe, toasts.component, errores.ts (mensajeError)
+app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), styles.scss (tema)
 ```
-
-### Página archivos (más compleja)
-- Árbol de carpetas construido en cliente (carga TODOS los archivos + carpetas de BD)
-- Drag & drop con eventos `pointer` (no HTML5 DnD)
-- Menú contextual (clic derecho): abrir, añadir descripción, descargar, copiar, renombrar, mover, borrar
-- **Añadir descripción** (sustituyó al "Escanear" manual, ya innecesario porque todo se
-  escanea/indexa solo al subir): modal con un textarea que se guarda vía
-  `PATCH /api/archivos/:id/descripcion` y se reindexa para el buscador por contenido
-- **Columna "Estado"** con iconos (refresco por polling cada 3s mientras haya algo
-  `pendiente`/`escaneando`): `spinner + "Escaneando"` mientras se procesa, `✓` verde
-  cuando terminó (`escaneada` o `no_factura` — ambos significan "procesado", no es
-  clicable), `✕` rojo (`error`); "no aplica" (txt/docx, estado null) queda en blanco
-- Visor de `.md` con `marked` en modal
-- Selección múltiple + barra de acciones bulk (copiar/mover/borrar)
-- Búsqueda semántica RAG integrada
-
-### Tema (`styles.scss`)
-```scss
---green: #16a34a        /* acento principal */
---green-dark: #11823b
---green-soft: #e9f9ef   /* hover, fondos suaves */
---bg, --surface, --text, --muted, --border, --danger
---radius: 12px
-```
-Modo oscuro: clase `body.dark` sobreescribe las variables.
-
-### Dev local del frontend
-```bash
-cd frontend
-npm install
-npm start    # ng serve → http://localhost:4200
-             # proxy.conf.json → /api redirige a localhost:3000
-```
+- **Estado con signals** (sin NgRx). Standalone components. Markdown del bot con `marked` (`breaks: true`).
+- **archivos.ts**: árbol de carpetas en cliente (carga todos los archivos), drag&drop con eventos `pointer`, menú contextual, selección múltiple, columna "Estado" (polling 3s), paginación en cliente.
+- **chat**: historial en signal + localStorage (`akx_chat`); se resetea al cambiar de sesión (`ChatService.reset()` desde `AuthService`) para no filtrarse entre usuarios.
+- **Tema** (`styles.scss`): `--green #16a34a`, `--green-dark`, `--green-soft`, `--bg/--surface/--text/--muted/--border/--danger`, `--radius 12px`. Modo oscuro: `body.dark`.
 
 ---
-
-## Limitaciones conocidas
-
-- **Modelo del chat**: en el servidor con GPU se usa `qwen2.5-coder:14b` (function calling fiable). En máquinas pequeñas, `qwen2.5:3b` tiene function calling poco fiable; el pre-flight, el parser de respaldo y el bypass son los workarounds que lo hacen usable. `qwen2.5-coder:7b` (misma familia que el del servidor, cabe en 8GB VRAM) es notablemente mejor que el 3b pero aun así falla de forma consistente en algunas frases muy directas (borrar un archivo/carpeta concreto, crear una nota, restaurar vs. borrar de la papelera) — de ahí los pre-flights deterministas listados arriba, verificados probando **todas** las frases de ejemplo de "Qué puede pedirle el usuario al chatbot" (README) contra el modelo real.
-- **Cambiar de modelo**: editar `OLLAMA_MODEL` en `.env` y `docker compose up -d api` (recarga .env, sin rebuild). El modelo debe estar descargado en el Ollama correspondiente.
-- **"Copia/mueve X a LA CARPETA Y"**: con esa frase exacta (la palabra "carpeta" antes del destino) el modelo no llama a ninguna tool de forma consistente, incluso con `qwen2.5-coder:7b`. Decir la ruta directa ("a /Y" o "a Y") sí funciona. No hay pre-flight para esto todavía.
-- **"Lee X" con contenido muy corto**: a veces el modelo solo confirma "lo he leído" en vez de mostrar el contenido cuando este es trivial (una sola frase corta); con contenido más rico (una factura completa) sí lo resume bien. Se intentó un ajuste de prompt sin éxito total.
-- **PDFs escaneados (sin capa de texto)**: se leen con `pdf-parse`, que no hace OCR; solo las **imágenes** pasan por la cascada de visión (granite/deepseek/Tesseract). Si una factura es un PDF puramente escaneado, habría que rasterizar las páginas a imagen antes del OCR (pendiente).
-- **Auto-escaneo al subir**: se ejecuta para todo PDF/imagen subido; con la guardia `soloSiFactura` no guarda los que no parecen factura, pero igualmente consume cómputo de OCR+IA por cada uno.
-- **GPU pequeña (8GB)**: deepseek-ocr (6.7GB) no entra entero y corre parcial en CPU
-  (~2 min por imagen) — no bloquea la subida (es en segundo plano), pero conviene
-  saberlo al probar en máquinas sin una GPU más grande. Tesseract (la 3ª red) corre
-  siempre en CPU, así que no añade presión sobre la GPU cuando entra en juego.
-- **Tipos de archivo permitidos**: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máximo 50 MB.
-- **Subida**: un archivo por petición HTTP; múltiples archivos → peticiones paralelas en el frontend.
-- El chat renderiza la respuesta del bot como markdown real (con `marked`, igual que el visor de `.md` del explorador): títulos, tablas, listas y negritas se ven formateados, no como texto plano con `#`/`**`/`|`. Los mensajes del usuario sí se muestran tal cual (texto plano, `white-space: pre-wrap`). Se usa `breaks: true` para que las líneas `✓ ...` de las acciones respeten el salto de línea simple en vez de fundirse en un párrafo.
 
 ## Despliegue (servidor)
+- `git pull` → `docker compose build api web && docker compose up -d api web`.
+- En el servidor se **borra `docker-compose.override.yml`** (Ollama externo con GPU vía `OLLAMA_URL=http://host.docker.internal:11434` + `extra_hosts`).
+- API detrás de nginx (servicio `web`): `app.set("trust proxy", 1)` para que `express-rate-limit` lea bien la IP.
+- Puertos del host configurables por `.env` (`WEB_PORT_HOST`, `API_PORT_HOST`...).
+- **No editar a mano en el servidor**: cambios en local → commit → push → `git pull`.
 
-- Monorepo clonado en el servidor; `docker compose build api && docker compose up -d api` tras `git pull`.
-- En el servidor **se borra `docker-compose.override.yml`** (no se usa Ollama en contenedor): la API apunta al Ollama externo con GPU vía `OLLAMA_URL=http://host.docker.internal:11434` + `extra_hosts`.
-- La API está detrás de nginx (servicio `web`): `app.set("trust proxy", 1)` en `app.ts` para que `express-rate-limit` lea bien la IP (X-Forwarded-For).
-- Puertos del host configurables por `.env` (`WEB_PORT_HOST`, `API_PORT_HOST`, `MINIO_PORT_HOST`, etc.) para evitar choques con otros servicios del servidor.
-- **No editar archivos a mano en el servidor**: cambios en local → commit → push → `git pull` (evita conflictos de merge).
+## Limitaciones conocidas (resumen)
+- Modelo pequeño (3b/7b): function calling poco fiable (de ahí los pre-flights) y mezcla campos al extraer facturas. Detalle y resto de limitaciones en `NOTAS.md`.
+- Tipos permitidos: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máx 50 MB. Subida: 1 archivo/petición (paralelas en el front).
