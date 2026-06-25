@@ -12,6 +12,7 @@ import {
   regenerarResumenVentasSerie,
   esArchivoFactura,
   actualizarResumenFacturaSiExiste,
+  localizarResumenDeArchivo,
 } from "./facturas.service";
 
 // Best-effort: nunca debe romper la operación de archivos en sí si falla
@@ -32,6 +33,37 @@ const refrescarResumenVentas = (usuarioId: string): void => {
 // (extensión .md, mimeType "text/markdown") nunca cumplen `esArchivoFactura`.
 const refrescarResumenVentasSiFactura = (usuarioId: string, archivo: Archivo): void => {
   if (esArchivoFactura(archivo)) refrescarResumenVentas(usuarioId);
+};
+
+// Mantiene el resumen INDIVIDUAL de una factura (si lo tiene) sincronizado
+// con el ciclo de vida de su archivo original: se manda a la papelera, se
+// restaura o se borra para siempre junto con él — antes quedaba huérfano
+// para siempre, sin reflejar que la factura ya no existe (o volvió a
+// existir). Best-effort: un fallo aquí no debe romper la operación principal
+// sobre el archivo, que ya se aplicó.
+const sincronizarResumenFactura = async (
+  usuarioId: string,
+  archivo: Archivo,
+  accion: "borrar" | "restaurar" | "borrarPermanente",
+): Promise<void> => {
+  if (!esArchivoFactura(archivo)) return;
+  try {
+    const resumen = await localizarResumenDeArchivo(usuarioId, archivo.id);
+    if (!resumen) return;
+    if (accion === "borrar" && !resumen.eliminadoEn) {
+      await repo().softRemove(resumen);
+    } else if (accion === "restaurar" && resumen.eliminadoEn) {
+      await repo().restore(resumen.id);
+    } else if (accion === "borrarPermanente") {
+      await minioClient.removeObject(env.MINIO_BUCKET, resumen.claveMinio).catch(() => {});
+      await repo().delete(resumen.id);
+    }
+  } catch (err) {
+    console.error(
+      `[archivos] Error al sincronizar el resumen de la factura "${archivo.nombre}" (no crítico):`,
+      err,
+    );
+  }
 };
 
 const repo = () => AppDataSource.getRepository(Archivo);
@@ -335,6 +367,7 @@ export const eliminarArchivo = async (
   // softRemove rellena eliminadoEn en vez de borrar la fila
   await repo().softRemove(archivo);
   refrescarResumenVentasSiFactura(usuarioId, archivo);
+  await sincronizarResumenFactura(usuarioId, archivo, "borrar");
 };
 
 // --- RESTAURAR ARCHIVO (sacar de la papelera) ---
@@ -382,6 +415,7 @@ export const restaurarArchivo = async (
   // restore pone eliminadoEn a null → vuelve a aparecer en las queries normales
   await repo().restore(id);
   refrescarResumenVentasSiFactura(usuarioId, archivo);
+  await sincronizarResumenFactura(usuarioId, archivo, "restaurar");
 };
 
 // --- LISTAR PAPELERA ---
@@ -419,6 +453,7 @@ export const borrarPermanente = async (
   await minioClient.removeObject(env.MINIO_BUCKET, archivo.claveMinio);
   await repo().delete(id); // hard delete: funciona aunque esté soft-deleted
   refrescarResumenVentasSiFactura(usuarioId, archivo);
+  await sincronizarResumenFactura(usuarioId, archivo, "borrarPermanente");
 };
 
 // --- VACIAR PAPELERA ---

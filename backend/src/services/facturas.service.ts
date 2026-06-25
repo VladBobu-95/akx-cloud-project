@@ -9,7 +9,13 @@ import { crearArchivoTexto, borrarPermanente, combinarContenido } from "./archiv
 import { actualizarDescripcionManual } from "./rag.service";
 import { pareceFacturaConImportes } from "./extraccion.service";
 
-const CARPETA_FACTURAS = "/facturas";
+// Exportada para que carpetas.service.ts pueda bloquear mover/renombrar esta
+// ruta exacta (ver moverCarpetaConContenido): resumen-ventas.md y los
+// resumen-<archivo>.md se regeneran SIEMPRE en esta ruta fija, así que si la
+// carpeta se mueve/renombra, la próxima regeneración crea una copia nueva
+// aquí mientras la vieja queda huérfana (desactualizada) en la ubicación
+// nueva — quedan dos copias activas, una sin actualizar nunca más.
+export const CARPETA_FACTURAS = "/facturas";
 
 // Contenido de la factura: el texto ya extraído (OCR/PDF/DOCX) combinado con
 // la descripción manual del usuario, si la hay (ver `combinarContenido`). NO
@@ -176,12 +182,36 @@ const nombreResumenFactura = (nombreOriginal: string, archivoId: string): string
   return `resumen-${base.replace(/[^\w.-]/g, "_")}-${idCortoDeArchivo(archivoId)}.md`;
 };
 
+// Localiza el resumen individual de un archivo (activo o en la papelera) por
+// su sufijo "-<idCorto>.md" — estable mientras exista el archivo, sin
+// importar en qué carpeta esté ni cómo se llame ahora. null si nunca se generó.
+// Exportada para que archivos.service.ts mantenga el resumen sincronizado con
+// el ciclo de vida del archivo original (si se borra/restaura/borra para
+// siempre la factura, su resumen sigue el mismo camino).
+export const localizarResumenDeArchivo = async (
+  usuarioId: string,
+  archivoId: string,
+): Promise<Archivo | null> => {
+  const repo = AppDataSource.getRepository(Archivo);
+  const encontrado = await repo
+    .createQueryBuilder("a")
+    .where("a.propietarioId = :u", { u: usuarioId })
+    .andWhere("a.nombre LIKE :p", { p: `%-${idCortoDeArchivo(archivoId)}.md` })
+    .andWhere("a.mimeType = :m", { m: "text/markdown" })
+    .withDeleted()
+    .getOne();
+  return encontrado ?? null;
+};
+
 // Como reemplazarArchivoTexto, pero para el resumen INDIVIDUAL de un archivo:
 // en vez de buscar por nombre+carpeta exactos (que cambian si se renombra el
 // archivo original), busca por el sufijo "-<idCorto>.md" — estable mientras
 // exista el archivo — así encuentra y sustituye el resumen viejo aunque el
 // archivo se haya renombrado entre medias (antes se quedaba huérfano con el
-// nombre antiguo hasta volver a escanear a mano).
+// nombre antiguo hasta volver a escanear a mano). Tampoco fija la carpeta de
+// búsqueda a /facturas: si el usuario movió/renombró esa carpeta (o solo este
+// resumen suelto), lo encuentra donde esté y actualiza ahí mismo — solo usa
+// /facturas por defecto si todavía no existía ninguno.
 const reemplazarResumenDeArchivo = async (
   usuarioId: string,
   archivoId: string,
@@ -189,12 +219,17 @@ const reemplazarResumenDeArchivo = async (
   contenido: string,
 ): Promise<void> => {
   const repo = AppDataSource.getRepository(Archivo);
+  // Solo activos: uno ya en la papelera no es "la ubicación actual" del
+  // resumen, es un huérfano de un ciclo de vida anterior — no debe
+  // resucitarse ni dictar dónde escribir el nuevo (lo gestiona por separado
+  // `sincronizarResumenFactura`, que sigue el ciclo de vida del archivo).
   const existentes = await repo
     .createQueryBuilder("a")
     .where("a.propietarioId = :u", { u: usuarioId })
-    .andWhere("a.carpeta = :c", { c: CARPETA_FACTURAS })
     .andWhere("a.nombre LIKE :p", { p: `%-${idCortoDeArchivo(archivoId)}.md` })
+    .andWhere("a.eliminadoEn IS NULL")
     .getMany();
+  let carpetaDestino = CARPETA_FACTURAS;
   for (const a of existentes) {
     // Misma protección que en reemplazarArchivoTexto: nunca borrar algo que
     // no sea de verdad un .md generado por este mecanismo.
@@ -204,9 +239,10 @@ const reemplazarResumenDeArchivo = async (
       );
       continue;
     }
+    carpetaDestino = a.carpeta; // sigue al resumen a su ubicación actual
     await borrarPermanente(a.id, usuarioId);
   }
-  await crearArchivoTexto(usuarioId, nuevoNombre, CARPETA_FACTURAS, contenido);
+  await crearArchivoTexto(usuarioId, nuevoNombre, carpetaDestino, contenido);
 };
 
 // Formatea una fecha ISO (YYYY-MM-DD) como DD/MM/YYYY para mostrar al usuario.
@@ -231,6 +267,21 @@ const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
   colasPorUsuario.set(usuarioId, actual.catch(() => {}));
   return actual;
 };
+
+// Wrapper serializado de reemplazarResumenDeArchivo: comparte la MISMA cola
+// (`colasPorUsuario`, por usuario) que regenerarResumenVentasSerie. Sin esto,
+// dos disparadores casi simultáneos para EL MISMO archivo (p. ej. renombrarlo
+// dos veces rápido, o renombrarlo justo cuando se está reescaneando) podían
+// competir: ambos leen "el resumen viejo" antes de que el otro lo borre, y el
+// segundo borrarPermanente lanza 404 (ya no existe) y aborta esa regeneración
+// a medias, dejando el resumen con el nombre equivocado o sin crear.
+const reemplazarResumenDeArchivoSerie = (
+  usuarioId: string,
+  archivoId: string,
+  nuevoNombre: string,
+  contenido: string,
+): Promise<void> =>
+  enSerie(usuarioId, () => reemplazarResumenDeArchivo(usuarioId, archivoId, nuevoNombre, contenido));
 
 // Prioridad dentro de cada cola: 0 = alta (PDFs y demás, rápidos: pdf-parse/
 // texto plano, sin IA de visión), 1 = baja (imágenes, o trabajo derivado de
@@ -438,7 +489,7 @@ export const escanearFactura = async (
     // Si falla la creación de los .md (p. ej. MinIO), logueamos pero no abortamos:
     // los datos de la factura ya están guardados en BD y eso es lo importante.
     try {
-      await reemplazarResumenDeArchivo(
+      await reemplazarResumenDeArchivoSerie(
         usuarioId,
         archivo.id,
         nombreResumenFactura(archivo.nombre, archivo.id),
@@ -615,7 +666,7 @@ export const actualizarResumenFacturaSiExiste = async (
 ): Promise<void> => {
   const { encontrada, resumen } = await obtenerFactura(usuarioId, archivo.id, archivo.nombre);
   if (!encontrada || !resumen) return;
-  await reemplazarResumenDeArchivo(
+  await reemplazarResumenDeArchivoSerie(
     usuarioId,
     archivo.id,
     nombreResumenFactura(archivo.nombre, archivo.id),
@@ -986,7 +1037,17 @@ ${ranking || "_(todavía no hay datos)_"}
 ## Mejores clientes
 ${rankingClientes || "_(todavía no hay datos)_"}
 `;
-  await reemplazarArchivoTexto(usuarioId, "resumen-ventas.md", CARPETA_FACTURAS, md);
+  // Sigue al resumen a su ubicación actual si el usuario movió/renombró la
+  // carpeta donde vivía (o solo este archivo suelto): busca el activo que ya
+  // exista, en CUALQUIER carpeta, y escribe ahí. Si no hay ninguno todavía
+  // (primera factura), usa /facturas por defecto. Sin esto, mover esa carpeta
+  // dejaba el resumen viejo huérfano (nunca se actualizaba) y creaba uno
+  // nuevo en /facturas cada vez.
+  const repo = AppDataSource.getRepository(Archivo);
+  const existente = await repo.findOne({
+    where: { nombre: "resumen-ventas.md", propietario: { id: usuarioId } },
+  });
+  await reemplazarArchivoTexto(usuarioId, "resumen-ventas.md", existente?.carpeta ?? CARPETA_FACTURAS, md);
 };
 
 // Wrapper público: serializa por usuario (ver `enSerie` más arriba) para que
