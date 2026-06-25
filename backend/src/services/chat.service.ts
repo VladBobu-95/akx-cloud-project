@@ -794,12 +794,22 @@ const pareceIntentoToolCallInvalido = (content: string): boolean =>
     }
   });
 
+// Tiempo máximo para UNA llamada a Ollama. Sin esto, una petición colgada
+// (modelo cargándose, GPU ocupada, lo que sea) deja al usuario esperando
+// indefinidamente sin respuesta ni error — "pensando" para siempre en vez de
+// avisar de que algo falló. El bucle de herramientas hace varias llamadas por
+// turno (hasta MAX_ITER), así que este límite es POR LLAMADA, no por turno
+// completo.
+const OLLAMA_TIMEOUT_MS = 45_000;
+
 // Llama a Ollama /api/chat (sin streaming).
 const llamarOllama = async (
   messages: OllamaMessage[],
   sinHerramientas = false,
 ): Promise<OllamaMessage> => {
   let res: Response;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
   try {
     res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
       method: "POST",
@@ -812,9 +822,18 @@ const llamarOllama = async (
         keep_alive: "30m",
         options: { temperature: 0 },
       }),
+      signal: controller.signal,
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new AppError(
+        504,
+        "El asistente está tardando demasiado en responder. Inténtalo de nuevo en unos segundos.",
+      );
+    }
     throw new AppError(503, "El asistente no está disponible (no se puede conectar con Ollama).");
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   const data = (await res.json()) as OllamaChatResponse;
@@ -1101,13 +1120,18 @@ export const chatear = async (
   // sin pasar por Ollama; si no está escaneada, se dice al instante en vez de
   // escanearla sin que el usuario lo pidiera.
   const tieneIntencionAbrirFactura = new RegExp(`\\b${VERBO_ABRIR}\\b`).test(msgSinTildes);
-  // OJO: el sufijo tiene que exigir un separador (dígito/_/-) justo tras
-  // "factura(s)", no cualquier letra — sin esto, "facturajpg.jpg" (un archivo
+  // OJO: el sufijo es OBLIGATORIO (dígito/_/- justo tras "factura(s)", no
+  // cualquier letra) por DOS razones: 1) sin él, "facturajpg.jpg" (un archivo
   // cualquiera que solo tiene la mala suerte de empezar por "factura") se
   // tragaba entero como nombre de factura, y al no tener fila en la tabla
-  // Factura (porque no es una factura real) se le decía "escanéala primero" en
-  // vez de simplemente abrirlo como el archivo normal que es.
-  const matchNombreFactura = msgLower.match(/\bfacturas?(?:[\d_-]\w*)?\b/);
+  // Factura se le decía "escanéala primero" en vez de simplemente abrirlo
+  // como el archivo normal que es; 2) sin él, "muéstrame las facturas de este
+  // año" (un LISTADO, sin ningún identificador concreto) también casaba aquí
+  // -"muestra" es VERBO_ABRIR- e intentaba abrir un archivo literal llamado
+  // "facturas", que no existe, en vez de caer en el pre-flight de listado de
+  // más abajo (que sí lo resuelve bien). "Pásame" no es VERBO_ABRIR, por eso
+  // con ese verbo sí funcionaba y con "muéstrame" no.
+  const matchNombreFactura = msgLower.match(/\bfacturas?[\d_-]\w*\b/);
   const esAbrirFactura =
     tieneIntencionAbrirFactura &&
     !!matchNombreFactura &&
