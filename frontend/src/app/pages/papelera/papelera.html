@@ -9,6 +9,17 @@
       }
     </div>
 
+    <!-- Barra de acciones múltiples (visible cuando hay selección) -->
+    @if (haySeleccion()) {
+      <div class="bulk-bar">
+        <span class="bulk-count">{{ numSeleccionados() }} seleccionado(s)</span>
+        <button class="btn btn-outline btn-sm" (click)="restaurarSeleccion()">↩️ Restaurar</button>
+        <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm" (click)="limpiarSeleccion()">✕ Cancelar</button>
+      </div>
+    }
+
     <div class="card list">
       @if (cargando()) {
         <div class="empty">Cargando…</div>
@@ -21,6 +32,9 @@
         <table class="table">
           <thead>
             <tr>
+              <th class="col-check">
+                <input type="checkbox" [checked]="todosSeleccionados()" (change)="toggleTodo()" />
+              </th>
               <th>Nombre</th>
               <th>Carpeta</th>
               <th>Tamaño</th>
@@ -30,7 +44,10 @@
           </thead>
           <tbody>
             @for (a of archivosPag(); track a.id) {
-              <tr>
+              <tr [class.seleccionada]="estaSeleccionado(a.id)">
+                <td class="col-check">
+                  <input type="checkbox" [checked]="estaSeleccionado(a.id)" (change)="toggleSeleccion($event, a.id)" />
+                </td>
                 <td class="nombre">{{ a.nombre }}</td>
                 <td><span class="badge badge-muted">{{ a.carpeta }}</span></td>
                 <td>{{ a.tamanoBytes | fileSize }}</td>

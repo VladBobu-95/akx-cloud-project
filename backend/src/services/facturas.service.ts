@@ -182,6 +182,22 @@ const nombreResumenFactura = (nombreOriginal: string, archivoId: string): string
   return `resumen-${base.replace(/[^\w.-]/g, "_")}-${idCortoDeArchivo(archivoId)}.md`;
 };
 
+// Localiza dónde vive ACTUALMENTE la carpeta de facturas del usuario: la del
+// resumen-ventas.md activo, si ya existe alguno, o /facturas por defecto si
+// todavía no se ha generado ningún resumen (cuenta nueva / primera factura).
+// La usan tanto el resumen agregado como el fallback de cada resumen
+// INDIVIDUAL nuevo (ver más abajo) — así, si el usuario mueve esa carpeta
+// mientras hay varias facturas escaneándose a la vez, las que aún no tenían
+// resumen propio (primera vez que se crea el suyo) aterrizan junto a las
+// demás en la ubicación nueva, en vez de recrear /facturas en la raíz.
+const localizarCarpetaFacturas = async (usuarioId: string): Promise<string> => {
+  const repo = AppDataSource.getRepository(Archivo);
+  const existente = await repo.findOne({
+    where: { nombre: "resumen-ventas.md", propietario: { id: usuarioId } },
+  });
+  return existente?.carpeta ?? CARPETA_FACTURAS;
+};
+
 // Localiza el resumen individual de un archivo (activo o en la papelera) por
 // su sufijo "-<idCorto>.md" — estable mientras exista el archivo, sin
 // importar en qué carpeta esté ni cómo se llame ahora. null si nunca se generó.
@@ -229,7 +245,7 @@ const reemplazarResumenDeArchivo = async (
     .andWhere("a.nombre LIKE :p", { p: `%-${idCortoDeArchivo(archivoId)}.md` })
     .andWhere("a.eliminadoEn IS NULL")
     .getMany();
-  let carpetaDestino = CARPETA_FACTURAS;
+  let carpetaDestino: string | null = null;
   for (const a of existentes) {
     // Misma protección que en reemplazarArchivoTexto: nunca borrar algo que
     // no sea de verdad un .md generado por este mecanismo.
@@ -242,6 +258,12 @@ const reemplazarResumenDeArchivo = async (
     carpetaDestino = a.carpeta; // sigue al resumen a su ubicación actual
     await borrarPermanente(a.id, usuarioId);
   }
+  // Resumen INDIVIDUAL nuevo (este archivo no tenía uno todavía): en vez de
+  // /facturas fijo, sigue a donde esté ahora el resto de resúmenes — antes,
+  // si el usuario movía /facturas mientras otras facturas seguían
+  // escaneándose, las que aún no tenían resumen propio recreaban /facturas
+  // en la raíz en vez de aterrizar junto a las demás en la ubicación nueva.
+  if (carpetaDestino === null) carpetaDestino = await localizarCarpetaFacturas(usuarioId);
   await crearArchivoTexto(usuarioId, nuevoNombre, carpetaDestino, contenido);
 };
 
@@ -1045,16 +1067,11 @@ ${ranking || "_(todavía no hay datos)_"}
 ${rankingClientes || "_(todavía no hay datos)_"}
 `;
   // Sigue al resumen a su ubicación actual si el usuario movió/renombró la
-  // carpeta donde vivía (o solo este archivo suelto): busca el activo que ya
-  // exista, en CUALQUIER carpeta, y escribe ahí. Si no hay ninguno todavía
-  // (primera factura), usa /facturas por defecto. Sin esto, mover esa carpeta
-  // dejaba el resumen viejo huérfano (nunca se actualizaba) y creaba uno
-  // nuevo en /facturas cada vez.
-  const repo = AppDataSource.getRepository(Archivo);
-  const existente = await repo.findOne({
-    where: { nombre: "resumen-ventas.md", propietario: { id: usuarioId } },
-  });
-  await reemplazarArchivoTexto(usuarioId, "resumen-ventas.md", existente?.carpeta ?? CARPETA_FACTURAS, md);
+  // carpeta donde vivía (ver `localizarCarpetaFacturas`). Sin esto, mover esa
+  // carpeta dejaba el resumen viejo huérfano (nunca se actualizaba) y creaba
+  // uno nuevo en /facturas cada vez.
+  const carpetaDestino = await localizarCarpetaFacturas(usuarioId);
+  await reemplazarArchivoTexto(usuarioId, "resumen-ventas.md", carpetaDestino, md);
 };
 
 // Wrapper público: serializa por usuario (ver `enSerie` más arriba) para que

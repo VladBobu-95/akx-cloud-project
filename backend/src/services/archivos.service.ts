@@ -354,15 +354,28 @@ export const eliminarArchivo = async (
   id: string,
   usuarioId: string,
 ): Promise<void> => {
+  // withDeleted: hace falta para poder distinguir "ya está en la papelera"
+  // (no-op) de "no existe" (404) — ver comentario más abajo.
   const archivo = await repo().findOne({
     where: { id },
     relations: { propietario: true },
+    withDeleted: true,
   });
 
   if (!archivo) throw new AppError(404, "Archivo no encontrado");
   if (archivo.propietario.id !== usuarioId) {
     throw new AppError(403, "No tienes permiso para eliminar este archivo");
   }
+  // Idempotente: si ya está en la papelera, no es un error, ya se cumplió lo
+  // que se pedía. Importante para el borrado múltiple del explorador — si se
+  // selecciona a la vez una factura Y su resumen individual, borrar la
+  // factura ya borra el resumen como efecto colateral (sincronizarResumenFactura
+  // más abajo); sin este idempotente, la petición de borrado del resumen que
+  // llega después (porque también estaba seleccionado) fallaba con "Archivo
+  // no encontrado" y tumbaba todo el forkJoin del explorador a medias (los
+  // archivos quedaban borrados pero las carpetas seleccionadas nunca llegaban
+  // a borrarse, porque ese paso solo corre si el forkJoin entero tiene éxito).
+  if (archivo.eliminadoEn) return;
 
   // softRemove rellena eliminadoEn en vez de borrar la fila
   await repo().softRemove(archivo);
@@ -386,9 +399,10 @@ export const restaurarArchivo = async (
   if (archivo.propietario.id !== usuarioId) {
     throw new AppError(403, "No tienes permiso para restaurar este archivo");
   }
-  if (!archivo.eliminadoEn) {
-    throw new AppError(400, "El archivo no está en la papelera");
-  }
+  // Idempotente por la misma razón que en eliminarArchivo: si ya está activo
+  // (p. ej. lo restauró de rebote sincronizarResumenFactura porque también se
+  // restauró su factura asociada en la misma operación), no es un error.
+  if (!archivo.eliminadoEn) return;
 
   // Si mientras estaba en la papelera se creó/subió otro archivo activo con el
   // mismo nombre en la misma carpeta (ej. se volvió a escanear la factura, o
@@ -444,7 +458,11 @@ export const borrarPermanente = async (
     withDeleted: true,
   });
 
-  if (!archivo) throw new AppError(404, "Archivo no encontrado");
+  // Idempotente por la misma razón que en eliminarArchivo: si ya no existe
+  // (p. ej. lo borró de rebote sincronizarResumenFactura al borrar
+  // permanentemente su factura asociada en la misma operación), el resultado
+  // que se pedía — que ya no exista — se cumple igual, no es un error.
+  if (!archivo) return;
   if (archivo.propietario.id !== usuarioId) {
     throw new AppError(403, "No tienes permiso para borrar este archivo");
   }

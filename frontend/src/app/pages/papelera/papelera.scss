@@ -4,6 +4,40 @@
       .list {
         padding: 6px 8px;
       }
+      /* Columna de checkbox */
+      .col-check {
+        width: 38px;
+        padding: 8px 6px 8px 12px;
+        text-align: center;
+      }
+      .col-check input[type='checkbox'] {
+        cursor: pointer;
+        width: 15px;
+        height: 15px;
+        accent-color: var(--green);
+      }
+      /* Fila seleccionada */
+      .table tbody tr.seleccionada td {
+        background: var(--green-softer) !important;
+      }
+      /* Barra de acciones múltiples */
+      .bulk-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: var(--green-soft);
+        border: 1px solid var(--green);
+        border-radius: var(--radius);
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+      }
+      .bulk-count {
+        font-weight: 700;
+        font-size: 0.9rem;
+        color: var(--green-dark);
+        margin-right: 4px;
+      }
       .nombre {
         font-weight: 600;
       }

@@ -1,6 +1,7 @@
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { forkJoin } from 'rxjs';
 import { ArchivosService } from '../../core/archivos.service';
 import { ToastService } from '../../core/toast.service';
 import { Archivo } from '../../core/models';
@@ -49,6 +50,66 @@ export class PapeleraPage {
     const n = Math.trunc(Number(valor));
     if (!Number.isFinite(n) || n < 1) return;
     this.pagina.set(Math.min(n, this.totalPaginas()) - 1);
+  }
+
+  // --- Selección múltiple (igual que en el explorador) ---
+  protected seleccionados = signal<Set<string>>(new Set());
+  protected haySeleccion = computed(() => this.seleccionados().size > 0);
+  protected numSeleccionados = computed(() => this.seleccionados().size);
+  protected todosSeleccionados = computed(() => {
+    const total = this.archivos().length;
+    return total > 0 && this.seleccionados().size === total;
+  });
+
+  protected estaSeleccionado(id: string): boolean {
+    return this.seleccionados().has(id);
+  }
+  protected toggleSeleccion(ev: Event, id: string) {
+    ev.stopPropagation();
+    const s = new Set(this.seleccionados());
+    s.has(id) ? s.delete(id) : s.add(id);
+    this.seleccionados.set(s);
+  }
+  protected toggleTodo() {
+    this.seleccionados.set(
+      this.todosSeleccionados() ? new Set() : new Set(this.archivos().map((a) => a.id)),
+    );
+  }
+  protected limpiarSeleccion() {
+    this.seleccionados.set(new Set());
+  }
+
+  protected restaurarSeleccion() {
+    const ids = [...this.seleccionados()];
+    const n = ids.length;
+    forkJoin(ids.map((id) => this.svc.restaurar(id))).subscribe({
+      next: () => {
+        this.toast.exito(`${n} elemento${n !== 1 ? 's' : ''} restaurado${n !== 1 ? 's' : ''}`);
+        this.limpiarSeleccion();
+        this.cargar();
+      },
+      error: (err) => this.toast.error(mensajeError(err)),
+    });
+  }
+
+  protected pedirBorrarSeleccion() {
+    const n = this.seleccionados().size;
+    this.confirmacion.set({
+      titulo: 'Borrar definitivamente',
+      mensaje: `Borrar ${n} elemento${n !== 1 ? 's' : ''} permanentemente. Esta acción no se puede deshacer.`,
+      accion: 'Borrar',
+      onOk: () => {
+        const ids = [...this.seleccionados()];
+        forkJoin(ids.map((id) => this.svc.borrarPermanente(id))).subscribe({
+          next: () => {
+            this.toast.exito(`${n} elemento${n !== 1 ? 's' : ''} borrado${n !== 1 ? 's' : ''} definitivamente`);
+            this.limpiarSeleccion();
+            this.cargar();
+          },
+          error: (err) => this.toast.error(mensajeError(err)),
+        });
+      },
+    });
   }
 
   ejecutarConfirmacion() {
