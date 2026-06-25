@@ -1041,6 +1041,23 @@ const regenerarResumenVentas = async (usuarioId: string): Promise<void> => {
     top,
     clientes,
   } = await resumenVentas(usuarioId);
+
+  if (numFacturas === 0) {
+    // Sin facturas no hay nada que resumir: si quedaba un resumen-ventas.md
+    // de antes (p. ej. se borraron/movieron todas), se borra en vez de
+    // reescribirse con ceros — y como era el único motivo para que /facturas
+    // existiera, la carpeta deja de "resucitar" sola. Solo debe reaparecer al
+    // subir o escanear una factura nueva (entonces SÍ hay datos que mostrar).
+    const repo = AppDataSource.getRepository(Archivo);
+    const existente = await repo.findOne({
+      where: { nombre: "resumen-ventas.md", propietario: { id: usuarioId } },
+    });
+    if (existente && existente.mimeType === "text/markdown") {
+      await borrarPermanente(existente.id, usuarioId);
+    }
+    return;
+  }
+
   const ranking = top
     .map((t, i) => `${i + 1}. **${t.producto}** — ${t.unidades} ud. — ${eur(t.importe)}`)
     .join("\n");
