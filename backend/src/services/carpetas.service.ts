@@ -4,7 +4,7 @@ import { Usuario } from "../entities/Usuario";
 import { Archivo } from "../entities/Archivo";
 import { AppError } from "../utils/errors";
 import { copiarArchivo } from "./archivos.service";
-import { regenerarResumenVentasSerie } from "./facturas.service";
+import { regenerarResumenVentasSerie, enSerieFacturas } from "./facturas.service";
 
 const repo = () => AppDataSource.getRepository(Carpeta);
 
@@ -121,140 +121,146 @@ export const carpetaExiste = async (usuarioId: string, ruta: string): Promise<bo
 // la carpeta. Borra la metadata de las subcarpetas. Devuelve cuántos archivos movió.
 // Caso especial r === "/": solo borra los archivos sueltos literalmente en la raíz
 // (no toca lo que hay dentro de subcarpetas, que no son parte de "la raíz").
-export const vaciarCarpeta = async (
-  usuarioId: string,
-  ruta: string,
-): Promise<{ borrados: number }> => {
-  const r = normalizarRuta(ruta);
-  if (r !== "/" && !(await carpetaExiste(usuarioId, r))) {
-    throw new AppError(404, `No existe ninguna carpeta "${r}".`);
-  }
-  const query = AppDataSource.getRepository(Archivo)
-    .createQueryBuilder()
-    .softDelete()
-    .where("propietarioId = :u", { u: usuarioId });
-  if (r === "/") {
-    query.andWhere("carpeta = '/'");
-  } else {
-    query.andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` });
-  }
-  const res = await query.execute();
-  if (r !== "/") {
-    // Borra la metadata de las subcarpetas (su contenido ya no existe) pero conserva la carpeta.
-    await repo()
+// Encolada en la misma cola por usuario que las regeneraciones de resumen
+// (`enSerieFacturas`, ver facturas.service.ts): sin esto, vaciar una carpeta
+// justo mientras se está escaneando una factura podía entrelazarse con la
+// regeneración en curso y dejar una referencia a MinIO inconsistente.
+export const vaciarCarpeta = (usuarioId: string, ruta: string): Promise<{ borrados: number }> =>
+  enSerieFacturas(usuarioId, async () => {
+    const r = normalizarRuta(ruta);
+    if (r !== "/" && !(await carpetaExiste(usuarioId, r))) {
+      throw new AppError(404, `No existe ninguna carpeta "${r}".`);
+    }
+    const query = AppDataSource.getRepository(Archivo)
       .createQueryBuilder()
-      .delete()
-      .from(Carpeta)
-      .where("propietarioId = :u", { u: usuarioId })
-      .andWhere("ruta LIKE :p", { p: `${r}/%` })
-      .execute();
-    await crearCarpeta(usuarioId, r); // mantener la carpeta (ahora vacía)
-  }
-  if (res.affected) refrescarResumenVentas(usuarioId);
-  return { borrados: res.affected ?? 0 };
-};
+      .softDelete()
+      .where("propietarioId = :u", { u: usuarioId });
+    if (r === "/") {
+      query.andWhere("carpeta = '/'");
+    } else {
+      query.andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` });
+    }
+    const res = await query.execute();
+    if (r !== "/") {
+      // Borra la metadata de las subcarpetas (su contenido ya no existe) pero conserva la carpeta.
+      await repo()
+        .createQueryBuilder()
+        .delete()
+        .from(Carpeta)
+        .where("propietarioId = :u", { u: usuarioId })
+        .andWhere("ruta LIKE :p", { p: `${r}/%` })
+        .execute();
+      await crearCarpeta(usuarioId, r); // mantener la carpeta (ahora vacía)
+    }
+    if (res.affected) refrescarResumenVentas(usuarioId);
+    return { borrados: res.affected ?? 0 };
+  });
 
 // Borra una carpeta y TODO su contenido: envía a la papelera los archivos del
 // subárbol (soft-delete) y elimina la metadata de las carpetas. Devuelve cuántos
 // archivos se enviaron a la papelera.
-export const eliminarCarpetaConContenido = async (
+export const eliminarCarpetaConContenido = (
   usuarioId: string,
   ruta: string,
-): Promise<{ borrados: number }> => {
-  const r = normalizarRuta(ruta);
-  if (r === "/") throw new AppError(400, "No se puede eliminar la raíz");
-  if (!(await carpetaExiste(usuarioId, r))) {
-    throw new AppError(404, `No existe ninguna carpeta "${r}".`);
-  }
-  const res = await AppDataSource.getRepository(Archivo)
-    .createQueryBuilder()
-    .softDelete()
-    .where("propietarioId = :u", { u: usuarioId })
-    .andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` })
-    .execute();
-  await eliminarCarpeta(usuarioId, r);
-  if (res.affected) refrescarResumenVentas(usuarioId);
-  return { borrados: res.affected ?? 0 };
-};
+): Promise<{ borrados: number }> =>
+  enSerieFacturas(usuarioId, async () => {
+    const r = normalizarRuta(ruta);
+    if (r === "/") throw new AppError(400, "No se puede eliminar la raíz");
+    if (!(await carpetaExiste(usuarioId, r))) {
+      throw new AppError(404, `No existe ninguna carpeta "${r}".`);
+    }
+    const res = await AppDataSource.getRepository(Archivo)
+      .createQueryBuilder()
+      .softDelete()
+      .where("propietarioId = :u", { u: usuarioId })
+      .andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` })
+      .execute();
+    await eliminarCarpeta(usuarioId, r);
+    if (res.affected) refrescarResumenVentas(usuarioId);
+    return { borrados: res.affected ?? 0 };
+  });
 
 // Borra TODO: envía a la papelera todos los archivos activos del usuario y
 // elimina la metadata de todas sus carpetas. Los archivos quedan recuperables
 // desde la papelera (soft-delete). Devuelve cuántos archivos y carpetas afectó.
-export const vaciarTodo = async (
+export const vaciarTodo = (
   usuarioId: string,
-): Promise<{ archivos: number; carpetas: number }> => {
-  const resArchivos = await AppDataSource.getRepository(Archivo)
-    .createQueryBuilder()
-    .softDelete()
-    .where("propietarioId = :u", { u: usuarioId })
-    .andWhere("eliminadoEn IS NULL")
-    .execute();
-  const resCarpetas = await repo()
-    .createQueryBuilder()
-    .delete()
-    .from(Carpeta)
-    .where("propietarioId = :u", { u: usuarioId })
-    .execute();
-  if (resArchivos.affected) refrescarResumenVentas(usuarioId);
-  return {
-    archivos: resArchivos.affected ?? 0,
-    carpetas: resCarpetas.affected ?? 0,
-  };
-};
+): Promise<{ archivos: number; carpetas: number }> =>
+  enSerieFacturas(usuarioId, async () => {
+    const resArchivos = await AppDataSource.getRepository(Archivo)
+      .createQueryBuilder()
+      .softDelete()
+      .where("propietarioId = :u", { u: usuarioId })
+      .andWhere("eliminadoEn IS NULL")
+      .execute();
+    const resCarpetas = await repo()
+      .createQueryBuilder()
+      .delete()
+      .from(Carpeta)
+      .where("propietarioId = :u", { u: usuarioId })
+      .execute();
+    if (resArchivos.affected) refrescarResumenVentas(usuarioId);
+    return {
+      archivos: resArchivos.affected ?? 0,
+      carpetas: resCarpetas.affected ?? 0,
+    };
+  });
 
 // Borra TODAS las carpetas y su contenido, pero NO toca los archivos que ya
 // estaban en la raíz (fuera de cualquier carpeta). Devuelve cuántos archivos
 // fueron a la papelera y cuántas carpetas se eliminaron.
-export const eliminarTodasCarpetas = async (
+export const eliminarTodasCarpetas = (
   usuarioId: string,
-): Promise<{ borrados: number; carpetas: number }> => {
-  const resArchivos = await AppDataSource.getRepository(Archivo)
-    .createQueryBuilder()
-    .softDelete()
-    .where("propietarioId = :u", { u: usuarioId })
-    .andWhere("eliminadoEn IS NULL")
-    .andWhere("carpeta <> '/'")
-    .execute();
-  const resCarpetas = await repo()
-    .createQueryBuilder()
-    .delete()
-    .from(Carpeta)
-    .where("propietarioId = :u", { u: usuarioId })
-    .execute();
-  if (resArchivos.affected) refrescarResumenVentas(usuarioId);
-  return { borrados: resArchivos.affected ?? 0, carpetas: resCarpetas.affected ?? 0 };
-};
+): Promise<{ borrados: number; carpetas: number }> =>
+  enSerieFacturas(usuarioId, async () => {
+    const resArchivos = await AppDataSource.getRepository(Archivo)
+      .createQueryBuilder()
+      .softDelete()
+      .where("propietarioId = :u", { u: usuarioId })
+      .andWhere("eliminadoEn IS NULL")
+      .andWhere("carpeta <> '/'")
+      .execute();
+    const resCarpetas = await repo()
+      .createQueryBuilder()
+      .delete()
+      .from(Carpeta)
+      .where("propietarioId = :u", { u: usuarioId })
+      .execute();
+    if (resArchivos.affected) refrescarResumenVentas(usuarioId);
+    return { borrados: resArchivos.affected ?? 0, carpetas: resCarpetas.affected ?? 0 };
+  });
 
 // Mueve/renombra una carpeta CON su contenido: re-prefija la carpeta de todos los
 // archivos del subárbol y la metadata de carpetas. Devuelve cuántos archivos movió.
-export const moverCarpetaConContenido = async (
+export const moverCarpetaConContenido = (
   usuarioId: string,
   origen: string,
   destino: string,
-): Promise<{ movidos: number }> => {
-  const o = normalizarRuta(origen);
-  const d = normalizarRuta(destino);
-  if (d === o || d.startsWith(`${o}/`)) {
-    throw new AppError(400, "No puedes mover una carpeta dentro de sí misma");
-  }
-  if (!(await carpetaExiste(usuarioId, o))) {
-    throw new AppError(404, `No existe ninguna carpeta "${o}".`);
-  }
-  const archivosRepo = AppDataSource.getRepository(Archivo);
-  const archivos = await archivosRepo
-    .createQueryBuilder("a")
-    .where("a.propietarioId = :u", { u: usuarioId })
-    .andWhere("(a.carpeta = :o OR a.carpeta LIKE :p)", { o, p: `${o}/%` })
-    .getMany();
-  for (const a of archivos) {
-    a.carpeta = d + a.carpeta.slice(o.length);
-  }
-  if (archivos.length) await archivosRepo.save(archivos);
-  await reubicarCarpeta(usuarioId, o, d);
-  // Asegura que la carpeta destino exista como metadata.
-  await crearCarpeta(usuarioId, d);
-  return { movidos: archivos.length };
-};
+): Promise<{ movidos: number }> =>
+  enSerieFacturas(usuarioId, async () => {
+    const o = normalizarRuta(origen);
+    const d = normalizarRuta(destino);
+    if (d === o || d.startsWith(`${o}/`)) {
+      throw new AppError(400, "No puedes mover una carpeta dentro de sí misma");
+    }
+    if (!(await carpetaExiste(usuarioId, o))) {
+      throw new AppError(404, `No existe ninguna carpeta "${o}".`);
+    }
+    const archivosRepo = AppDataSource.getRepository(Archivo);
+    const archivos = await archivosRepo
+      .createQueryBuilder("a")
+      .where("a.propietarioId = :u", { u: usuarioId })
+      .andWhere("(a.carpeta = :o OR a.carpeta LIKE :p)", { o, p: `${o}/%` })
+      .getMany();
+    for (const a of archivos) {
+      a.carpeta = d + a.carpeta.slice(o.length);
+    }
+    if (archivos.length) await archivosRepo.save(archivos);
+    await reubicarCarpeta(usuarioId, o, d);
+    // Asegura que la carpeta destino exista como metadata.
+    await crearCarpeta(usuarioId, d);
+    return { movidos: archivos.length };
+  });
 
 // Copia una carpeta CON su contenido al destino. Devuelve cuántos archivos copió.
 export const copiarCarpetaConContenido = async (

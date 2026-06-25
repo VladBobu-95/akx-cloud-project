@@ -256,7 +256,13 @@ export const formatearFecha = (iso: string): string => {
 // escaneándose a la vez (subida múltiple / "escanea todas") acaban
 // regenerando el MISMO archivo "resumen-ventas.md" (borrar+crear): sin
 // serializar, dos ejecuciones a la vez podían dejar dos copias del .md o
-// competir en el borrado.
+// competir en el borrado. Exportada (como `enSerieFacturas`) para que
+// carpetas.service.ts encole en esta MISMA cola las operaciones que cambian
+// dónde vive /facturas (mover/renombrar/borrar esa carpeta): sin esto, mover
+// la carpeta justo mientras se está escaneando una factura podía entrelazarse
+// con la regeneración en curso (cada una lee/escribe la ubicación por su
+// cuenta) y acabar creando una /facturas duplicada con un resumen que
+// referencia una clave de MinIO inconsistente (no se podía abrir).
 // (Estado en memoria: válido para una sola instancia de API, como es el caso.)
 const colasPorUsuario = new Map<string, Promise<unknown>>();
 const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
@@ -267,6 +273,7 @@ const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
   colasPorUsuario.set(usuarioId, actual.catch(() => {}));
   return actual;
 };
+export const enSerieFacturas = enSerie;
 
 // Wrapper serializado de reemplazarResumenDeArchivo: comparte la MISMA cola
 // (`colasPorUsuario`, por usuario) que regenerarResumenVentasSerie. Sin esto,
