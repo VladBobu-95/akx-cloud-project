@@ -1659,16 +1659,26 @@ export const chatear = async (
   // El lookahead negativo evita que "resume LO QUE TENGO sobre el proyecto X"
   // (una búsqueda semántica por tema, no un listado) dispare esto solo por
   // contener la subcadena "que tengo".
+  // Incluye VERBO_ABRIR junto a VERBO_LISTAR: "abre todos los archivos/X" no
+  // se puede "abrir" literalmente de una sola vez, pero el sistema SÍ puede
+  // mostrarlos con un botón "Abrir" por cada uno (igual que "muéstrame todos
+  // los archivos") — sin esto, el modelo respondía "no puedo abrir archivos
+  // directamente", lo cual es confuso porque SÍ puede abrir archivos (uno a
+  // la vez, con el botón). Solo aplica con "todos/todas/mis/los/las" — "abre
+  // el archivo X" (un nombre concreto) no encaja en estos patrones porque "el"
+  // no es ninguno de esos calificadores, así que sigue su flujo normal.
+  const VERBO_LISTAR_O_ABRIR = `(?:${VERBO_LISTAR}|${VERBO_ABRIR})`;
   const pideTodoGenerico =
-    new RegExp(`(${VERBO_LISTAR})\\s+todo\\b`).test(msgSinTildes) ||
+    new RegExp(`(${VERBO_LISTAR_O_ABRIR})\\s+todo\\b`).test(msgSinTildes) ||
     /qu[eé]\s+tengo\b(?!\s+(sobre|de|acerca|relacionado))/.test(msgLower);
   const pideArchivos =
-    new RegExp(`(${VERBO_LISTAR})\\s+(todos\\s+)?(mis\\s+)?(los\\s+)?(archivos?|ficheros?)\\b`).test(
+    new RegExp(`(${VERBO_LISTAR_O_ABRIR})\\s+(todos\\s+)?(mis\\s+)?(los\\s+)?(archivos?|ficheros?)\\b`).test(
       msgSinTildes,
     ) || /qu[eé]\s+(archivos?|ficheros?)\s+tengo/.test(msgLower);
   const pideCarpetas =
-    new RegExp(`(${VERBO_LISTAR})\\s+(todas\\s+)?(mis\\s+)?(las\\s+)?carpetas?\\b`).test(msgSinTildes) ||
-    /qu[eé]\s+carpetas?\s+tengo/.test(msgLower);
+    new RegExp(`(${VERBO_LISTAR_O_ABRIR})\\s+(todas\\s+)?(mis\\s+)?(las\\s+)?carpetas?\\b`).test(
+      msgSinTildes,
+    ) || /qu[eé]\s+carpetas?\s+tengo/.test(msgLower);
   // Si el mensaje nombra ambos tipos (ej: "carpetas y ficheros") pero solo uno
   // coincide exactamente con el patrón verbo+sustantivo, se cuenta como ambos.
   const mencionaArchivoPalabra = /archivo|fichero/.test(msgLower);
