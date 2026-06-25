@@ -1,4 +1,8 @@
-
+si seleciono todo y borro me da error archivo no encontrado pero si cambio de tab archivos desaparecen pero carpetas no
+-restaurar todo
+- que no se invente cosas
+- mover varios seleccionados
+- resumen de todo
 - si borras factura se tiene que borrar tmb desde resumen(/facturas)
 - problemas con 123 (ficheros grandes?)
 - cuando se escanean cosas (el chat tiene que prohibir o infomrar)

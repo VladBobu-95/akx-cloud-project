@@ -856,9 +856,34 @@ export const chatear = async (
   respuesta: string;
   acciones: string[];
   archivos?: { id: string; nombre: string }[];
+  // Las 3 tablas son paginadas con el MISMO patrón: la 1ª página viene aquí ya
+  // resuelta; `filtro`/`carpeta` es lo que el frontend reenvía tal cual a un
+  // endpoint REST normal (GET /api/archivos o GET /api/facturas) para pedir
+  // más páginas sin pasar otra vez por el modelo. tablaCarpetas es la
+  // excepción: manda TODAS las filas (las carpetas de un usuario son pocas en
+  // la práctica) y el frontend pagina en memoria, sin más peticiones.
   tablaFacturas?: {
     titulo: string;
+    pagina: number;
+    totalPaginas: number;
+    total: number;
+    limite: number;
+    filtro: FiltroFacturas;
     filas: { archivoId: string | null; archivoNombre: string | null; fecha: string; total: number }[];
+  };
+  tablaArchivos?: {
+    titulo: string;
+    carpeta?: string;
+    pagina: number;
+    totalPaginas: number;
+    total: number;
+    limite: number;
+    filas: { id: string; nombre: string; carpeta: string; tamanoBytes: string; subidoEn: Date }[];
+  };
+  tablaCarpetas?: {
+    titulo: string;
+    limite: number;
+    filas: { ruta: string }[];
   };
 }> => {
   // Solo el último mensaje del usuario. En un asistente de archivos cada orden es
@@ -1040,7 +1065,7 @@ export const chatear = async (
     /papelera/.test(msgSinTildes) &&
     !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes);
   if (esListarFacturasPapelera) {
-    const filas = await listarFacturasPapelera(usuarioId);
+    const { filas, total, paginas } = await listarFacturasPapelera(usuarioId, { pagina: 1, limite: 20 });
     const titulo = "Facturas en la papelera";
     if (filas.length === 0) return { respuesta: "No hay facturas en la papelera.", acciones };
     return {
@@ -1048,6 +1073,11 @@ export const chatear = async (
       acciones,
       tablaFacturas: {
         titulo,
+        pagina: 1,
+        totalPaginas: paginas,
+        total,
+        limite: 20,
+        filtro: {} as FiltroFacturas,
         // archivoId a null: un archivo en la papelera no se puede abrir con el
         // flujo normal (descargarArchivo/obtenerArchivo excluyen lo borrado),
         // así que se omite el botón "Abrir" en vez de ofrecer uno roto.
@@ -1304,13 +1334,18 @@ export const chatear = async (
       filtro.hasta = `${anio}-12-31`;
       partes.push(`${anio}`);
     }
-    const filas = await listarFacturas(usuarioId, filtro);
+    const { filas, total, paginas } = await listarFacturas(usuarioId, filtro as unknown as Record<string, unknown>, { pagina: 1, limite: 20 });
     const titulo = `Facturas de ${partes.join(" ")}`;
     return {
       respuesta: listadoFacturasMd(filas, titulo),
       acciones,
       tablaFacturas: {
         titulo,
+        pagina: 1,
+        totalPaginas: paginas,
+        total,
+        limite: 20,
+        filtro: filtro as unknown as Record<string, unknown>,
         filas: filas.map((f) => ({
           archivoId: f.archivoId,
           archivoNombre: f.archivoNombre,
@@ -1345,13 +1380,19 @@ export const chatear = async (
       };
     }
     const ruta = res.ruta!;
-    const filas = await listarFacturas(usuarioId, { carpeta: ruta });
+    const filtro: FiltroFacturas = { carpeta: ruta };
+    const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
     const titulo = `Facturas en ${ruta}`;
     return {
       respuesta: listadoFacturasMd(filas, titulo),
       acciones,
       tablaFacturas: {
         titulo,
+        pagina: 1,
+        totalPaginas: paginas,
+        total,
+        limite: 20,
+        filtro,
         filas: filas.map((f) => ({
           archivoId: f.archivoId,
           archivoNombre: f.archivoNombre,
@@ -1373,13 +1414,19 @@ export const chatear = async (
   if (/\bfacturas?\b/.test(msgSinTildes) && !pideTotales && !esRankingVentas) {
     const cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
     if (cliente) {
-      const filas = await listarFacturas(usuarioId, { cliente });
+      const filtro: FiltroFacturas = { cliente };
+      const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
       const titulo = `Facturas de ${cliente}`;
       return {
         respuesta: listadoFacturasMd(filas, titulo),
         acciones,
         tablaFacturas: {
           titulo,
+          pagina: 1,
+          totalPaginas: paginas,
+          total,
+          limite: 20,
+          filtro,
           filas: filas.map((f) => ({
             archivoId: f.archivoId,
             archivoNombre: f.archivoNombre,

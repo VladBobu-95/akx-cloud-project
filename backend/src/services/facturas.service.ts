@@ -871,17 +871,34 @@ export const totalesFacturado = async (
   };
 };
 
+export type FilaFactura = {
+  archivoId: string | null;
+  archivoNombre: string | null;
+  numero: string;
+  fecha: string;
+  total: number;
+};
+
 // Lista (no agrega) las facturas que cumplen el filtro, con el archivo asociado
 // para poder ofrecer un botón "Abrir" por cada una. El campo `producto` no
 // aplica aquí (no hay JOIN con lineas_factura, igual que en totalesFacturado).
+// Paginado (pagina 1-indexada): con muchas facturas, devolver todas de golpe
+// en el chat sería una tabla enorme — el cuadro HTML del chat pagina pidiendo
+// página a página a esta misma función vía un endpoint dedicado (ver
+// ctrlListarFacturas).
 export const listarFacturas = async (
   usuarioId: string,
   filtro: FiltroFacturas = {},
-): Promise<
-  { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number }[]
-> => {
+  opts: { pagina?: number; limite?: number } = {},
+): Promise<{ filas: FilaFactura[]; total: number; paginas: number }> => {
+  const pagina = Math.max(1, opts.pagina ?? 1);
+  const limite = Math.min(Math.max(1, opts.limite ?? 20), 100);
   const { producto: _producto, ...rest } = filtro;
   const { where, params } = construirFiltro(usuarioId, rest);
+  const [{ total }] = await AppDataSource.query(
+    `SELECT COUNT(*)::int AS total FROM "facturas" f LEFT JOIN "archivos" a ON a."id" = f."archivoId" WHERE ${where}`,
+    params,
+  );
   const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string }[] =
     await AppDataSource.query(
       `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
@@ -889,16 +906,21 @@ export const listarFacturas = async (
        FROM "facturas" f
        LEFT JOIN "archivos" a ON a."id" = f."archivoId"
        WHERE ${where}
-       ORDER BY f."fecha" DESC`,
+       ORDER BY f."fecha" DESC
+       LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
       params,
     );
-  return filas.map((r) => ({
-    archivoId: r.archivoid,
-    archivoNombre: r.archivonombre,
-    numero: r.numero,
-    fecha: r.fecha,
-    total: Number(r.total),
-  }));
+  return {
+    filas: filas.map((r) => ({
+      archivoId: r.archivoid,
+      archivoNombre: r.archivonombre,
+      numero: r.numero,
+      fecha: r.fecha,
+      total: Number(r.total),
+    })),
+    total: Number(total),
+    paginas: Math.max(1, Math.ceil(Number(total) / limite)),
+  };
 };
 
 // Lista las facturas cuyo archivo está en la papelera (soft-deleted) — lo
@@ -906,9 +928,15 @@ export const listarFacturas = async (
 // "facturas de la papelera" en el chat, antes de restaurarlas o vaciar.
 export const listarFacturasPapelera = async (
   usuarioId: string,
-): Promise<
-  { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number }[]
-> => {
+  opts: { pagina?: number; limite?: number } = {},
+): Promise<{ filas: FilaFactura[]; total: number; paginas: number }> => {
+  const pagina = Math.max(1, opts.pagina ?? 1);
+  const limite = Math.min(Math.max(1, opts.limite ?? 20), 100);
+  const [{ total }] = await AppDataSource.query(
+    `SELECT COUNT(*)::int AS total FROM "facturas" f JOIN "archivos" a ON a."id" = f."archivoId"
+     WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL`,
+    [usuarioId],
+  );
   const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string }[] =
     await AppDataSource.query(
       `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
@@ -916,16 +944,21 @@ export const listarFacturasPapelera = async (
        FROM "facturas" f
        JOIN "archivos" a ON a."id" = f."archivoId"
        WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL
-       ORDER BY a."eliminadoEn" DESC`,
+       ORDER BY a."eliminadoEn" DESC
+       LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
       [usuarioId],
     );
-  return filas.map((r) => ({
-    archivoId: r.archivoid,
-    archivoNombre: r.archivonombre,
-    numero: r.numero,
-    fecha: r.fecha,
-    total: Number(r.total),
-  }));
+  return {
+    filas: filas.map((r) => ({
+      archivoId: r.archivoid,
+      archivoNombre: r.archivonombre,
+      numero: r.numero,
+      fecha: r.fecha,
+      total: Number(r.total),
+    })),
+    total: Number(total),
+    paginas: Math.max(1, Math.ceil(Number(total) / limite)),
+  };
 };
 
 // Ranking de clientes por gasto total. orden 'desc' = quién más gastó (defecto);
