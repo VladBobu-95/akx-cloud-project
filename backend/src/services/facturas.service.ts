@@ -134,7 +134,25 @@ const reemplazarArchivoTexto = async (
   const existentes = await repo.find({
     where: { nombre, carpeta, propietario: { id: usuarioId } },
   });
-  for (const a of existentes) await borrarPermanente(a.id, usuarioId);
+  for (const a of existentes) {
+    // Solo se borra si de verdad es un .md generado por este mismo mecanismo
+    // (crearArchivoTexto le pone mimeType "text/markdown" SIEMPRE a los .md).
+    // "resumen-ventas.md"/"resumen-<archivo>.md" son nombres que este sistema
+    // trata como propios, pero por coincidencia (o porque alguien renombra/
+    // mueve un archivo real a propósito) podría existir un archivo REAL con
+    // ese mismo nombre+carpeta — sin este filtro, la próxima regeneración lo
+    // borraría para siempre (borrarPermanente, sin pasar por la papelera)
+    // solo por compartir nombre. Si no es un .md nuestro, se deja intacto;
+    // a costa de que pueda quedar un nombre duplicado, mucho mejor que perder
+    // datos del usuario.
+    if (a.mimeType !== "text/markdown") {
+      console.warn(
+        `[facturas] "${nombre}" en ${carpeta} coincide con un archivo real (no se borra): ${a.id}`,
+      );
+      continue;
+    }
+    await borrarPermanente(a.id, usuarioId);
+  }
   await crearArchivoTexto(usuarioId, nombre, carpeta, contenido);
 };
 
