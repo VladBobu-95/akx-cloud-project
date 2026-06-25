@@ -164,6 +164,20 @@ const reemplazarArchivoTexto = async (
 
 const eur = (n: number | string): string => `${Number(n).toFixed(2)} €`;
 
+// Sanea un texto libre (cliente/emisor/producto/descripción) antes de meterlo en
+// una celda de tabla o línea de lista markdown: colapsa saltos de línea y espacios,
+// cambia el `|` por `/` (un `|` partiría la columna) y acota la longitud. Así un
+// valor mal extraído por la IA —p. ej. un `cliente` con nombre+email+teléfono
+// pegados o con un salto de línea dentro, típico del modelo pequeño— no rompe la
+// estructura de la tabla del chat.
+const celdaMd = (texto: string | number | null | undefined, max = 80): string => {
+  const limpio = String(texto ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\|/g, "/")
+    .trim();
+  return limpio.length > max ? `${limpio.slice(0, max - 1)}…` : limpio;
+};
+
 // 8 caracteres del UUID del archivo (sin guiones), como sufijo estable e
 // independiente del nombre. Evita que dos archivos distintos con el mismo
 // nombre (en carpetas distintas) generen el mismo resumen-<nombre>.md y se
@@ -641,14 +655,14 @@ export const autoEscanearArchivo = async (
 
 const resumenFacturaMd = (d: DatosFactura): string => {
   const lineas = (d.lineas ?? [])
-    .map((l) => `| ${l.descripcion} | ${l.cantidad ?? 0} | ${eur(l.precioUnit ?? 0)} | ${eur(l.total ?? 0)} |`)
+    .map((l) => `| ${celdaMd(l.descripcion)} | ${l.cantidad ?? 0} | ${eur(l.precioUnit ?? 0)} | ${eur(l.total ?? 0)} |`)
     .join("\n");
   const titulo = [d.numero, d.archivoNombre].filter(Boolean).join(" — ");
   return `## Factura ${titulo || "sin número"}
 
 - **Fecha:** ${d.fecha ?? "—"}
-- **Emisor:** ${d.emisor ?? "—"}
-- **Cliente:** ${d.cliente ?? "—"}
+- **Emisor:** ${celdaMd(d.emisor) || "—"}
+- **Cliente:** ${celdaMd(d.cliente) || "—"}
 
 | Artículo | Cantidad | Precio | Total |
 |---|---|---|---|
@@ -785,7 +799,7 @@ export const rankingMd = (
 ): string => {
   if (filas.length === 0) return "No hay datos de ventas para esa consulta.";
   const cuerpo = filas
-    .map((t, i) => `| ${i + 1} | ${t.producto} | ${t.unidades} | ${eur(t.importe)} |`)
+    .map((t, i) => `| ${i + 1} | ${celdaMd(t.producto)} | ${t.unidades} | ${eur(t.importe)} |`)
     .join("\n");
   return `## ${titulo}\n\n| # | Producto | Unidades | Importe |\n|---|---|---|---|\n${cuerpo}`;
 };
@@ -1000,7 +1014,7 @@ export const clientesTopMd = (
 ): string => {
   if (filas.length === 0) return "No hay datos de clientes para esa consulta.";
   const cuerpo = filas
-    .map((c, i) => `| ${i + 1} | ${c.cliente} | ${c.numFacturas} | ${eur(c.importe)} |`)
+    .map((c, i) => `| ${i + 1} | ${celdaMd(c.cliente)} | ${c.numFacturas} | ${eur(c.importe)} |`)
     .join("\n");
   return `## ${titulo}\n\n| # | Cliente | Facturas | Importe |\n|---|---|---|---|\n${cuerpo}`;
 };
