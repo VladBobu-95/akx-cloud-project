@@ -118,33 +118,54 @@
         border-radius: 4px;
         font-size: 0.85em;
       }
-      /* Listado de facturas por periodo: tabla real (no markdown) para poder
-         poner el botón "Abrir" en su propia fila, a la derecha. */
-      .tabla-facturas-titulo {
+      /* Listados del chat (facturas/archivos): tabla real (no markdown) para
+         poder poner el botón "Abrir" en su propia fila, a la derecha. */
+      .tabla-titulo {
         font-size: 0.98rem;
-        margin: 0 0 6px;
+        margin: 10px 0 6px;
       }
-      .tabla-facturas {
+      .tabla-titulo:first-child {
+        margin-top: 0;
+      }
+      .tabla-chat {
         width: 100%;
         border-collapse: collapse;
         font-size: 0.85rem;
       }
-      .tabla-facturas th,
-      .tabla-facturas td {
+      .tabla-chat th,
+      .tabla-chat td {
         border: 1px solid var(--border);
         padding: 5px 8px;
         text-align: left;
       }
-      .tabla-facturas th {
+      .tabla-chat th {
         background: rgba(0, 0, 0, 0.04);
         font-weight: 700;
       }
-      .tabla-facturas td:last-child {
+      .tabla-chat td:last-child {
         text-align: right;
         white-space: nowrap;
       }
-      .tabla-facturas .btn {
+      .tabla-chat .btn {
         font-size: 0.85rem;
+      }
+      /* Listado de carpetas (se pagina en memoria). */
+      .lista-carpetas {
+        margin: 0 0 6px;
+        padding-left: 18px;
+        font-size: 0.88rem;
+      }
+      .lista-carpetas li {
+        margin: 2px 0;
+        list-style: none;
+      }
+      /* Controles de paginación bajo cada tabla del chat. */
+      .pag-chat {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 6px 0 4px;
+        font-size: 0.82rem;
       }
       .abrir-archivo {
         margin-top: 8px;

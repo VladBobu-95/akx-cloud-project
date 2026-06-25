@@ -848,6 +848,10 @@ const llamarOllama = async (
   return data.message;
 };
 
+// Filas por página de los listados paginados del chat (archivos y facturas). El
+// frontend pide las páginas siguientes a los endpoints REST con este mismo límite.
+const LISTADO_LIMITE = 20;
+
 // Orquesta la conversación con el modelo y el bucle de herramientas.
 export const chatear = async (
   usuarioId: string,
@@ -1761,53 +1765,110 @@ export const chatear = async (
     }
     const ruta = res.ruta!;
     const partes: string[] = [];
+    const sub =
+      esListarAmbos || esListarSoloCarpetas
+        ? (await listarTodasCarpetas(usuarioId)).filter((c) => c.ruta.startsWith(`${ruta}/`))
+        : [];
     if (esListarAmbos || esListarSoloCarpetas) {
-      const sub = (await listarTodasCarpetas(usuarioId)).filter((c) => c.ruta.startsWith(`${ruta}/`));
       partes.push(
         sub.length
           ? `**Carpetas dentro de ${ruta}** (${sub.length}):\n${sub.map((c) => `- ${c.ruta}`).join("\n")}`
           : `No hay carpetas dentro de ${ruta}.`,
       );
     }
+    const tablaCarpetas =
+      (esListarAmbos || esListarSoloCarpetas) && sub.length
+        ? { titulo: `Carpetas dentro de ${ruta}`, limite: LISTADO_LIMITE, filas: sub.map((c) => ({ ruta: c.ruta })) }
+        : undefined;
+
+    const arch =
+      esListarAmbos || esListarSoloArchivos
+        ? await listarArchivos(usuarioId, ruta, 1, LISTADO_LIMITE)
+        : { archivos: [], total: 0, paginas: 0 };
     if (esListarAmbos || esListarSoloArchivos) {
-      const { archivos } = await listarArchivos(usuarioId, ruta, 1, 200);
       partes.push(
-        archivos.length
-          ? `**Archivos dentro de ${ruta}** (${archivos.length}):\n${archivos
+        arch.total
+          ? `**Archivos dentro de ${ruta}** (${arch.total}):\n${arch.archivos
               .map((a) => `- ${a.nombre}`)
-              .join("\n")}`
+              .join("\n")}${arch.total > arch.archivos.length ? `\n\n(mostrando ${arch.archivos.length} de ${arch.total})` : ""}`
           : `No hay archivos dentro de ${ruta}.`,
       );
     }
-    return { respuesta: partes.join("\n\n"), acciones };
+    const tablaArchivos =
+      (esListarAmbos || esListarSoloArchivos) && arch.total
+        ? {
+            titulo: `Archivos dentro de ${ruta}`,
+            carpeta: ruta,
+            pagina: 1,
+            totalPaginas: arch.paginas,
+            total: arch.total,
+            limite: LISTADO_LIMITE,
+            filas: arch.archivos.map((a) => ({
+              id: a.id,
+              nombre: a.nombre,
+              carpeta: a.carpeta,
+              tamanoBytes: String(a.tamanoBytes),
+              subidoEn: a.subidoEn,
+            })),
+          }
+        : undefined;
+    return { respuesta: partes.join("\n\n"), acciones, tablaCarpetas, tablaArchivos };
   }
 
   if (esListado) {
     const partes: string[] = [];
+    const todas =
+      esListarAmbos || esListarSoloCarpetas ? await listarTodasCarpetas(usuarioId) : [];
+    const carpetas = soloRaiz ? todas.filter((c) => !c.ruta.slice(1).includes("/")) : todas;
     if (esListarAmbos || esListarSoloCarpetas) {
-      const todas = await listarTodasCarpetas(usuarioId);
-      const carpetas = soloRaiz ? todas.filter((c) => !c.ruta.slice(1).includes("/")) : todas;
       partes.push(
         carpetas.length
           ? `**Carpetas** (${carpetas.length}):\n${carpetas.map((c) => `- ${c.ruta}`).join("\n")}`
           : `No tienes ninguna carpeta${soloRaiz ? " en la raíz" : ""}.`,
       );
     }
+    const tablaCarpetas =
+      (esListarAmbos || esListarSoloCarpetas) && carpetas.length
+        ? {
+            titulo: soloRaiz ? "Carpetas (raíz)" : "Carpetas",
+            limite: LISTADO_LIMITE,
+            filas: carpetas.map((c) => ({ ruta: c.ruta })),
+          }
+        : undefined;
+
+    const carpetaFiltro = soloRaiz ? "/" : undefined;
+    const arch =
+      esListarAmbos || esListarSoloArchivos
+        ? await listarArchivos(usuarioId, carpetaFiltro, 1, LISTADO_LIMITE)
+        : { archivos: [], total: 0, paginas: 0 };
     if (esListarAmbos || esListarSoloArchivos) {
-      const { archivos, total } = await listarArchivos(usuarioId, soloRaiz ? "/" : undefined, 1, 200);
-      const extra =
-        !soloRaiz && total > archivos.length
-          ? `\n\n(mostrando los ${archivos.length} más recientes de ${total})`
-          : "";
       partes.push(
-        archivos.length
-          ? `**Archivos** (${soloRaiz ? archivos.length : total}):\n${archivos
+        arch.total
+          ? `**Archivos** (${arch.total}):\n${arch.archivos
               .map((a) => `- ${a.nombre}${!soloRaiz && a.carpeta !== "/" ? ` (${a.carpeta})` : ""}`)
-              .join("\n")}${extra}`
+              .join("\n")}${arch.total > arch.archivos.length ? `\n\n(mostrando ${arch.archivos.length} de ${arch.total})` : ""}`
           : `No tienes ningún archivo${soloRaiz ? " en la raíz" : ""}.`,
       );
     }
-    return { respuesta: partes.join("\n\n"), acciones };
+    const tablaArchivos =
+      (esListarAmbos || esListarSoloArchivos) && arch.total
+        ? {
+            titulo: soloRaiz ? "Archivos (raíz)" : "Archivos",
+            carpeta: carpetaFiltro,
+            pagina: 1,
+            totalPaginas: arch.paginas,
+            total: arch.total,
+            limite: LISTADO_LIMITE,
+            filas: arch.archivos.map((a) => ({
+              id: a.id,
+              nombre: a.nombre,
+              carpeta: a.carpeta,
+              tamanoBytes: String(a.tamanoBytes),
+              subidoEn: a.subidoEn,
+            })),
+          }
+        : undefined;
+    return { respuesta: partes.join("\n\n"), acciones, tablaCarpetas, tablaArchivos };
   }
 
   const MAX_ITER = 15;

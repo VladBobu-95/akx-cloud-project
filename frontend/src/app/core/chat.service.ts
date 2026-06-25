@@ -1,5 +1,5 @@
 import { Injectable, inject, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { environment } from '../../environments/environment';
 
 export interface MensajeChat {
@@ -14,9 +14,43 @@ export interface FilaFactura {
   total: number;
 }
 
+export interface FilaArchivo {
+  id: string;
+  nombre: string;
+  carpeta: string;
+  tamanoBytes: string;
+  subidoEn: string;
+}
+
+// Tablas paginadas que puede devolver el chat. `pagina`/`totalPaginas` mandan; las
+// de facturas/archivos piden las páginas siguientes a un endpoint REST reenviando
+// `filtro`/`carpeta`. tablaCarpetas trae TODAS las filas y se pagina en memoria
+// (la `pagina` la lleva el front).
 export interface TablaFacturas {
   titulo: string;
+  pagina: number;
+  totalPaginas: number;
+  total: number;
+  limite: number;
+  filtro: Record<string, unknown>;
   filas: FilaFactura[];
+}
+
+export interface TablaArchivos {
+  titulo: string;
+  carpeta?: string;
+  pagina: number;
+  totalPaginas: number;
+  total: number;
+  limite: number;
+  filas: FilaArchivo[];
+}
+
+export interface TablaCarpetas {
+  titulo: string;
+  limite: number;
+  pagina?: number; // estado local de paginación en memoria (el backend no la envía)
+  filas: { ruta: string }[];
 }
 
 // Mensaje tal y como lo muestra la UI.
@@ -25,6 +59,8 @@ export interface Mensaje {
   texto: string;
   archivos?: { id: string; nombre: string }[];
   tablaFacturas?: TablaFacturas;
+  tablaArchivos?: TablaArchivos;
+  tablaCarpetas?: TablaCarpetas;
 }
 
 export interface RespuestaChat {
@@ -32,6 +68,8 @@ export interface RespuestaChat {
   acciones: string[];
   archivos?: { id: string; nombre: string }[];
   tablaFacturas?: TablaFacturas;
+  tablaArchivos?: TablaArchivos;
+  tablaCarpetas?: TablaCarpetas;
 }
 
 const CHAT_KEY = 'akx_chat';
@@ -53,6 +91,27 @@ export class ChatService {
   añadir(m: Mensaje) {
     this.mensajes.update((arr) => [...arr, m]);
     this.persistir();
+  }
+
+  // Reemplaza el mensaje en la posición dada (lo usa la paginación de las tablas
+  // del chat para sustituir las filas/página de un mensaje ya pintado) y persiste.
+  actualizarMensaje(index: number, m: Mensaje) {
+    this.mensajes.update((arr) => arr.map((x, i) => (i === index ? m : x)));
+    this.persistir();
+  }
+
+  // Páginas siguientes de una tabla de facturas del chat: mismo filtro que la 1ª
+  // página (que vino ya resuelta por el chat), pedido al endpoint REST normal.
+  masFacturas(filtro: Record<string, unknown>, pagina: number, limite: number) {
+    let params = new HttpParams().set('pagina', pagina).set('limite', limite);
+    for (const [clave, valor] of Object.entries(filtro)) {
+      if (valor === null || valor === undefined || valor === '') continue;
+      params = params.set(clave, Array.isArray(valor) ? valor.join(',') : String(valor));
+    }
+    return this.http.get<{ filas: FilaFactura[]; total: number; paginas: number }>(
+      `${environment.apiUrl}/api/facturas`,
+      { params },
+    );
   }
 
   limpiar() {

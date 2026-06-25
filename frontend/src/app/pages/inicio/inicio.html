@@ -19,41 +19,84 @@
           @for (m of mensajes(); track $index) {
             <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
               @if (m.de === 'bot') {
-                @if (m.tablaFacturas) {
-                  <h3 class="tabla-facturas-titulo">{{ m.tablaFacturas.titulo }}</h3>
-                  <table class="table tabla-facturas">
-                    <thead>
-                      <tr>
-                        <th>Archivo</th>
-                        <th>Fecha</th>
-                        <th>Total</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      @for (f of m.tablaFacturas.filas; track $index) {
-                        <tr>
-                          <td>{{ f.archivoNombre || '—' }}</td>
-                          <td>{{ f.fecha }}</td>
-                          <td>{{ f.total.toFixed(2) }} €</td>
-                          <td>
-                            @if (f.archivoId && f.archivoNombre) {
-                              <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">
-                                📂 Abrir
-                              </button>
-                            }
-                          </td>
-                        </tr>
+                @if (m.tablaCarpetas || m.tablaArchivos || m.tablaFacturas) {
+                  @if (m.tablaCarpetas; as tc) {
+                    <h3 class="tabla-titulo">{{ tc.titulo }} ({{ tc.filas.length }})</h3>
+                    <ul class="lista-carpetas">
+                      @for (c of filasCarpetasVisibles(tc); track c.ruta) {
+                        <li>📁 {{ c.ruta }}</li>
                       }
-                    </tbody>
-                  </table>
+                    </ul>
+                    @if (totalPaginasCarpetas(tc) > 1) {
+                      <div class="pag-chat">
+                        <button class="btn btn-outline btn-sm" [disabled]="(tc.pagina ?? 1) <= 1" (click)="paginarCarpetas($index, (tc.pagina ?? 1) - 1)">←</button>
+                        <span class="muted">Página {{ tc.pagina ?? 1 }} de {{ totalPaginasCarpetas(tc) }}</span>
+                        <button class="btn btn-outline btn-sm" [disabled]="(tc.pagina ?? 1) >= totalPaginasCarpetas(tc)" (click)="paginarCarpetas($index, (tc.pagina ?? 1) + 1)">→</button>
+                      </div>
+                    }
+                  }
+                  @if (m.tablaArchivos; as ta) {
+                    <h3 class="tabla-titulo">{{ ta.titulo }} ({{ ta.total }})</h3>
+                    <table class="table tabla-chat">
+                      <thead>
+                        <tr><th>Nombre</th><th>Carpeta</th><th></th></tr>
+                      </thead>
+                      <tbody>
+                        @for (a of ta.filas; track a.id) {
+                          <tr>
+                            <td>{{ a.nombre }}</td>
+                            <td><span class="muted">{{ a.carpeta }}</span></td>
+                            <td>
+                              <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: a.id, nombre: a.nombre })">📂 Abrir</button>
+                            </td>
+                          </tr>
+                        }
+                      </tbody>
+                    </table>
+                    @if (ta.totalPaginas > 1) {
+                      <div class="pag-chat">
+                        <button class="btn btn-outline btn-sm" [disabled]="ta.pagina <= 1" (click)="paginarArchivos($index, ta.pagina - 1)">←</button>
+                        <span class="muted">Página {{ ta.pagina }} de {{ ta.totalPaginas }}</span>
+                        <button class="btn btn-outline btn-sm" [disabled]="ta.pagina >= ta.totalPaginas" (click)="paginarArchivos($index, ta.pagina + 1)">→</button>
+                      </div>
+                    }
+                  }
+                  @if (m.tablaFacturas; as tf) {
+                    <h3 class="tabla-titulo">{{ tf.titulo }} ({{ tf.total }})</h3>
+                    <table class="table tabla-chat">
+                      <thead>
+                        <tr><th>Archivo</th><th>Fecha</th><th>Total</th><th></th></tr>
+                      </thead>
+                      <tbody>
+                        @for (f of tf.filas; track $index) {
+                          <tr>
+                            <td>{{ f.archivoNombre || '—' }}</td>
+                            <td>{{ f.fecha }}</td>
+                            <td>{{ f.total.toFixed(2) }} €</td>
+                            <td>
+                              @if (f.archivoId && f.archivoNombre) {
+                                <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">📂 Abrir</button>
+                              }
+                            </td>
+                          </tr>
+                        }
+                      </tbody>
+                    </table>
+                    @if (tf.totalPaginas > 1) {
+                      <div class="pag-chat">
+                        <button class="btn btn-outline btn-sm" [disabled]="tf.pagina <= 1" (click)="paginarFacturas($index, tf.pagina - 1)">←</button>
+                        <span class="muted">Página {{ tf.pagina }} de {{ tf.totalPaginas }}</span>
+                        <button class="btn btn-outline btn-sm" [disabled]="tf.pagina >= tf.totalPaginas" (click)="paginarFacturas($index, tf.pagina + 1)">→</button>
+                      </div>
+                    }
+                  }
                 } @else {
                   <div class="md" [innerHTML]="renderBot(m.texto)"></div>
                 }
               } @else {
                 {{ m.texto }}
               }
-              @if (!m.tablaFacturas && m.archivos?.length) {
+              @if (!m.tablaFacturas && !m.tablaArchivos && !m.tablaCarpetas && m.archivos?.length) {
                 <div class="abrir-archivo">
                   @for (a of m.archivos; track a.id) {
                     <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">

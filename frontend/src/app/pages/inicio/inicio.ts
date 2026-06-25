@@ -2,7 +2,7 @@ import { AfterViewInit, Component, ElementRef, inject, signal, viewChild } from 
 import { FormsModule } from '@angular/forms';
 import { marked } from 'marked';
 import { AuthService } from '../../core/auth.service';
-import { ChatService } from '../../core/chat.service';
+import { ChatService, TablaCarpetas } from '../../core/chat.service';
 import { ArchivosService } from '../../core/archivos.service';
 import { ToastService } from '../../core/toast.service';
 import { mensajeError } from '../../shared/errores';
@@ -80,7 +80,14 @@ export class InicioPage implements AfterViewInit {
     this.chat.enviar(historial).subscribe({
       next: (r) => {
         const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
-        this.chat.añadir({ de: 'bot', texto: r.respuesta + extra, archivos: r.archivos, tablaFacturas: r.tablaFacturas });
+        this.chat.añadir({
+          de: 'bot',
+          texto: r.respuesta + extra,
+          archivos: r.archivos,
+          tablaFacturas: r.tablaFacturas,
+          tablaArchivos: r.tablaArchivos,
+          tablaCarpetas: r.tablaCarpetas,
+        });
         this.pensando.set(false);
         this.scrollAbajo();
       },
@@ -90,6 +97,65 @@ export class InicioPage implements AfterViewInit {
         this.scrollAbajo();
       },
     });
+  }
+
+  // --- Paginación de las tablas del chat ---
+  // Facturas y archivos piden la página al backend (REST) reenviando filtro/carpeta;
+  // se sustituye la tabla del mensaje (in situ) con las filas nuevas.
+  protected paginarFacturas(index: number, nuevaPagina: number) {
+    const m = this.mensajes()[index];
+    const t = m?.tablaFacturas;
+    if (!t || nuevaPagina < 1 || nuevaPagina > t.totalPaginas) return;
+    this.chat.masFacturas(t.filtro, nuevaPagina, t.limite).subscribe({
+      next: (r) =>
+        this.chat.actualizarMensaje(index, {
+          ...m,
+          tablaFacturas: { ...t, pagina: nuevaPagina, totalPaginas: r.paginas, total: r.total, filas: r.filas },
+        }),
+      error: (err) => this.toast.error(mensajeError(err)),
+    });
+  }
+
+  protected paginarArchivos(index: number, nuevaPagina: number) {
+    const m = this.mensajes()[index];
+    const t = m?.tablaArchivos;
+    if (!t || nuevaPagina < 1 || nuevaPagina > t.totalPaginas) return;
+    this.archivosSvc.listar(t.carpeta, nuevaPagina, t.limite).subscribe({
+      next: (r) =>
+        this.chat.actualizarMensaje(index, {
+          ...m,
+          tablaArchivos: {
+            ...t,
+            pagina: r.pagina,
+            totalPaginas: r.paginas,
+            total: r.total,
+            filas: r.archivos.map((a) => ({
+              id: a.id,
+              nombre: a.nombre,
+              carpeta: a.carpeta,
+              tamanoBytes: String(a.tamanoBytes),
+              subidoEn: String(a.subidoEn),
+            })),
+          },
+        }),
+      error: (err) => this.toast.error(mensajeError(err)),
+    });
+  }
+
+  // Carpetas: todas las filas vienen en el mensaje, se pagina en memoria.
+  protected totalPaginasCarpetas(t: TablaCarpetas): number {
+    return Math.max(1, Math.ceil(t.filas.length / t.limite));
+  }
+  protected filasCarpetasVisibles(t: TablaCarpetas): { ruta: string }[] {
+    const pagina = t.pagina ?? 1;
+    const ini = (pagina - 1) * t.limite;
+    return t.filas.slice(ini, ini + t.limite);
+  }
+  protected paginarCarpetas(index: number, nuevaPagina: number) {
+    const m = this.mensajes()[index];
+    const t = m?.tablaCarpetas;
+    if (!t || nuevaPagina < 1 || nuevaPagina > this.totalPaginasCarpetas(t)) return;
+    this.chat.actualizarMensaje(index, { ...m, tablaCarpetas: { ...t, pagina: nuevaPagina } });
   }
 
   // Abre el archivo igual que en el explorador: PDF/imagen/texto en una pestaña
