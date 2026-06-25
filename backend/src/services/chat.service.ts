@@ -1183,6 +1183,49 @@ export const chatear = async (
     };
   }
 
+  // Pre-flight: "pásame/dame/búscame todas las facturas de [cliente] X" es un
+  // LISTADO de facturas concretas filtrado por CLIENTE (con botón para abrir
+  // cada una) — el modelo a veces no llamaba a ninguna tool para esto, o
+  // confundía la petición con un ranking/total agregado. Distinto del listado
+  // por periodo de arriba (que ya devolvió si detectó mes/año) y de los
+  // totales/ranking agregados (pideTotales/esRankingVentas, con su propio
+  // pre-flight). Captura todo lo que sigue a "factura(s) [tengo/hay] de" (o
+  // "del cliente"/"de cliente"/"de la empresa") hasta el final del mensaje —
+  // "del" se trata aparte porque es una contracción ("de"+"el" en una sola
+  // palabra, no casa con un "de" suelto). Se descarta si lo capturado es una
+  // palabra suelta sin valor como nombre (STOPWORDS_NOMBRE), una referencia
+  // de tiempo relativa ("este mes", "el año pasado"...) que el listado por
+  // periodo de arriba no llegó a capturar por no ser un mes/año explícito, o
+  // claramente otra cosa ("la carpeta X", "la papelera") — para no tratarlas
+  // por error como nombre de cliente.
+  const matchFacturasDeCliente = msgSinTildes.match(
+    /\bfacturas?\s+(?:tengo\s+|hay\s+)?(?:del\s+cliente\s+|de\s+el\s+cliente\s+|de\s+cliente\s+|del\s+|de\s+la\s+empresa\s+|de\s+)(.+?)[?¿.!¡]*$/,
+  );
+  if (matchFacturasDeCliente && !pideTotales && !esRankingVentas) {
+    const cliente = grupoOriginal(msgLower, matchFacturasDeCliente).trim();
+    const clienteSinTildes = quitarTildes(cliente.toLowerCase());
+    const pareceOtraCosa =
+      /^(este|esta|esa|ese|el|la|los|las|mi|tu)?\s*(mes|a[nñ]o|semana|dia)\b/.test(clienteSinTildes) ||
+      /^(la|el)\s+(carpeta|papelera|raiz|archivo)\b/.test(clienteSinTildes);
+    if (cliente && !STOPWORDS_NOMBRE.has(clienteSinTildes) && !pareceOtraCosa) {
+      const filas = await listarFacturas(usuarioId, { cliente });
+      const titulo = `Facturas de ${cliente}`;
+      return {
+        respuesta: listadoFacturasMd(filas, titulo),
+        acciones,
+        tablaFacturas: {
+          titulo,
+          filas: filas.map((f) => ({
+            archivoId: f.archivoId,
+            archivoNombre: f.archivoNombre,
+            fecha: formatearFecha(f.fecha),
+            total: f.total,
+          })),
+        },
+      };
+    }
+  }
+
   // Pre-flight: "¿tengo/hay/existe/dónde está... un archivo llamado X?" o
   // "busca el archivo X" es una simple comprobación de existencia/ubicación
   // que debería ser instantánea. El modelo a veces decide "comprobar"
