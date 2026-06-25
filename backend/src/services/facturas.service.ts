@@ -190,13 +190,22 @@ const nombreResumenFactura = (nombreOriginal: string, archivoId: string): string
 // mientras hay varias facturas escaneándose a la vez, las que aún no tenían
 // resumen propio (primera vez que se crea el suyo) aterrizan junto a las
 // demás en la ubicación nueva, en vez de recrear /facturas en la raíz.
-const localizarCarpetaFacturas = async (usuarioId: string): Promise<string> => {
-  const repo = AppDataSource.getRepository(Archivo);
-  const existente = await repo.findOne({
+const buscarResumenVentasArchivo = (usuarioId: string): Promise<Archivo | null> =>
+  AppDataSource.getRepository(Archivo).findOne({
     where: { nombre: "resumen-ventas.md", propietario: { id: usuarioId } },
   });
+
+const localizarCarpetaFacturas = async (usuarioId: string): Promise<string> => {
+  const existente = await buscarResumenVentasArchivo(usuarioId);
   return existente?.carpeta ?? CARPETA_FACTURAS;
 };
+
+// Localiza el archivo "resumen-ventas.md" activo (null si todavía no hay
+// ninguna factura escaneada). Para "pásame/dame el resumen [de todo/de
+// ventas]" en el chat: devuelve el archivo concreto para leer su contenido
+// y ofrecer el botón "Abrir", en vez de recalcular las estadísticas aparte.
+export const localizarResumenVentas = (usuarioId: string): Promise<Archivo | null> =>
+  buscarResumenVentasArchivo(usuarioId);
 
 // Localiza el resumen individual de un archivo (activo o en la papelera) por
 // su sufijo "-<idCorto>.md" — estable mientras exista el archivo, sin
@@ -713,6 +722,10 @@ export interface FiltroFacturas {
   desde?: string;
   hasta?: string;
   producto?: string;
+  // Ruta de carpeta YA normalizada (ej. "/facturas/2026"): incluye esa
+  // carpeta y todo su subárbol. La resolución de nombre→ruta (con manejo de
+  // ambigüedad) se hace en el caller (chat.service.ts, vía resolverCarpeta).
+  carpeta?: string;
 }
 
 // Construye las condiciones WHERE y los parámetros posicionales a partir del filtro.
@@ -757,6 +770,10 @@ const construirFiltro = (
   if (filtro.hasta) cond.push(`f."fecha" <= ${add(filtro.hasta)}::date`);
   if (filtro.producto?.trim())
     cond.push(`unaccent(l."descripcion") ILIKE unaccent(${add(`%${filtro.producto.trim()}%`)})`);
+  if (filtro.carpeta) {
+    const r = filtro.carpeta;
+    cond.push(`(a."carpeta" = ${add(r)} OR a."carpeta" LIKE ${add(`${r}/%`)})`);
+  }
 
   return { where: cond.join(" AND "), params };
 };
@@ -874,6 +891,33 @@ export const listarFacturas = async (
        WHERE ${where}
        ORDER BY f."fecha" DESC`,
       params,
+    );
+  return filas.map((r) => ({
+    archivoId: r.archivoid,
+    archivoNombre: r.archivonombre,
+    numero: r.numero,
+    fecha: r.fecha,
+    total: Number(r.total),
+  }));
+};
+
+// Lista las facturas cuyo archivo está en la papelera (soft-deleted) — lo
+// inverso de listarFacturas/construirFiltro, que las excluyen siempre. Para
+// "facturas de la papelera" en el chat, antes de restaurarlas o vaciar.
+export const listarFacturasPapelera = async (
+  usuarioId: string,
+): Promise<
+  { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number }[]
+> => {
+  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string }[] =
+    await AppDataSource.query(
+      `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
+              f."fecha"::text AS fecha, f."total" AS total
+       FROM "facturas" f
+       JOIN "archivos" a ON a."id" = f."archivoId"
+       WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL
+       ORDER BY a."eliminadoEn" DESC`,
+      [usuarioId],
     );
   return filas.map((r) => ({
     archivoId: r.archivoid,

@@ -37,6 +37,8 @@ import {
   totalesFacturado,
   clientesTop,
   listarFacturas,
+  listarFacturasPapelera,
+  localizarResumenVentas,
   asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
@@ -914,7 +916,28 @@ export const chatear = async (
       }
     }
     const anioMatch = texto.match(/\b(20\d{2})\b/);
-    return { mes, anio: anioMatch ? Number(anioMatch[1]) : undefined };
+    let anio = anioMatch ? Number(anioMatch[1]) : undefined;
+
+    // Periodos relativos ("este mes", "el mes pasado", "este año", "el año
+    // pasado"): solo si no se detectó ya un mes/año explícito (un nombre de
+    // mes o un año de 4 dígitos siempre tiene prioridad sobre estos). `texto`
+    // ya viene sin tildes (quitarTildes convierte "año" -> "ano").
+    if (mes === undefined && anio === undefined) {
+      const ahora = new Date();
+      if (/\bmes\s+pasado\b/.test(texto) || /\bel\s+mes\s+anterior\b/.test(texto)) {
+        const fecha = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1);
+        mes = fecha.getMonth() + 1;
+        anio = fecha.getFullYear();
+      } else if (/\b(este|el)\s+mes\b/.test(texto) || /\bmes\s+actual\b/.test(texto)) {
+        mes = ahora.getMonth() + 1;
+        anio = ahora.getFullYear();
+      } else if (/\bano\s+pasado\b/.test(texto) || /\bel\s+ano\s+anterior\b/.test(texto)) {
+        anio = ahora.getFullYear() - 1;
+      } else if (/\b(este|el)\s+ano\b/.test(texto) || /\bano\s+actual\b/.test(texto)) {
+        anio = ahora.getFullYear();
+      }
+    }
+    return { mes, anio };
   };
 
   // Pre-flight: si en el turno anterior se pidió aclarar entre varias
@@ -988,14 +1011,48 @@ export const chatear = async (
     return { respuesta: "Hecho.", acciones };
   }
 
+  // Pre-flight: "facturas de/en la papelera" es más específico que el listado
+  // general de la papelera de abajo — lista solo las FACTURAS que están en la
+  // papelera (con botón "Abrir" cuando aplica), no todos los archivos. Se
+  // comprueba ANTES del listado general para que tenga prioridad cuando se
+  // menciona "factura(s)".
+  const esListarFacturasPapelera =
+    /\bfacturas?\b/.test(msgSinTildes) &&
+    /papelera/.test(msgSinTildes) &&
+    !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes);
+  if (esListarFacturasPapelera) {
+    const filas = await listarFacturasPapelera(usuarioId);
+    const titulo = "Facturas en la papelera";
+    if (filas.length === 0) return { respuesta: "No hay facturas en la papelera.", acciones };
+    return {
+      respuesta: listadoFacturasMd(filas, titulo),
+      acciones,
+      tablaFacturas: {
+        titulo,
+        // archivoId a null: un archivo en la papelera no se puede abrir con el
+        // flujo normal (descargarArchivo/obtenerArchivo excluyen lo borrado),
+        // así que se omite el botón "Abrir" en vez de ofrecer uno roto.
+        filas: filas.map((f) => ({
+          archivoId: null,
+          archivoNombre: f.archivoNombre,
+          fecha: formatearFecha(f.fecha),
+          total: f.total,
+        })),
+      },
+    };
+  }
+
   // Pre-flight: "¿qué hay en la papelera?" es una consulta directa y frecuente
   // que el modelo a veces desvía hacia herramientas de facturas (el prompt de
   // facturas es grande y le hace sesgo), devolviendo contenido random no
-  // relacionado. Se resuelve aquí sin pasar por el modelo.
+  // relacionado. Se resuelve aquí sin pasar por el modelo. Se excluye si
+  // menciona "factura(s)" (eso ya lo captura el pre-flight más específico de
+  // arriba).
   const esListarPapelera =
     /papelera/.test(msgLower) &&
     /(qu[eé]\s+hay|lista(r)?|dame|mu[eé]stra(me)?|ense[ñn]a(me)?|p[aá]sa(me)?|ver)/.test(msgLower) &&
-    !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes);
+    !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes) &&
+    !/\bfacturas?\b/.test(msgSinTildes);
   if (esListarPapelera) {
     const lista = await listarPapelera(usuarioId);
     if (lista.length === 0) return { respuesta: "La papelera está vacía.", acciones };
@@ -1086,6 +1143,26 @@ export const chatear = async (
     };
   }
 
+  // Extrae "de [cliente/la empresa] X" al final del mensaje como nombre de
+  // cliente, para filtrar totales_facturas/ventas_top cuando el mensaje no es
+  // un periodo. El ".*" inicial (codicioso) hace que, si hay varias "de" en
+  // el mensaje, se quede con la ÚLTIMA (la más cercana al nombre real).
+  // Descarta capturas que claramente no son un nombre de cliente (periodo
+  // relativo, "la carpeta X", "la papelera", palabras sueltas sin valor).
+  const extraerClienteDeFrase = (texto: string, original: string): string | null => {
+    const m = texto.match(
+      /.*\b(?:del\s+cliente\s+|de\s+el\s+cliente\s+|de\s+cliente\s+|del\s+|de\s+la\s+empresa\s+|de\s+)(.+?)[?¿.!¡]*$/,
+    );
+    if (!m) return null;
+    const cliente = grupoOriginal(original, m).trim();
+    const clienteSinTildes = quitarTildes(cliente.toLowerCase());
+    const pareceOtraCosa =
+      /^(este|esta|esa|ese|el|la|los|las|mi|tu)?\s*(mes|ano|semana|dia)\b/.test(clienteSinTildes) ||
+      /^(la|el)\s+(carpeta|papelera|raiz|archivo)\b/.test(clienteSinTildes);
+    if (!cliente || STOPWORDS_NOMBRE.has(clienteSinTildes) || pareceOtraCosa) return null;
+    return cliente;
+  };
+
   // Pre-flight: "totales/total facturado de factura_X y factura_Y" (sin un verbo
   // claro como "dame"/"cuánto") a veces hace que el modelo interprete el primer
   // identificador como "abrir esa factura" en vez de pedir el total combinado de
@@ -1107,6 +1184,29 @@ export const chatear = async (
       acciones,
     )) as Record<string, unknown>;
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
+  // Pre-flight: "cuánto he facturado/total facturado [en abril] [de cliente X]"
+  // sin nombrar facturas concretas — total agregado filtrado por periodo y/o
+  // cliente (single-dimensión: si hay periodo, no se busca también cliente).
+  // Distinto de esTotalesMultiple (varias facturas nombradas).
+  const esTotalesGeneral = pideTotales && !esTotalesMultiple && nombresFactura.length < 2;
+  if (esTotalesGeneral) {
+    const { mes, anio } = detectarMesAnio(msgSinTildes);
+    const cliente = !mes && !anio ? extraerClienteDeFrase(msgSinTildes, msgLower) : null;
+    if (mes || anio || cliente) {
+      const args: Record<string, unknown> = {};
+      if (mes) args.mes = mes;
+      if (anio) args.anio = anio;
+      if (cliente) args.cliente = cliente;
+      const resultado = (await ejecutarTool(
+        "totales_facturas",
+        args,
+        usuarioId,
+        acciones,
+      )) as Record<string, unknown>;
+      if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+    }
   }
 
   // Pre-flight: ranking de productos ("qué es lo que más se vende [en julio]",
@@ -1131,6 +1231,12 @@ export const chatear = async (
     const args: Record<string, unknown> = { orden };
     if (mes) args.mes = mes;
     if (anio) args.anio = anio;
+    // "qué es lo más vendido DE [cliente] X" — ranking de productos acotado a
+    // ese cliente, no global. Solo si no hay periodo (single-dimensión).
+    if (!mes && !anio) {
+      const cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
+      if (cliente) args.cliente = cliente;
+    }
     const resultado = (await ejecutarTool("ventas_top", args, usuarioId, acciones)) as Record<
       string,
       unknown
@@ -1138,17 +1244,25 @@ export const chatear = async (
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
+  // Periodo relativo ("este mes", "el mes pasado", "este año", "el año
+  // pasado"...) — mismas frases que reconoce detectarMesAnio, para decidir si
+  // un mensaje "tiene periodo" sin necesidad de un mes/año explícito.
+  const RELATIVO_PERIODO =
+    /\b(mes\s+pasado|el\s+mes\s+anterior|(este|el)\s+mes\b|mes\s+actual|ano\s+pasado|el\s+ano\s+anterior|(este|el)\s+ano\b|ano\s+actual)\b/;
+
   // Pre-flight: "busca/dame/qué facturas tengo de [mes/año]" es un LISTADO de
   // facturas concretas (con botón para abrir cada una), distinto de los totales
   // agregados ("cuánto facturé en abril" → totales_facturas) o el ranking de
   // productos ("qué más se vendió en abril" → ventas_top). Requiere la palabra
-  // "factura(s)" + un periodo (mes y/o año); se excluye si además pide
-  // total/facturado/vendido/ranking, que ya tienen su propio pre-flight.
+  // "factura(s)" + un periodo (mes y/o año, explícito o relativo); se excluye
+  // si además pide total/facturado/vendido/ranking, que ya tienen su propio
+  // pre-flight.
   const esListarFacturasPeriodo =
     /\bfacturas?\b/.test(msgSinTildes) &&
     !pideTotales &&
     !esRankingVentas &&
-    new RegExp(`\\b(${Object.keys(MESES).join("|")}|20\\d{2})\\b`).test(msgSinTildes);
+    (new RegExp(`\\b(${Object.keys(MESES).join("|")}|20\\d{2})\\b`).test(msgSinTildes) ||
+      RELATIVO_PERIODO.test(msgSinTildes));
   if (esListarFacturasPeriodo) {
     const { mes, anio } = detectarMesAnio(msgSinTildes);
     const filtro: FiltroFacturas = {};
@@ -1183,31 +1297,58 @@ export const chatear = async (
     };
   }
 
+  // Pre-flight: "facturas de/en la carpeta X" (o "dentro de X") es un LISTADO
+  // de facturas concretas filtrado por CARPETA (con botón para abrir cada
+  // una). Se comprueba ANTES del listado por cliente de abajo para que tenga
+  // prioridad cuando se menciona "la carpeta"/"dentro de" — sin esto,
+  // extraerClienteDeFrase descarta "la carpeta X" (no parece un nombre de
+  // cliente) pero no hacía nada más con la frase. Reutiliza resolverCarpeta
+  // (mismo buscador por nombre/leaf-name que usan el resto de tools, con
+  // manejo de ambigüedad).
+  const matchFacturasDeCarpeta = msgSinTildes.match(
+    /\bfacturas?\b.*?(?:dentro\s+de\s+(?:la\s+carpeta\s+)?|de\s+la\s+carpeta\s+|en\s+la\s+carpeta\s+)([\wÀ-ÿ/-]+)/,
+  );
+  if (matchFacturasDeCarpeta && !pideTotales && !esRankingVentas) {
+    const nombreCarpeta = grupoOriginal(msgLower, matchFacturasDeCarpeta).trim();
+    const res = await resolverCarpeta(usuarioId, nombreCarpeta);
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      return {
+        respuesta: `Hay varias carpetas con ese nombre, ¿cuál quieres?\n\n${res.opciones
+          .map((o) => `- ${o}`)
+          .join("\n")}`,
+        acciones,
+      };
+    }
+    const ruta = res.ruta!;
+    const filas = await listarFacturas(usuarioId, { carpeta: ruta });
+    const titulo = `Facturas en ${ruta}`;
+    return {
+      respuesta: listadoFacturasMd(filas, titulo),
+      acciones,
+      tablaFacturas: {
+        titulo,
+        filas: filas.map((f) => ({
+          archivoId: f.archivoId,
+          archivoNombre: f.archivoNombre,
+          fecha: formatearFecha(f.fecha),
+          total: f.total,
+        })),
+      },
+    };
+  }
+
   // Pre-flight: "pásame/dame/búscame todas las facturas de [cliente] X" es un
   // LISTADO de facturas concretas filtrado por CLIENTE (con botón para abrir
   // cada una) — el modelo a veces no llamaba a ninguna tool para esto, o
   // confundía la petición con un ranking/total agregado. Distinto del listado
   // por periodo de arriba (que ya devolvió si detectó mes/año) y de los
   // totales/ranking agregados (pideTotales/esRankingVentas, con su propio
-  // pre-flight). Captura todo lo que sigue a "factura(s) [tengo/hay] de" (o
-  // "del cliente"/"de cliente"/"de la empresa") hasta el final del mensaje —
-  // "del" se trata aparte porque es una contracción ("de"+"el" en una sola
-  // palabra, no casa con un "de" suelto). Se descarta si lo capturado es una
-  // palabra suelta sin valor como nombre (STOPWORDS_NOMBRE), una referencia
-  // de tiempo relativa ("este mes", "el año pasado"...) que el listado por
-  // periodo de arriba no llegó a capturar por no ser un mes/año explícito, o
-  // claramente otra cosa ("la carpeta X", "la papelera") — para no tratarlas
-  // por error como nombre de cliente.
-  const matchFacturasDeCliente = msgSinTildes.match(
-    /\bfacturas?\s+(?:tengo\s+|hay\s+)?(?:del\s+cliente\s+|de\s+el\s+cliente\s+|de\s+cliente\s+|del\s+|de\s+la\s+empresa\s+|de\s+)(.+?)[?¿.!¡]*$/,
-  );
-  if (matchFacturasDeCliente && !pideTotales && !esRankingVentas) {
-    const cliente = grupoOriginal(msgLower, matchFacturasDeCliente).trim();
-    const clienteSinTildes = quitarTildes(cliente.toLowerCase());
-    const pareceOtraCosa =
-      /^(este|esta|esa|ese|el|la|los|las|mi|tu)?\s*(mes|a[nñ]o|semana|dia)\b/.test(clienteSinTildes) ||
-      /^(la|el)\s+(carpeta|papelera|raiz|archivo)\b/.test(clienteSinTildes);
-    if (cliente && !STOPWORDS_NOMBRE.has(clienteSinTildes) && !pareceOtraCosa) {
+  // pre-flight). Reutiliza extraerClienteDeFrase (mismas exclusiones: periodo
+  // relativo, "la carpeta X", "la papelera", palabras sueltas sin valor).
+  if (/\bfacturas?\b/.test(msgSinTildes) && !pideTotales && !esRankingVentas) {
+    const cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
+    if (cliente) {
       const filas = await listarFacturas(usuarioId, { cliente });
       const titulo = `Facturas de ${cliente}`;
       return {
@@ -1260,6 +1401,36 @@ export const chatear = async (
       respuesta: `Sí, tienes:\n\n${detalle}`,
       acciones,
       archivos: lista.map((a) => ({ id: a.id, nombre: a.nombre })),
+    };
+  }
+
+  // Pre-flight: "pásame/dame/muéstrame el resumen [de todo/de ventas/general]"
+  // es el archivo "resumen-ventas.md" (el agregado que vive en /facturas, ver
+  // facturas.service.ts), no las estadísticas recalculadas aparte — el
+  // usuario quiere el mismo artefacto que ve en el explorador. Sin esto, "el
+  // resumen de todo" no encaja con ninguna tool conocida por el modelo, y
+  // tampoco lo encuentra resolverArchivo (busca por nombre, "todo" no es
+  // parte del nombre real "resumen-ventas.md"). Se excluye si se nombra una
+  // factura concreta (ej. "resumen de factura_03"), que es un caso distinto
+  // ya cubierto por obtener_factura.
+  const esResumenGeneral =
+    /\bresumen(es)?\b/.test(msgSinTildes) &&
+    /\b(de\s+todo|de\s+ventas|general)\b/.test(msgSinTildes) &&
+    !/\bfacturas?[\d_-]/.test(msgSinTildes);
+  if (esResumenGeneral) {
+    const archivo = await localizarResumenVentas(usuarioId);
+    if (!archivo) {
+      return {
+        respuesta:
+          "Todavía no hay ningún resumen de ventas — se genera automáticamente en /facturas al escanear la primera factura.",
+        acciones,
+      };
+    }
+    const contenido = await leerTextoArchivo(archivo.id, usuarioId);
+    return {
+      respuesta: contenido,
+      acciones,
+      archivos: [{ id: archivo.id, nombre: archivo.nombre }],
     };
   }
 
