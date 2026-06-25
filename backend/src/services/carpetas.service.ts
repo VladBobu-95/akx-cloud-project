@@ -4,8 +4,18 @@ import { Usuario } from "../entities/Usuario";
 import { Archivo } from "../entities/Archivo";
 import { AppError } from "../utils/errors";
 import { copiarArchivo } from "./archivos.service";
+import { regenerarResumenVentasSerie } from "./facturas.service";
 
 const repo = () => AppDataSource.getRepository(Carpeta);
+
+// Best-effort, igual que en archivos.service.ts: estas operaciones son bulk
+// directo por SQL (no pasan por eliminarArchivo/borrarPermanente), así que no
+// hay riesgo de bucle con la propia regeneración de "resumen-ventas.md".
+const refrescarResumenVentas = (usuarioId: string): void => {
+  void regenerarResumenVentasSerie(usuarioId).catch((err) =>
+    console.error("[carpetas] Error al regenerar resumen-ventas (no crítico):", err),
+  );
+};
 
 // Ruta canónica: "/a/b" ("/" = raíz, sin barra final).
 export const normalizarRuta = (ruta: string): string => {
@@ -140,6 +150,7 @@ export const vaciarCarpeta = async (
       .execute();
     await crearCarpeta(usuarioId, r); // mantener la carpeta (ahora vacía)
   }
+  if (res.affected) refrescarResumenVentas(usuarioId);
   return { borrados: res.affected ?? 0 };
 };
 
@@ -162,6 +173,7 @@ export const eliminarCarpetaConContenido = async (
     .andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` })
     .execute();
   await eliminarCarpeta(usuarioId, r);
+  if (res.affected) refrescarResumenVentas(usuarioId);
   return { borrados: res.affected ?? 0 };
 };
 
@@ -183,6 +195,7 @@ export const vaciarTodo = async (
     .from(Carpeta)
     .where("propietarioId = :u", { u: usuarioId })
     .execute();
+  if (resArchivos.affected) refrescarResumenVentas(usuarioId);
   return {
     archivos: resArchivos.affected ?? 0,
     carpetas: resCarpetas.affected ?? 0,
@@ -208,6 +221,7 @@ export const eliminarTodasCarpetas = async (
     .from(Carpeta)
     .where("propietarioId = :u", { u: usuarioId })
     .execute();
+  if (resArchivos.affected) refrescarResumenVentas(usuarioId);
   return { borrados: resArchivos.affected ?? 0, carpetas: resCarpetas.affected ?? 0 };
 };
 

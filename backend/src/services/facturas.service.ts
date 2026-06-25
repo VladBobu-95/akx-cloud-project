@@ -140,6 +140,17 @@ const reemplazarArchivoTexto = async (
 
 const eur = (n: number | string): string => `${Number(n).toFixed(2)} €`;
 
+// Nombre del archivo de resumen a partir del nombre original, sin extensión y
+// con caracteres no seguros para nombre de archivo sustituidos (mismo criterio
+// que el saneado de idCorto anterior, pero basado en el nombre real subido en
+// vez del número de factura/UUID — más fácil de relacionar a simple vista con
+// el archivo original en el explorador).
+const nombreResumenFactura = (nombreOriginal: string): string => {
+  const punto = nombreOriginal.lastIndexOf(".");
+  const base = punto > 0 ? nombreOriginal.slice(0, punto) : nombreOriginal;
+  return `resumen-${base.replace(/[^\w.-]/g, "_")}.md`;
+};
+
 // Formatea una fecha ISO (YYYY-MM-DD) como DD/MM/YYYY para mostrar al usuario.
 export const formatearFecha = (iso: string): string => {
   const [anio, mes, dia] = iso.split("-");
@@ -294,11 +305,18 @@ export const escanearFactura = async (
       // Si un escaneo anterior llegó a guardar una factura (inventada) para este
       // archivo, ahora que sabemos que NO es factura la eliminamos: si no, seguiría
       // apareciendo en "abre X" y en la analítica pese a este resultado.
-      await AppDataSource.getRepository(Factura)
+      const { affected } = await AppDataSource.getRepository(Factura)
         .createQueryBuilder()
         .delete()
         .where(`"archivoId" = :a AND "propietarioId" = :u`, { a: archivo.id, u: usuarioId })
         .execute();
+      // Si de verdad había una factura guardada de un escaneo anterior, ya no
+      // cuenta: regeneramos resumen-ventas.md para que deje de incluirla.
+      if (affected) {
+        await regenerarResumenVentasSerie(usuarioId).catch((err) =>
+          console.error("[facturas] Error al regenerar resumen-ventas (no crítico):", err),
+        );
+      }
       if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
 
       // Escaneo MANUAL de algo que no es factura: ya no hay modal obligatorio
@@ -361,17 +379,14 @@ export const escanearFactura = async (
     // Resumen por factura + regenerar el resumen global de ventas.
     // Si falla la creación de los .md (p. ej. MinIO), logueamos pero no abortamos:
     // los datos de la factura ya están guardados en BD y eso es lo importante.
-    const idCorto = (datos.numero ?? guardada.id.slice(0, 8)).replace(/[^\w.-]/g, "_");
     try {
       await reemplazarArchivoTexto(
         usuarioId,
-        `resumen-factura-${idCorto}.md`,
+        nombreResumenFactura(archivo.nombre),
         CARPETA_FACTURAS,
         resumenFacturaMd(datos),
       );
-      // Serializado por usuario: varias facturas escaneándose a la vez (subida
-      // múltiple / "escanea todas") reescriben el mismo resumen-ventas.md.
-      await enSerie(usuarioId, () => regenerarResumenVentas(usuarioId));
+      await regenerarResumenVentasSerie(usuarioId);
     } catch (err) {
       console.error("[facturas] Error al crear archivos de resumen (no crítico):", err);
     }
@@ -805,31 +820,102 @@ export const asegurarFacturasEscaneadas = async (
   return escaneadas;
 };
 
-// Totales globales de ventas + top productos.
+// Totales globales de ventas + top productos/clientes. Usa el mismo
+// `construirFiltro` (sin filtro real, solo el usuario) que ventasTop/
+// totalesFacturado, así que excluye igual las facturas cuyo archivo está en
+// la papelera — antes este conteo iba por su cuenta con un COUNT(*) directo
+// sobre "facturas" sin ese JOIN/exclusión, así que una factura borrada (o
+// restaurada) no movía nunca este número.
 export const resumenVentas = async (
   usuarioId: string,
-): Promise<{ numFacturas: number; totalFacturado: number; top: { producto: string; unidades: number; importe: number }[] }> => {
-  const [tot] = await AppDataSource.query(
-    `SELECT COUNT(*)::int AS num, COALESCE(SUM("total"), 0)::float AS facturado
-     FROM "facturas" WHERE "propietarioId" = $1`,
-    [usuarioId],
+): Promise<{
+  numFacturas: number;
+  totalFacturado: number;
+  subtotal: number;
+  iva: number;
+  ticketMedio: number;
+  primeraFecha: string | null;
+  ultimaFecha: string | null;
+  top: { producto: string; unidades: number; importe: number }[];
+  clientes: { cliente: string; numFacturas: number; importe: number }[];
+}> => {
+  const { where, params } = construirFiltro(usuarioId, {});
+  const [row] = await AppDataSource.query(
+    `SELECT COUNT(DISTINCT f."id")::int AS numfacturas,
+            COALESCE(SUM(f."subtotal"), 0)::float AS subtotal,
+            COALESCE(SUM(f."iva"), 0)::float AS iva,
+            COALESCE(SUM(f."total"), 0)::float AS total,
+            MIN(f."fecha")::text AS primera,
+            MAX(f."fecha")::text AS ultima
+     FROM "facturas" f
+     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+     WHERE ${where}`,
+    params,
   );
-  const top = await ventasTop(usuarioId, {}, { limite: 5 });
-  return { numFacturas: tot.num, totalFacturado: tot.facturado, top };
+  const numFacturas = Number(row.numfacturas);
+  const totalFacturado = Number(row.total);
+  const [top, clientes] = await Promise.all([
+    ventasTop(usuarioId, {}, { limite: 5 }),
+    clientesTop(usuarioId, {}, { limite: 3 }),
+  ]);
+  return {
+    numFacturas,
+    totalFacturado,
+    subtotal: Number(row.subtotal),
+    iva: Number(row.iva),
+    ticketMedio: numFacturas > 0 ? totalFacturado / numFacturas : 0,
+    primeraFecha: row.primera ?? null,
+    ultimaFecha: row.ultima ?? null,
+    top,
+    clientes,
+  };
 };
 
 const regenerarResumenVentas = async (usuarioId: string): Promise<void> => {
-  const { numFacturas, totalFacturado, top } = await resumenVentas(usuarioId);
+  const {
+    numFacturas,
+    totalFacturado,
+    subtotal,
+    iva,
+    ticketMedio,
+    primeraFecha,
+    ultimaFecha,
+    top,
+    clientes,
+  } = await resumenVentas(usuarioId);
   const ranking = top
     .map((t, i) => `${i + 1}. **${t.producto}** — ${t.unidades} ud. — ${eur(t.importe)}`)
     .join("\n");
+  const rankingClientes = clientes
+    .map((c, i) => `${i + 1}. **${c.cliente}** — ${c.numFacturas} factura/s — ${eur(c.importe)}`)
+    .join("\n");
+  const periodo =
+    primeraFecha && ultimaFecha
+      ? `${formatearFecha(primeraFecha)} – ${formatearFecha(ultimaFecha)}`
+      : "—";
   const md = `# Resumen de ventas
 
 - **Facturas escaneadas:** ${numFacturas}
+- **Periodo:** ${periodo}
 - **Total facturado:** ${eur(totalFacturado)}
+- **Subtotal:** ${eur(subtotal)}
+- **IVA:** ${eur(iva)}
+- **Ticket medio:** ${eur(ticketMedio)}
 
 ## Más vendidos
 ${ranking || "_(todavía no hay datos)_"}
+
+## Mejores clientes
+${rankingClientes || "_(todavía no hay datos)_"}
 `;
   await reemplazarArchivoTexto(usuarioId, "resumen-ventas.md", CARPETA_FACTURAS, md);
 };
+
+// Wrapper público: serializa por usuario (ver `enSerie` más arriba) para que
+// dos operaciones a la vez sobre archivos/facturas del mismo usuario (subida
+// múltiple, borrar+restaurar rápido...) no compitan reescribiendo a la vez el
+// mismo "resumen-ventas.md". Lo usan tanto este servicio como
+// `archivos.service.ts`/`carpetas.service.ts` cada vez que cambia qué
+// facturas están activas (se borran, se restauran, o se crean).
+export const regenerarResumenVentasSerie = (usuarioId: string): Promise<void> =>
+  enSerie(usuarioId, () => regenerarResumenVentas(usuarioId));

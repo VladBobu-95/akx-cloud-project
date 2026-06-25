@@ -8,6 +8,27 @@ import { AppError } from "../utils/errors";
 import { env } from "../config/env";
 import { z } from "zod";
 import { crearCarpeta, normalizarRuta } from "./carpetas.service";
+import { regenerarResumenVentasSerie, esArchivoFactura } from "./facturas.service";
+
+// Best-effort: nunca debe romper la operación de archivos en sí si falla
+// (p. ej. MinIO caído al regenerar el .md). Se usa tras cualquier cambio en
+// qué archivos están activos/en papelera, para que "resumen-ventas.md" (carpeta
+// /facturas) refleje siempre solo las facturas con archivo activo.
+const refrescarResumenVentas = (usuarioId: string): void => {
+  void regenerarResumenVentasSerie(usuarioId).catch((err) =>
+    console.error("[archivos] Error al regenerar resumen-ventas (no crítico):", err),
+  );
+};
+
+// Solo merece la pena regenerar el resumen si el archivo afectado puede tener
+// una factura asociada (PDF/imagen). Además, es IMPRESCINDIBLE para evitar un
+// bucle infinito: `regenerarResumenVentas` reescribe "resumen-ventas.md"
+// borrando+creando (vía `borrarPermanente` + `crearArchivoTexto`), y ese borrado
+// dispararía esta misma función otra vez si no se filtrara — los .md de resumen
+// (extensión .md, mimeType "text/markdown") nunca cumplen `esArchivoFactura`.
+const refrescarResumenVentasSiFactura = (usuarioId: string, archivo: Archivo): void => {
+  if (esArchivoFactura(archivo)) refrescarResumenVentas(usuarioId);
+};
 
 const repo = () => AppDataSource.getRepository(Archivo);
 
@@ -309,6 +330,7 @@ export const eliminarArchivo = async (
 
   // softRemove rellena eliminadoEn en vez de borrar la fila
   await repo().softRemove(archivo);
+  refrescarResumenVentasSiFactura(usuarioId, archivo);
 };
 
 // --- RESTAURAR ARCHIVO (sacar de la papelera) ---
@@ -355,6 +377,7 @@ export const restaurarArchivo = async (
 
   // restore pone eliminadoEn a null → vuelve a aparecer en las queries normales
   await repo().restore(id);
+  refrescarResumenVentasSiFactura(usuarioId, archivo);
 };
 
 // --- LISTAR PAPELERA ---
@@ -391,6 +414,7 @@ export const borrarPermanente = async (
   // Primero MinIO (idempotente: no falla si la clave ya no existe), luego Postgres.
   await minioClient.removeObject(env.MINIO_BUCKET, archivo.claveMinio);
   await repo().delete(id); // hard delete: funciona aunque esté soft-deleted
+  refrescarResumenVentasSiFactura(usuarioId, archivo);
 };
 
 // --- VACIAR PAPELERA ---
@@ -408,6 +432,11 @@ export const vaciarPapelera = async (
   // removeObjects borra en lote (idempotente con claves inexistentes)
   await minioClient.removeObjects(env.MINIO_BUCKET, claves);
   await repo().delete(ids); // hard delete de todas las filas soft-deleted
+
+  // Bulk: no pasa por borrarPermanente, así que no hay riesgo de bucle con la
+  // regeneración del propio resumen-ventas.md (que sí podría estar entre los
+  // borrados). Solo se regenera si había alguna candidata a factura.
+  if (archivos.some((a) => esArchivoFactura(a))) refrescarResumenVentas(usuarioId);
 
   return { borrados: archivos.length };
 };
@@ -437,6 +466,9 @@ export const eliminarTodosLosArchivos = async (
     .where("propietarioId = :u", { u: usuarioId })
     .andWhere("eliminadoEn IS NULL")
     .execute();
+  // Bulk directo por SQL (no pasa por eliminarArchivo): manda a la papelera
+  // archivos de cualquier tipo, así que puede incluir facturas activas.
+  if (res.affected) refrescarResumenVentas(usuarioId);
   return { borrados: res.affected ?? 0 };
 };
 

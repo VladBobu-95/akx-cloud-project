@@ -156,12 +156,13 @@ const resolverArchivo = async (
   if (exacto) return { archivo: exacto };
   if (lista.length === 1) return { archivo: lista[0] };
   // El .md de resumen que se genera automáticamente al escanear una factura
-  // (resumen-factura-X.md, en /facturas) coincide con casi cualquier búsqueda
-  // por el número o nombre de esa factura, generando una ambigüedad constante
-  // con el archivo real. Se descarta de los candidatos salvo que sea la única
-  // coincidencia (pedirlo por su nombre completo ya se resuelve arriba, y
-  // listar la carpeta entera no pasa por aquí, así que sigue mostrándolo).
-  const sinResumenes = lista.filter((a) => !/^resumen-factura-/i.test(a.nombre));
+  // (resumen-<nombre original>.md, en /facturas — ver `nombreResumenFactura`
+  // en facturas.service.ts) coincide con casi cualquier búsqueda por el nombre
+  // de esa factura, generando una ambigüedad constante con el archivo real.
+  // Se descarta de los candidatos salvo que sea la única coincidencia (pedirlo
+  // por su nombre completo ya se resuelve arriba, y listar la carpeta entera
+  // no pasa por aquí, así que sigue mostrándolo).
+  const sinResumenes = lista.filter((a) => !/^resumen-/i.test(a.nombre));
   if (sinResumenes.length === 1) return { archivo: sinResumenes[0] };
   const final = sinResumenes.length > 0 ? sinResumenes : lista;
   return { opciones: final.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
