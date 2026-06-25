@@ -158,15 +158,55 @@ const reemplazarArchivoTexto = async (
 
 const eur = (n: number | string): string => `${Number(n).toFixed(2)} €`;
 
-// Nombre del archivo de resumen a partir del nombre original, sin extensión y
-// con caracteres no seguros para nombre de archivo sustituidos (mismo criterio
-// que el saneado de idCorto anterior, pero basado en el nombre real subido en
-// vez del número de factura/UUID — más fácil de relacionar a simple vista con
-// el archivo original en el explorador).
-const nombreResumenFactura = (nombreOriginal: string): string => {
+// 8 caracteres del UUID del archivo (sin guiones), como sufijo estable e
+// independiente del nombre. Evita que dos archivos distintos con el mismo
+// nombre (en carpetas distintas) generen el mismo resumen-<nombre>.md y se
+// pisen entre sí — antes el nombre del resumen dependía solo de
+// archivo.nombre, así que dos "factura.pdf" en carpetas distintas competían
+// por el mismo "resumen-factura.md".
+const idCortoDeArchivo = (archivoId: string): string => archivoId.replace(/-/g, "").slice(0, 8);
+
+// Nombre del archivo de resumen a partir del nombre original (sin extensión,
+// caracteres no seguros sustituidos) más el sufijo de archivo.id — más fácil
+// de relacionar a simple vista con el archivo original en el explorador que
+// el número de factura/UUID completo, pero sin las colisiones de antes.
+const nombreResumenFactura = (nombreOriginal: string, archivoId: string): string => {
   const punto = nombreOriginal.lastIndexOf(".");
   const base = punto > 0 ? nombreOriginal.slice(0, punto) : nombreOriginal;
-  return `resumen-${base.replace(/[^\w.-]/g, "_")}.md`;
+  return `resumen-${base.replace(/[^\w.-]/g, "_")}-${idCortoDeArchivo(archivoId)}.md`;
+};
+
+// Como reemplazarArchivoTexto, pero para el resumen INDIVIDUAL de un archivo:
+// en vez de buscar por nombre+carpeta exactos (que cambian si se renombra el
+// archivo original), busca por el sufijo "-<idCorto>.md" — estable mientras
+// exista el archivo — así encuentra y sustituye el resumen viejo aunque el
+// archivo se haya renombrado entre medias (antes se quedaba huérfano con el
+// nombre antiguo hasta volver a escanear a mano).
+const reemplazarResumenDeArchivo = async (
+  usuarioId: string,
+  archivoId: string,
+  nuevoNombre: string,
+  contenido: string,
+): Promise<void> => {
+  const repo = AppDataSource.getRepository(Archivo);
+  const existentes = await repo
+    .createQueryBuilder("a")
+    .where("a.propietarioId = :u", { u: usuarioId })
+    .andWhere("a.carpeta = :c", { c: CARPETA_FACTURAS })
+    .andWhere("a.nombre LIKE :p", { p: `%-${idCortoDeArchivo(archivoId)}.md` })
+    .getMany();
+  for (const a of existentes) {
+    // Misma protección que en reemplazarArchivoTexto: nunca borrar algo que
+    // no sea de verdad un .md generado por este mecanismo.
+    if (a.mimeType !== "text/markdown") {
+      console.warn(
+        `[facturas] resumen de "${nuevoNombre}" coincide con un archivo real (no se borra): ${a.id}`,
+      );
+      continue;
+    }
+    await borrarPermanente(a.id, usuarioId);
+  }
+  await crearArchivoTexto(usuarioId, nuevoNombre, CARPETA_FACTURAS, contenido);
 };
 
 // Formatea una fecha ISO (YYYY-MM-DD) como DD/MM/YYYY para mostrar al usuario.
@@ -398,10 +438,10 @@ export const escanearFactura = async (
     // Si falla la creación de los .md (p. ej. MinIO), logueamos pero no abortamos:
     // los datos de la factura ya están guardados en BD y eso es lo importante.
     try {
-      await reemplazarArchivoTexto(
+      await reemplazarResumenDeArchivo(
         usuarioId,
-        nombreResumenFactura(archivo.nombre),
-        CARPETA_FACTURAS,
+        archivo.id,
+        nombreResumenFactura(archivo.nombre, archivo.id),
         resumenFacturaMd(datos),
       );
       await regenerarResumenVentasSerie(usuarioId);
@@ -561,6 +601,26 @@ export const obtenerFactura = async (
     })),
   };
   return { encontrada: true, resumen: resumenFacturaMd(datos), numero: factura.numero };
+};
+
+// Si el archivo (ya renombrado/movido) tiene una factura escaneada, regenera
+// su resumen-<nombre>-<id>.md con el nombre actual. Sin esto, renombrar una
+// factura ("factura_03.pdf" -> "factura_v2.pdf") dejaba su resumen individual
+// con el nombre viejo hasta volver a escanearla a mano — `reemplazarResumenDeArchivo`
+// lo localiza por el sufijo de archivo.id (estable) y no por el nombre.
+// Pensada para llamarse "fire-and-forget" desde archivos.service.ts al renombrar.
+export const actualizarResumenFacturaSiExiste = async (
+  usuarioId: string,
+  archivo: Archivo,
+): Promise<void> => {
+  const { encontrada, resumen } = await obtenerFactura(usuarioId, archivo.id, archivo.nombre);
+  if (!encontrada || !resumen) return;
+  await reemplazarResumenDeArchivo(
+    usuarioId,
+    archivo.id,
+    nombreResumenFactura(archivo.nombre, archivo.id),
+    resumen,
+  );
 };
 
 // Filtro común para las consultas analíticas de facturas. Todos los campos son

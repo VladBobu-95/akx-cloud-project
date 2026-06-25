@@ -8,7 +8,11 @@ import { AppError } from "../utils/errors";
 import { env } from "../config/env";
 import { z } from "zod";
 import { crearCarpeta, normalizarRuta } from "./carpetas.service";
-import { regenerarResumenVentasSerie, esArchivoFactura } from "./facturas.service";
+import {
+  regenerarResumenVentasSerie,
+  esArchivoFactura,
+  actualizarResumenFacturaSiExiste,
+} from "./facturas.service";
 
 // Best-effort: nunca debe romper la operación de archivos en sí si falla
 // (p. ej. MinIO caído al regenerar el .md). Se usa tras cualquier cambio en
@@ -529,6 +533,17 @@ export const actualizarArchivo = async (
   // archivo de una carpeta nueva y luego borrarlo, la carpeta desaparecería
   // de los listados (nunca existió como fila propia en "carpetas").
   if (archivo.carpeta !== "/") await crearCarpeta(usuarioId, archivo.carpeta);
+
+  // Si se renombró y ya tenía una factura escaneada, su resumen-<nombre>.md
+  // individual queda con el nombre viejo hasta que se vuelva a escanear a
+  // mano — esto lo mantiene sincronizado con el nombre actual. Fire-and-forget
+  // (no bloquea la respuesta) y best-effort (un fallo aquí no debe romper el
+  // renombrado, que ya se guardó en BD).
+  if (datos.nombre) {
+    void actualizarResumenFacturaSiExiste(usuarioId, guardado).catch((err) =>
+      console.error("[archivos] Error al actualizar el resumen de la factura (no crítico):", err),
+    );
+  }
 
   // Igual que en obtenerArchivo: no devolvemos el propietario (lleva passwordHash).
   delete (guardado as Partial<Archivo>).propietario;
