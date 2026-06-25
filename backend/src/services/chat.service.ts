@@ -868,7 +868,7 @@ export const chatear = async (
     totalPaginas: number;
     total: number;
     limite: number;
-    filtro: FiltroFacturas;
+    filtro: Record<string, unknown>;
     filas: { archivoId: string | null; archivoNombre: string | null; fecha: string; total: number }[];
   };
   tablaArchivos?: {
@@ -1077,7 +1077,7 @@ export const chatear = async (
         totalPaginas: paginas,
         total,
         limite: 20,
-        filtro: {} as FiltroFacturas,
+        filtro: { papelera: true },
         // archivoId a null: un archivo en la papelera no se puede abrir con el
         // flujo normal (descargarArchivo/obtenerArchivo excluyen lo borrado),
         // así que se omite el botón "Abrir" en vez de ofrecer uno roto.
@@ -1334,7 +1334,7 @@ export const chatear = async (
       filtro.hasta = `${anio}-12-31`;
       partes.push(`${anio}`);
     }
-    const { filas, total, paginas } = await listarFacturas(usuarioId, filtro as unknown as Record<string, unknown>, { pagina: 1, limite: 20 });
+    const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
     const titulo = `Facturas de ${partes.join(" ")}`;
     return {
       respuesta: listadoFacturasMd(filas, titulo),
@@ -1345,7 +1345,7 @@ export const chatear = async (
         totalPaginas: paginas,
         total,
         limite: 20,
-        filtro: filtro as unknown as Record<string, unknown>,
+        filtro,
         filas: filas.map((f) => ({
           archivoId: f.archivoId,
           archivoNombre: f.archivoNombre,

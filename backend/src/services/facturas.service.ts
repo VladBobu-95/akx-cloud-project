@@ -715,7 +715,7 @@ export const actualizarResumenFacturaSiExiste = async (
 // Filtro común para las consultas analíticas de facturas. Todos los campos son
 // opcionales y se combinan en AND. `facturas` admite nº de factura o nombre de
 // archivo (se busca en ambos). `producto` solo aplica a los rankings.
-export interface FiltroFacturas {
+export type FiltroFacturas = {
   facturas?: string[];
   cliente?: string;
   emisor?: string;
