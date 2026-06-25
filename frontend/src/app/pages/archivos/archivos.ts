@@ -693,8 +693,14 @@ export class ArchivosPage {
     this.reubicarCarpeta(origen, destino, 'Carpeta movida');
   }
 
-  // Reubica una carpeta (mover o renombrar): re-prefija la ruta de todos los
-  // archivos del subárbol y remapea las carpetas vacías de localStorage.
+  // Reubica una carpeta (mover o renombrar). Una sola llamada atómica al
+  // servidor (mueve metadata + contenido en la misma operación, encolada
+  // contra las regeneraciones de resumen de facturas) — antes esto se hacía
+  // con una petición PATCH por archivo afectado en paralelo + una llamada
+  // aparte para la metadata, sin ninguna coordinación entre sí ni con un
+  // escaneo de factura en curso: si una factura terminaba de escanear justo
+  // a mitad de ese proceso, su resumen podía quedar repartido entre la ruta
+  // vieja y la nueva, o recrear "/facturas" en la raíz.
   private reubicarCarpeta(origen: string, destino: string, mensajeOk: string) {
     if (destino === origen) return;
     if (destino.startsWith(origen + '/')) {
@@ -705,34 +711,8 @@ export class ArchivosPage {
       this.toast.error('Ya existe una carpeta con ese nombre en el destino');
       return;
     }
-
-    const afectados = this.archivosBajo(origen);
-    const remapVacias = () => {
-      this.carpetas.update((v) =>
-        v.map((c) =>
-          c.ruta === origen || c.ruta.startsWith(origen + '/')
-            ? { ...c, ruta: destino + c.ruta.slice(origen.length) }
-            : c,
-        ),
-      );
-      this.svc.reubicarCarpetaApi(origen, destino).subscribe({ error: () => {} });
-    };
-
-    if (afectados.length === 0) {
-      remapVacias();
-      this.toast.exito(mensajeOk);
-      return;
-    }
-
-    forkJoin(
-      afectados.map((a) =>
-        this.svc.actualizar(a.id, {
-          carpeta: destino + this.normalizar(a.carpeta).slice(origen.length),
-        }),
-      ),
-    ).subscribe({
+    this.svc.reubicarCarpetaApi(origen, destino).subscribe({
       next: () => {
-        remapVacias();
         this.toast.exito(mensajeOk);
         this.cargar();
       },

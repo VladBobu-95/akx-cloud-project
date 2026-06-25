@@ -21,7 +21,7 @@ import {
   listarCarpetas,
   crearCarpeta,
   eliminarCarpetaConContenido,
-  reubicarCarpeta,
+  moverCarpetaConContenido,
 } from "../services/carpetas.service";
 import { indexarArchivo, actualizarDescripcionManual, buscarSemantica } from "../services/rag.service";
 import {
@@ -63,14 +63,26 @@ export const ctrlCrearCarpeta = async (
 };
 
 // PATCH /api/archivos/carpetas  { origen, destino }  (mover / renombrar)
+// Mueve la carpeta Y su contenido de forma atómica en el servidor (antes el
+// explorador lo hacía con una petición PATCH por archivo afectado + esta
+// llamada al final solo para la metadata — N peticiones sin coordinación
+// entre sí ni con un escaneo de factura en curso: si una factura terminaba
+// de escanear justo a mitad de ese proceso, su resumen podía aterrizar en la
+// ruta vieja o crear de nuevo "/facturas" en la raíz después de que esta
+// llamada ya hubiera renombrado la metadata). `moverCarpetaConContenido` va
+// encolada en la misma cola por usuario que las regeneraciones de resumen.
 export const ctrlReubicarCarpeta = async (
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> => {
   try {
-    await reubicarCarpeta(req.usuario!.id, String(req.body.origen), String(req.body.destino));
-    res.json({ ok: true });
+    const { movidos } = await moverCarpetaConContenido(
+      req.usuario!.id,
+      String(req.body.origen),
+      String(req.body.destino),
+    );
+    res.json({ ok: true, movidos });
   } catch (error) {
     next(error);
   }
