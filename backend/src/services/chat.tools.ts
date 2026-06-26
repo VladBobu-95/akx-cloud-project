@@ -26,7 +26,7 @@ Cómo actuar:
   • Si solo pregunta si EXISTE/TIENE un archivo (ej: "¿tengo un archivo llamado factura_01?", "busca factura_033") → usa "buscar_archivos", igual que con cualquier otro archivo. NUNCA escanees ni abras una factura solo para comprobar que existe (el OCR tarda mucho y aquí no hace falta).
   • Si el usuario pide VER o RESUMIR una factura específica YA escaneada → usa "obtener_factura" (lee de BD, rápido, sin re-procesar el PDF).
   • Si el usuario pide ESCANEAR/PROCESAR una o varias facturas concretas por nombre → usa "escanear_factura" UNA VEZ POR CADA archivo mencionado (nunca uses "escanear_todas_facturas" si el usuario nombró archivos específicos).
-  • Si el usuario pide escanear/procesar TODAS sus facturas sin nombrarlas → usa "escanear_todas_facturas". Por defecto SOLO escanea PDFs, no imágenes (las imágenes sueltas casi nunca son facturas y su OCR es mucho más lento). Pon "incluirImagenes": true SOLO si el usuario lo pide explícitamente (ej. "escanea también las imágenes", "escanea todas las imágenes").
+  • Si el usuario pide escanear/procesar TODAS sus facturas sin nombrarlas → usa "escanear_todas_facturas" con "tipo" según lo que pida: "pdf" (por defecto, solo PDFs) para "escanea todas las facturas"; "imagenes" (SOLO imágenes, NO los PDFs) para "escanea todas las imágenes"/"las fotos"; "todo" (PDFs e imágenes) para "escanea todo"/"todos los archivos". NUNCA escanees los PDFs si solo te pidieron las imágenes.
 - ANALÍTICA DE FACTURAS — llama a la herramienta INMEDIATAMENTE, sin preguntar:
   • Rankings de productos o buscar un producto ("qué vendí más", "lo más/menos vendido", "ranking", "cuánto he vendido de X") → "ventas_top".
   • Totales facturados ("cuánto he facturado", "total gastado", "cuánto le he facturado a X") → "totales_facturas".
@@ -382,13 +382,15 @@ export const TOOLS = [
     function: {
       name: "escanear_todas_facturas",
       description:
-        "Pone a escanear EN SEGUNDO PLANO todas las facturas del usuario que no lo estén ya (no espera al resultado, que puede tardar varios minutos). Por defecto SOLO incluye PDFs; pasa incluirImagenes:true SOLO si el usuario pide explícitamente escanear también las imágenes. Úsalo cuando pidan 'escanea todas las facturas', 'procesa todas', 'analiza mis facturas', 'hazme un resumen de todas las facturas', 'qué facturas tengo', etc. El ranking/totales completos solo estarán disponibles unos minutos después, cuando el escaneo termine.",
+        "Pone a escanear EN SEGUNDO PLANO todos los archivos del usuario que no lo estén ya (no espera al resultado, que puede tardar varios minutos). El parámetro 'tipo' decide QUÉ se escanea: 'pdf' (por defecto, solo PDFs) cuando piden 'escanea todas las facturas'/'procesa todas'/'analiza mis facturas'; 'imagenes' (SOLO imágenes, no PDFs) cuando piden 'escanea todas las imágenes'/'las fotos'; 'todo' (PDFs e imágenes) cuando piden 'escanea todo'/'todos los archivos'. El ranking/totales completos solo estarán disponibles unos minutos después, cuando el escaneo termine.",
       parameters: {
         type: "object",
         properties: {
-          incluirImagenes: {
-            type: "boolean",
-            description: "true solo si el usuario pide explícitamente escanear también las imágenes, no solo los PDFs",
+          tipo: {
+            type: "string",
+            enum: ["pdf", "imagenes", "todo"],
+            description:
+              "'pdf' (por defecto) = solo facturas PDF; 'imagenes' = solo imágenes/fotos; 'todo' = PDFs e imágenes. Elige según lo que pida el usuario.",
           },
         },
       },

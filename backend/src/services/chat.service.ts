@@ -827,32 +827,38 @@ const ejecutarTool = async (
         };
       }
       case "escanear_todas_facturas": {
-        // Busca todos los PDFs e imágenes y los pone a escanear en segundo
-        // plano (vía encolarEscaneoManual, igual que "Escanear" en el
-        // explorador): NO espera al resultado. Con varias facturas el OCR/IA
-        // puede tardar minutos y colgaba la petición del chat hasta el 504
-        // de nginx (ver bugs.txt). El progreso se ve en la columna "Estado".
-        // Por defecto solo PDFs: las imágenes sueltas casi nunca son
-        // facturas y su OCR es mucho más lento, así que solo se incluyen si
-        // el usuario lo pide explícitamente (incluirImagenes).
-        const incluirImagenes = args.incluirImagenes === true;
+        // Pone archivos a escanear en segundo plano (vía encolarEscaneoManual,
+        // igual que "Escanear" en el explorador): NO espera al resultado. Con
+        // varias facturas el OCR/IA puede tardar minutos y colgaba la petición
+        // del chat hasta el 504 de nginx (ver bugs.txt). El progreso se ve en
+        // la columna "Estado".
+        //
+        // `tipo` decide QUÉ se escanea (las imágenes sueltas casi nunca son
+        // facturas y su OCR es mucho más lento, así que NO entran por defecto):
+        //   - "pdf" (por defecto): solo PDFs  → "escanea todas las facturas"
+        //   - "imagenes": solo imágenes       → "escanea todas las imágenes"
+        //   - "todo": PDFs e imágenes         → "escanea todo / todos los archivos"
+        const tipo = args.tipo === "imagenes" || args.tipo === "todo" ? args.tipo : "pdf";
         const todos = (await listarArchivos(usuarioId, undefined, 1, 200)).archivos;
         const facturas = todos.filter((a) => {
           const esPdf = /\.pdf$/i.test(a.nombre) || a.mimeType === "application/pdf";
           const esImagen = /\.(jpe?g|png|webp|tiff?)$/i.test(a.nombre) || /^image\//.test(a.mimeType);
-          if (!esPdf && !(incluirImagenes && esImagen)) return false;
+          const coincideTipo =
+            tipo === "todo" ? esPdf || esImagen : tipo === "imagenes" ? esImagen : esPdf;
+          if (!coincideTipo) return false;
           return a.estadoEscaneo !== "pendiente" && a.estadoEscaneo !== "escaneando";
         });
+        const queCosa = tipo === "imagenes" ? "imagen(es)" : tipo === "todo" ? "archivo(s)" : "factura(s)";
         if (facturas.length === 0) {
-          return { ok: true, resumen: "No se encontraron facturas pendientes de escanear." };
+          return { ok: true, resumen: `No se encontraron ${queCosa} pendientes de escanear.` };
         }
         for (const a of facturas) {
           await encolarEscaneoManual(usuarioId, a.id);
         }
-        acciones.push(`${facturas.length} factura(s) puesta(s) a escanear en segundo plano`);
+        acciones.push(`${facturas.length} ${queCosa} puesta(s) a escanear en segundo plano`);
         return {
           ok: true,
-          resumen: `He puesto a escanear ${facturas.length} factura(s) en segundo plano. Puede tardar varios minutos según cuántas sean — sigue el progreso en la columna "Estado" del explorador, o pregúntame de nuevo más tarde.`,
+          resumen: `He puesto a escanear ${facturas.length} ${queCosa} en segundo plano. Puede tardar varios minutos según cuántas sean — sigue el progreso en la columna "Estado" del explorador, o pregúntame de nuevo más tarde.`,
         };
       }
       case "obtener_factura": {
@@ -1933,21 +1939,25 @@ export const chatear = async (
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
-  // Pre-flight: "escanea/procesa todas las facturas/imágenes" — el modelo no
-  // siempre fija bien el flag "incluirImagenes" (ver escanear_todas_facturas
-  // en chat.tools.ts: por defecto solo escanea PDFs, las imágenes solo si se
-  // piden explícitamente). Se resuelve aquí de forma determinista: sin
-  // dígitos en el mensaje (si nombra una factura concreta como "factura_08"
-  // es "escanear_factura", no esto) y con el verbo + "todas/todos".
+  // Pre-flight: "escanea/procesa todas las facturas/imágenes/todo" — el modelo
+  // pequeño no fija bien el parámetro "tipo" (ver escanear_todas_facturas en
+  // chat.tools.ts), así que aquí se decide de forma determinista QUÉ escanear:
+  //   - menciona imágenes/fotos  → solo imágenes
+  //   - menciona "todo"/archivos → PDFs + imágenes
+  //   - en otro caso             → solo PDFs (facturas)
+  // Solo se dispara con el verbo + "todas/todos" y SIN dígitos (si nombra una
+  // factura concreta como "factura_08" es "escanear_factura", no esto).
   const esEscanearTodas =
     /\b(escane[ao](?:r|me|lo|la|los|las)?|procesa(?:r|me|lo|la|los|las)?)\b/.test(msgSinTildes) &&
-    /\btodas?\b/.test(msgSinTildes) &&
+    /\btod[oa]s?\b/.test(msgSinTildes) &&
     !/\d/.test(msgSinTildes);
   if (esEscanearTodas) {
-    const incluirImagenes = /\bimagen(es)?\b|\bfotos?\b/.test(msgSinTildes);
+    const mencionaImagenes = /\bimagen(es)?\b|\bfotos?\b/.test(msgSinTildes);
+    const mencionaTodo = /\btodo\b|\barchivos?\b|\bficheros?\b/.test(msgSinTildes);
+    const tipo = mencionaImagenes ? "imagenes" : mencionaTodo ? "todo" : "pdf";
     const resultado = (await ejecutarTool(
       "escanear_todas_facturas",
-      { incluirImagenes },
+      { tipo },
       usuarioId,
       acciones,
     )) as Record<string, unknown>;
