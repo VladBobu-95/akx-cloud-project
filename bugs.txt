@@ -1,5 +1,6 @@
 
-- si solo pongo el nombre que la abra(ahora escanea)
+- pasame las facturas del mes anterior 
+- mueve modelo ,Por favor, indica la carpeta destino.
 - boton para escanear
 -copia factura en la carpeta demo22 y despues copia la carpeta demo22 
 - cambia el nombre de factura 

@@ -87,6 +87,15 @@ export class ArchivosService {
     );
   }
 
+  // Lanza el escaneo manual de factura sobre un archivo ya subido. Es
+  // asíncrono (202): el resultado se ve vía polling de "estadoEscaneo".
+  escanearFactura(archivoId: string, pista?: string) {
+    return this.http.post<{ estado: string }>(
+      `${environment.apiUrl}/api/facturas/escanear`,
+      { archivoId, pista },
+    );
+  }
+
   subir(file: File, carpeta?: string) {
     const fd = new FormData();
     fd.append('archivo', file);

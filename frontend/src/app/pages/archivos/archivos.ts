@@ -514,6 +514,20 @@ export class ArchivosPage {
       },
     });
   }
+  // Reescaneo manual: por si el auto-escaneo al subir falló o se quiere
+  // forzar tras corregir el archivo (ej: una foto borrosa re-subida igual).
+  accionEscanear(id: string) {
+    const a = this.archivoPorId(id);
+    this.cerrarMenu();
+    if (!a) return;
+    this.svc.escanearFactura(a.id).subscribe({
+      next: () => {
+        this.toast.exito('Escaneo en curso…');
+        this.cargar();
+      },
+      error: (err) => this.toast.error(mensajeError(err)),
+    });
+  }
   accionDescargarArchivo(id: string) {
     const a = this.archivoPorId(id);
     this.cerrarMenu();

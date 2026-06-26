@@ -134,7 +134,23 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   "¿cuál quieres?" sin listar ninguna), y se recuerda qué se estaba pidiendo
   (tool + argumentos) para completarlo en el turno siguiente cuando el usuario
   responde con la opción elegida — antes esa respuesta se trataba como un mensaje
-  nuevo sin contexto y el modelo hacía otra cosa.
+  nuevo sin contexto y el modelo hacía otra cosa. Si no hay coincidencia exacta,
+  se sugieren nombres parecidos por similitud ("¿querías decir...?", tolera
+  erratas). La aclaración se muestra también como **tabla clicable** (botón
+  "Elegir", o "Resumen"/"Abrir" si la tool solo consulta) además del texto, y se
+  puede rechazar con "no"/"déjalo"/"cancela" sin que el chat invente una acción.
+- **Comandos compuestos**: una sola frase puede encadenar varias acciones
+  ("ábreme presupuesto.pdf y contrato.docx", "crea la carpeta demo y copia
+  factura_01 ahí y borra viejo.txt") — se ejecutan todas en orden, avisando con
+  ⚠️ de la que falle, en vez de que el modelo solo atienda la primera.
+- **Si falta un dato que el usuario no dio** (ej. "cambia el nombre de
+  factura_03" sin decir el nombre nuevo), el chat lo pregunta y usa la
+  respuesta del siguiente mensaje para completar la acción, en vez de seguir
+  adelante con el argumento vacío (antes esto renombraba el archivo a la
+  cadena literal "undefined").
+- **Copiar un archivo** sin indicar nombre para la copia la llama automáticamente
+  `"<original> (copia)"` (y "(copia 2)", "(copia 3)"... si ya existe) para no
+  dejar dos archivos con el mismo nombre en la misma carpeta.
 - **Parser de respaldo**: si el modelo emite las tool calls como texto JSON en `content`
   en vez de en `tool_calls`, se extraen (escáner de llaves balanceadas) y se ejecutan
   igual. Además, los nombres de tool alucinados (`mover_factura` en vez de
@@ -178,9 +194,14 @@ con ejemplos reales de frases que entiende:
     carpeta** 2026" es menos fiable con modelos pequeños — ver Limitaciones)
   - "mueve presupuesto.pdf a /clientes"
   - "cambia el nombre de factura_03 a factura_033"
+  - "cambia el nombre de factura_03" (sin decir el nombre nuevo: el chat te
+    pregunta "¿qué nombre quieres ponerle?" y lo aplica con tu siguiente respuesta)
+  - "haz una copia de factura_03" (la copia se llama "factura_03 (copia)" sola)
   - "borra el archivo viejo.txt"
   - "créame una nota llamada notas.md con esto: ..."
   - "lee el archivo notas.md" / "¿qué dice el contrato.docx?" / "qué dice factura_01.pdf"
+  - "ábreme presupuesto.pdf y contrato.docx" / "crea la carpeta demo y copia
+    factura_01 ahí y borra viejo.txt" (varias acciones en un solo mensaje)
 - **Carpetas** — crear, eliminar entera (con su contenido), vaciar dejando la carpeta,
   mover, renombrar, copiar, listar todas. No hace falta dar la ruta completa para
   operar sobre una que ya existe, solo su nombre:
