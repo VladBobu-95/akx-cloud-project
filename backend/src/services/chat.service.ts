@@ -1165,19 +1165,43 @@ export const chatear = async (
   // Sin tildes, para los pre-flights de verbos de acción: así "bórralo todo" /
   // "elimínalo" / "vacíalas" casan igual que "borra todo" / "elimina" / "vacia".
   const msgSinTildes = quitarTildes(msgLower);
-  // Detecta "factura(s)" tolerando una errata de 1 letra (ej. "fcaturas",
-  // "facturs") SIN reescribir msgSinTildes: los pre-flights de abajo usan
-  // /\bfacturas?\b/.test(msgSinTildes) y, si esa palabra concreta tiene una
-  // errata, ninguno encaja y el mensaje cae en el bucle de tools del modelo
-  // (poco fiable, ver NOTAS.md), que se queda reintentando sin converger —
-  // de ahí el chat "colgado". Se usa una función aparte (en vez de corregir
-  // el texto in-place) para no desalinear los índices que extraerClienteDeFrase
-  // / resolverCarpeta necesitan para extraer substrings del mensaje original.
+  // Distancia Damerau-Levenshtein (como distanciaLev, pero una transposición
+  // de letras adyacentes cuenta como 1 solo cambio, no 2): "fcaturas" es
+  // exactamente eso (intercambia "ac" por "ca"), así que con Levenshtein
+  // normal queda a distancia 2-3 y no se detectaba como errata de "facturas".
+  const distanciaDamerau = (a: string, b: string): number => {
+    const m = a.length;
+    const n = b.length;
+    const d: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) d[i][0] = i;
+    for (let j = 0; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const costo = a[i - 1] === b[j - 1] ? 0 : 1;
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + costo);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+          d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+        }
+      }
+    }
+    return d[m][n];
+  };
+  // Detecta "factura(s)" tolerando una errata de 1 cambio (sustitución,
+  // inserción, borrado o transposición de adyacentes) SIN reescribir
+  // msgSinTildes: los pre-flights de abajo usan /\bfacturas?\b/.test(msgSinTildes)
+  // y, si esa palabra concreta tiene una errata, ninguno encaja y el mensaje
+  // cae en el bucle de tools del modelo (poco fiable, ver NOTAS.md), que se
+  // queda reintentando sin converger — de ahí el chat "colgado". Se usa una
+  // función aparte (en vez de corregir el texto in-place) para no desalinear
+  // los índices que extraerClienteDeFrase / resolverCarpeta necesitan para
+  // extraer substrings del mensaje original. Restringido a palabras que
+  // empiezan por "f" para no disparar con palabras sueltas no relacionadas.
   const contieneFactura = (texto: string): boolean =>
     texto.split(/\s+/).some((palabra) => {
       const p = palabra.replace(/[^a-z]/gi, "");
       if (/^facturas?$/.test(p)) return true;
-      return p.length >= 6 && p.length <= 9 && (distanciaLev(p, "factura") === 1 || distanciaLev(p, "facturas") === 1);
+      if (!p.startsWith("f") || p.length < 6 || p.length > 9) return false;
+      return distanciaDamerau(p, "factura") <= 1 || distanciaDamerau(p, "facturas") <= 1;
     });
   // Patrones de verbo reutilizados por los pre-flights de borrado/restaurar:
   // admiten el pronombre enclítico pegado ("bórralo", "elimínala", "sácalos")
@@ -2044,6 +2068,16 @@ export const chatear = async (
         },
       };
     }
+    // Llega aquí un mensaje que SÍ es sobre facturas (contieneFactura) pero no
+    // encaja en ningún pre-flight anterior (sin periodo/carpeta/cliente, sin
+    // verbo de listado/apertura): es demasiado ambiguo para resolverlo aquí, y
+    // dejarlo caer en el bucle de tools del modelo es justo el camino lento e
+    // inestable que causaba el cuelgue. Mejor preguntar directamente.
+    return {
+      respuesta:
+        "No estoy seguro de qué quieres hacer con las facturas. ¿Quieres verlas todas, filtrarlas por cliente o periodo, o ver los totales facturados?",
+      acciones,
+    };
   }
 
   // Pre-flight: "¿tengo/hay/existe/dónde está... un archivo llamado X?" o
