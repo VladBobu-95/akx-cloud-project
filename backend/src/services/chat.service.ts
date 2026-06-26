@@ -327,8 +327,34 @@ const registrarAclaracion = (
   opciones: OpcionAclaracion[],
   sugerencia = false,
 ) => {
+  pendientesValor.delete(usuarioId);
   pendientesAclaracion.set(usuarioId, { tool, args, clave, opciones, ts: Date.now() });
   return { necesita_aclaracion: true, opciones, sugerencia };
+};
+
+// Igual que `pendientesAclaracion`, pero para cuando lo que falta NO es elegir
+// entre varias coincidencias sino un dato libre que el usuario no dio (ej.
+// "renombra X" sin indicar a qué nombre, "cambia el nombre de X" sin el nuevo
+// nombre). Sin esto, ejecutarTool seguía adelante con el argumento ausente
+// (ej. `nuevo_nombre` undefined) y acababa renombrando el archivo a la cadena
+// literal "undefined". Aquí se pregunta y se recuerda qué completar para que
+// el SIGUIENTE mensaje (texto libre, no una opción de una lista) se use tal
+// cual como el valor que faltaba.
+const pendientesValor = new Map<
+  string,
+  { tool: string; args: Record<string, unknown>; clave: string; pregunta: string; ts: number }
+>();
+
+const registrarFaltaValor = (
+  usuarioId: string,
+  tool: string,
+  args: Record<string, unknown>,
+  clave: string,
+  pregunta: string,
+) => {
+  pendientesAclaracion.delete(usuarioId);
+  pendientesValor.set(usuarioId, { tool, args, clave, pregunta, ts: Date.now() });
+  return { necesita_valor: true, pregunta };
 };
 
 // Encabezado de la pregunta de aclaración. Si las opciones son SUGERENCIAS por
@@ -507,8 +533,18 @@ const ejecutarTool = async (
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
         if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
+        const nuevoNombreArg = typeof args.nuevo_nombre === "string" ? args.nuevo_nombre.trim() : "";
+        if (!nuevoNombreArg) {
+          return registrarFaltaValor(
+            usuarioId,
+            "renombrar_archivo",
+            { nombre: res.archivo!.nombre },
+            "nuevo_nombre",
+            `¿Qué nombre quieres ponerle a "${res.archivo!.nombre}"?`,
+          );
+        }
         const r = await actualizarArchivo(res.archivo!.id, usuarioId, {
-          nombre: String(args.nuevo_nombre),
+          nombre: nuevoNombreArg,
         });
         acciones.push(`Renombrado a "${r.nombre}"`);
         return { ok: true, nombre: r.nombre, resumen: "Hecho." };
@@ -1173,6 +1209,44 @@ export const chatear = async (
     return { mes, anio };
   };
 
+  // Pre-flight: si en el turno anterior se preguntó por un dato libre que
+  // faltaba (ej. "¿qué nombre quieres ponerle a X?"), este mensaje ES esa
+  // respuesta: se usa tal cual (texto libre, no una opción de una lista) como
+  // el valor que faltaba y se completa la acción original.
+  const pendienteValor = pendientesValor.get(usuarioId);
+  if (pendienteValor) {
+    pendientesValor.delete(usuarioId);
+    const esNegacionValor =
+      /^(?:no|nope|nah)(?:\s+(?:gracias|por\s+ahora|era\s+es[ao]|es\s+es[ao]|quiero|asi))?[.,!¡]*$|^ninguna?(?:\s+de\s+(?:esas|estas|ellas))?[.,!¡]*$|^(?:cancela(?:r|lo)?|olvidalo|dejalo|mejor\s+no|para\s+nada)[.,!¡]*$/.test(
+        quitarTildes(msgLower),
+      );
+    if (esNegacionValor) {
+      return { respuesta: "Vale, lo dejo así. Dime si quieres que haga otra cosa.", acciones };
+    }
+    if (Date.now() - pendienteValor.ts < TTL_ACLARACION_MS && ultimoMensaje.trim()) {
+      const argsFinal = { ...pendienteValor.args, [pendienteValor.clave]: ultimoMensaje.trim() };
+      const resultado = (await ejecutarTool(
+        pendienteValor.tool,
+        argsFinal,
+        usuarioId,
+        acciones,
+      )) as Record<string, unknown>;
+      if (resultado.necesita_valor === true) {
+        return { respuesta: resultado.pregunta as string, acciones };
+      }
+      if (resultado.necesita_aclaracion === true && Array.isArray(resultado.opciones)) {
+        return respuestaAclaracion(
+          resultado.opciones as OpcionAclaracion[],
+          resultado.sugerencia === true,
+          acciones,
+          pendienteValor.tool,
+        );
+      }
+      if (typeof resultado.error === "string") return { respuesta: resultado.error, acciones };
+      if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+    }
+  }
+
   // Pre-flight: si en el turno anterior se pidió aclarar entre varias
   // coincidencias y este mensaje es justo la opción elegida (el usuario copia/
   // escribe el nombre que se le ofreció), se completa AQUÍ la acción original
@@ -1230,6 +1304,9 @@ export const chatear = async (
           usuarioId,
           acciones,
         )) as Record<string, unknown>;
+        if (resultado.necesita_valor === true) {
+          return { respuesta: resultado.pregunta as string, acciones };
+        }
         if (resultado.necesita_aclaracion === true && Array.isArray(resultado.opciones)) {
           return respuestaAclaracion(
             resultado.opciones as OpcionAclaracion[],
@@ -1492,6 +1569,13 @@ export const chatear = async (
             }
           } else {
             const r = (await ejecutarTool(a.tool, a.args, usuarioId, acciones)) as Record<string, unknown>;
+            if (r.necesita_valor === true) {
+              // Falta un dato libre (ej. el nuevo nombre): se pregunta y se corta
+              // aquí igual que con la aclaración por varias coincidencias. Lo ya
+              // hecho en segmentos anteriores se conserva en `acciones`/`lecturas`.
+              const previo = lecturas.length ? `${lecturas.join("\n\n---\n\n")}\n\n---\n\n` : "";
+              return { respuesta: previo + (r.pregunta as string), acciones };
+            }
             if (r.necesita_aclaracion === true && Array.isArray(r.opciones)) {
               // Nombre con errata en una acción (mover/copiar/borrar...): ejecutarTool
               // ya dejó registrada la aclaración con sus args (incl. destino), así
@@ -2482,6 +2566,13 @@ export const chatear = async (
       messages.push({ role: "tool", content: JSON.stringify(resultado) });
 
       const r = resultado as Record<string, unknown>;
+
+      // Falta un dato libre que el modelo no rellenó (ej. "nuevo_nombre" en un
+      // renombrado sin nombre nuevo): se pregunta aquí mismo en vez de dejar
+      // que el modelo siga adelante con el argumento ausente.
+      if (r.necesita_valor === true) {
+        return { respuesta: r.pregunta as string, acciones };
+      }
 
       // Si hace falta aclarar entre varias coincidencias, se construye la
       // pregunta aquí mismo: dejarlo en manos del modelo a veces resultaba en

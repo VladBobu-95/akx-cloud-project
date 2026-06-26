@@ -1,8 +1,12 @@
 
 - si solo pongo el nombre que la abra(ahora escanea)
 - boton para escanear
+-copia factura en la carpeta demo22 y despues copia la carpeta demo22 
+- cambia el nombre de factura 
 - error al decir no
-- haz una copia de x
+- copia factura escanea en lugar de copiar la selecionar
+- copia factura no sale con (copia) entre parentesis
+- haz una copia de x c
 -restaurar todo
 - que no se invente cosas
 - mover varios seleccionados
