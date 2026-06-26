@@ -1179,6 +1179,7 @@ export const chatear = async (
     "(?:abre(?:lo|la|los|las)?|abrir|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?)";
   const VERBO_BUSCAR = "(?:busca(?:r|lo|la|los|las)?)";
   const VERBO_COPIAR = "(?:copia(?:r|me|lo|la|los|las)?|duplica(?:r|me|lo|la|los|las)?)";
+  const VERBO_MOVER = "(?:mueve(?:me)?(?:lo|la|los|las)?|mover|traslada(?:r|me|lo|la|los|las)?)";
   const VERBO_CREAR = "(?:crea(?:me)?(?:lo|la|los|las)?)";
   const VERBO_LISTAR =
     "(?:pasa(?:me)?(?:lo|la|los|las)?|dame|envia(?:me)?(?:lo|la|los|las)?|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?|lista(?:r|lo|la|los|las)?)";
@@ -2285,6 +2286,61 @@ export const chatear = async (
     }
     const r = await copiarArchivo(res.archivo!.id, usuarioId, { carpeta: destinoCrudo });
     acciones.push(`Copiado "${r.nombre}" en ${r.carpeta}`);
+    return { respuesta: "Hecho.", acciones };
+  }
+
+  // Pre-flight: "mueve/mover X [a/al/en/hacia/dentro de CARPETA]" (un archivo
+  // concreto, no una carpeta). Igual que con copiar, el modelo no llama de
+  // forma fiable a "mover_archivo" para esta frase directa, y cuando falta el
+  // destino a veces SE LO INVENTA en vez de preguntar (ej. "mueve factura" ->
+  // movía a una carpeta "facturas" inexistente, creándola). Por eso, a
+  // diferencia de copiar (donde "sin destino" significa "déjalo donde está" y
+  // no hace falta preguntar), aquí si no hay destino se pregunta SIEMPRE sin
+  // pasar por Ollama.
+  const matchMoverConDestino = msgSinTildes.match(
+    new RegExp(
+      `^${VERBO_MOVER}\\s+${PREFIJO_NOMBRE_ARCHIVO}["']?(.+?)["']?\\s+(?:a|al|en|hacia|dentro\\s+de)\\s+(?:la\\s+carpeta\\s+)?(.+)$`,
+    ),
+  );
+  const matchMoverSinDestino = matchMoverConDestino
+    ? null
+    : msgSinTildes.match(
+        new RegExp(`^${VERBO_MOVER}\\s+${PREFIJO_NOMBRE_ARCHIVO}["']?(.+?)["']?\\s*[.,!¡?¿]*$`),
+      );
+  const matchMover = matchMoverConDestino || matchMoverSinDestino;
+  const nombreMover = matchMover?.[1]?.trim();
+  const esMoverUnArchivo =
+    !!matchMover &&
+    !!nombreMover &&
+    !STOPWORDS_NOMBRE.has(quitarTildes(nombreMover.toLowerCase())) &&
+    !/\bcarpeta\b/.test(quitarTildes(nombreMover.toLowerCase()));
+  if (esMoverUnArchivo && matchMover) {
+    const destinoCrudo = matchMover[2] ? grupoOriginal(msgLower, matchMover, 2).trim() : undefined;
+    const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchMover, 1).trim());
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      registrarAclaracion(
+        usuarioId,
+        "mover_archivo",
+        destinoCrudo ? { carpeta: destinoCrudo } : {},
+        "nombre",
+        res.opciones,
+        res.sugerencia,
+      );
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "mover_archivo");
+    }
+    if (!destinoCrudo) {
+      const { pregunta } = registrarFaltaValor(
+        usuarioId,
+        "mover_archivo",
+        { nombre: res.archivo!.nombre },
+        "carpeta",
+        `¿A qué carpeta quieres mover "${res.archivo!.nombre}"?`,
+      );
+      return { respuesta: pregunta, acciones };
+    }
+    const r = await actualizarArchivo(res.archivo!.id, usuarioId, { carpeta: destinoCrudo });
+    acciones.push(`Movido "${r.nombre}" a ${r.carpeta}`);
     return { respuesta: "Hecho.", acciones };
   }
 

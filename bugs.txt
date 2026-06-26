@@ -1,5 +1,4 @@
 
-- pasame las facturas del mes anterior 
 - mueve modelo ,Por favor, indica la carpeta destino.
 -copia factura en la carpeta demo22 y despues copia la carpeta demo22 
 - haz una copia de x c
