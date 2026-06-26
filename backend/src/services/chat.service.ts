@@ -327,7 +327,6 @@ const registrarAclaracion = (
   opciones: OpcionAclaracion[],
   sugerencia = false,
 ) => {
-  console.log("[DEBUG aclaracion] registrarAclaracion", { usuarioId, tool, args, clave, opciones, sugerencia });
   pendientesAclaracion.set(usuarioId, { tool, args, clave, opciones, ts: Date.now() });
   return { necesita_aclaracion: true, opciones, sugerencia };
 };
@@ -1118,6 +1117,7 @@ export const chatear = async (
   const VERBO_ABRIR =
     "(?:abre(?:lo|la|los|las)?|abrir|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?)";
   const VERBO_BUSCAR = "(?:busca(?:r|lo|la|los|las)?)";
+  const VERBO_COPIAR = "(?:copia(?:r|me|lo|la|los|las)?|duplica(?:r|me|lo|la|los|las)?)";
   const VERBO_CREAR = "(?:crea(?:me)?(?:lo|la|los|las)?)";
   const VERBO_LISTAR =
     "(?:pasa(?:me)?(?:lo|la|los|las)?|dame|envia(?:me)?(?:lo|la|los|las)?|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?|lista(?:r|lo|la|los|las)?)";
@@ -1180,13 +1180,6 @@ export const chatear = async (
   // sin contexto. Si no coincide con ninguna opción, se descarta para no
   // aplicar un estado obsoleto a una petición distinta.
   const pendiente = pendientesAclaracion.get(usuarioId);
-  console.log("[DEBUG aclaracion] check pendiente", {
-    usuarioId,
-    idOpcion,
-    ultimoMensaje,
-    encontrado: !!pendiente,
-    pendiente,
-  });
   if (pendiente) {
     pendientesAclaracion.delete(usuarioId);
     if (Date.now() - pendiente.ts < TTL_ACLARACION_MS) {
@@ -2121,6 +2114,58 @@ export const chatear = async (
     }
     const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
     acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
+    return { respuesta: "Hecho.", acciones };
+  }
+
+  // Pre-flight: "copia/duplica X [a/en CARPETA]" o "haz(me) una copia de X
+  // [a/en CARPETA]" (un archivo concreto, no una carpeta). El modelo no llama
+  // de forma fiable a "copiar_archivo" para esta frase tan directa -se ha visto
+  // "copia X" acabar llamando a "escanear_factura" cuando X parece una factura,
+  // justo lo contrario de lo pedido-, así que se resuelve aquí sin pasar por
+  // Ollama, igual que el resto de acciones directas sobre un archivo (borrar,
+  // leer...). El destino (si lo hay) se pasa tal cual a `copiarArchivo`, que ya
+  // normaliza la ruta y crea la carpeta si no existe: no hace falta resolverla
+  // aquí (igual que ya hacía la tool "copiar_archivo" antes de este pre-flight).
+  const PREFIJO_COPIAR = `(?:${VERBO_COPIAR}|haz(?:me)?\\s+(?:una\\s+)?copia\\s+de)`;
+  const PREFIJO_NOMBRE_ARCHIVO = `(?:el\\s+archivo\\s+|la\\s+nota\\s+|el\\s+documento\\s+|el\\s+fichero\\s+)?`;
+  const matchCopiarConDestino = msgSinTildes.match(
+    new RegExp(
+      `^${PREFIJO_COPIAR}\\s+${PREFIJO_NOMBRE_ARCHIVO}["']?(.+?)["']?\\s+(?:a|al|en|hacia|dentro\\s+de)\\s+(?:la\\s+carpeta\\s+)?(.+)$`,
+    ),
+  );
+  const matchCopiarSinDestino = matchCopiarConDestino
+    ? null
+    : msgSinTildes.match(
+        new RegExp(`^${PREFIJO_COPIAR}\\s+${PREFIJO_NOMBRE_ARCHIVO}["']?(.+?)["']?\\s*[.,!¡?¿]*$`),
+      );
+  const matchCopiar = matchCopiarConDestino || matchCopiarSinDestino;
+  const nombreCopiar = matchCopiar?.[1]?.trim();
+  // "carpeta" se comprueba solo en el NOMBRE capturado (lo que se va a copiar),
+  // no en todo el mensaje: si se mirase el mensaje completo, "copia X a la
+  // carpeta Y" (un destino válido) se excluía por error junto con "copia la
+  // carpeta X" (que sí es copiar_carpeta, no copiar_archivo).
+  const esCopiarUnArchivo =
+    !!matchCopiar &&
+    !!nombreCopiar &&
+    !STOPWORDS_NOMBRE.has(quitarTildes(nombreCopiar.toLowerCase())) &&
+    !/\bcarpeta\b/.test(quitarTildes(nombreCopiar.toLowerCase()));
+  if (esCopiarUnArchivo && matchCopiar) {
+    const destinoCrudo = matchCopiar[2] ? grupoOriginal(msgLower, matchCopiar, 2).trim() : undefined;
+    const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchCopiar, 1).trim());
+    if (res.error) return { respuesta: res.error, acciones };
+    if (res.opciones) {
+      registrarAclaracion(
+        usuarioId,
+        "copiar_archivo",
+        destinoCrudo ? { carpeta: destinoCrudo } : {},
+        "nombre",
+        res.opciones,
+        res.sugerencia,
+      );
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "copiar_archivo");
+    }
+    const r = await copiarArchivo(res.archivo!.id, usuarioId, { carpeta: destinoCrudo });
+    acciones.push(`Copiado "${r.nombre}" en ${r.carpeta}`);
     return { respuesta: "Hecho.", acciones };
   }
 
