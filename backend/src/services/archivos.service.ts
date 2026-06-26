@@ -634,6 +634,29 @@ export const copiarArchivo = async (
   const carpetaFinal = carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`;
   const nuevaClave = `${usuarioId}/${carpetaLimpia}/${randomUUID()}`;
 
+  // Nombre de la copia: si no se especifica uno, "<original> (copia)" -y
+  // "(copia 2)", "(copia 3)"... si ya hay una copia con ese nombre en el
+  // destino- igual que el copiar/pegar de un explorador de archivos normal.
+  // Antes se reutilizaba el nombre EXACTO del original, dejando dos filas
+  // idénticas (mismo nombre) en la misma carpeta, confuso en la UI.
+  let nombreFinal = datos.nombre;
+  if (!nombreFinal) {
+    const punto = original.nombre.lastIndexOf(".");
+    const base = punto > 0 ? original.nombre.slice(0, punto) : original.nombre;
+    const ext = punto > 0 ? original.nombre.slice(punto) : "";
+    let intento = 1;
+    let candidato = `${base} (copia)${ext}`;
+    while (
+      await repo().findOne({
+        where: { nombre: candidato, carpeta: carpetaFinal, propietario: { id: usuarioId } },
+      })
+    ) {
+      intento++;
+      candidato = `${base} (copia ${intento})${ext}`;
+    }
+    nombreFinal = candidato;
+  }
+
   // Duplicamos el objeto en MinIO. La fuente se indica como "/bucket/clave".
   await minioClient.copyObject(
     env.MINIO_BUCKET,
@@ -642,7 +665,7 @@ export const copiarArchivo = async (
   );
 
   const copia = repo().create({
-    nombre: datos.nombre ?? original.nombre,
+    nombre: nombreFinal,
     carpeta: carpetaFinal,
     mimeType: original.mimeType,
     tamanoBytes: original.tamanoBytes,

@@ -1878,7 +1878,17 @@ export const chatear = async (
   // totales/ranking agregados (pideTotales/esRankingVentas, con su propio
   // pre-flight). Reutiliza extraerClienteDeFrase (mismas exclusiones: periodo
   // relativo, "la carpeta X", "la papelera", palabras sueltas sin valor).
-  if (/\bfacturas?\b/.test(msgSinTildes) && !pideTotales && !esRankingVentas) {
+  // Se excluyen mover/copiar/renombrar/borrar/escanear: extraerClienteDeFrase
+  // captura TODO lo que va después del último "de" del mensaje, así que algo
+  // como "cambia el nombre de factura a factura222" (el archivo se llama
+  // literalmente "factura") se leía como "cliente = factura a factura222" y
+  // devolvía un listado vacío en vez de renombrar nada.
+  if (
+    /\bfacturas?\b/.test(msgSinTildes) &&
+    !pideTotales &&
+    !esRankingVentas &&
+    !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes)
+  ) {
     const cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
     if (cliente) {
       const filtro: FiltroFacturas = { cliente };
@@ -2166,6 +2176,46 @@ export const chatear = async (
     }
     const r = await copiarArchivo(res.archivo!.id, usuarioId, { carpeta: destinoCrudo });
     acciones.push(`Copiado "${r.nombre}" en ${r.carpeta}`);
+    return { respuesta: "Hecho.", acciones };
+  }
+
+  // Pre-flight: "renombra(me) X a/como/por Y" o "cambia(me) el nombre de X a/por
+  // Y" (un archivo concreto, no una carpeta). Mismo motivo que copiar/borrar: el
+  // modelo no llama de forma fiable a "renombrar_archivo" para esta frase tan
+  // directa, y además "cambia el nombre de X a Y" SIEMPRE contiene un "de" justo
+  // antes de X — si X se llama literalmente "factura", el pre-flight de
+  // "facturas de cliente" (arriba) lo interceptaba antes de llegar aquí,
+  // devolviendo un listado vacío "Facturas de factura a Y" en vez de renombrar
+  // nada (de ahí la exclusión de VERBO_OTRAS_ACCIONES que se añadió ahí).
+  const matchRenombrar =
+    msgSinTildes.match(
+      new RegExp(
+        `^renombra(?:me)?(?:lo|la|los|las)?\\s+(?:el\\s+archivo\\s+|la\\s+nota\\s+|el\\s+documento\\s+|el\\s+fichero\\s+)?["']?(.+?)["']?\\s+(?:a|como|por)\\s+["']?(.+?)["']?\\s*[.,!¡?¿]*$`,
+      ),
+    ) ||
+    msgSinTildes.match(
+      new RegExp(
+        `^cambia(?:me)?\\s+el\\s+nombre\\s+(?:del\\s+archivo\\s+|de\\s+la\\s+nota\\s+|de\\s+)?["']?(.+?)["']?\\s+(?:a|como|por)\\s+["']?(.+?)["']?\\s*[.,!¡?¿]*$`,
+      ),
+    );
+  const nombreRenombrar = matchRenombrar?.[1]?.trim();
+  const nuevoNombreRenombrar = matchRenombrar?.[2]?.trim();
+  const esRenombrarUnArchivo =
+    !!matchRenombrar &&
+    !!nombreRenombrar &&
+    !!nuevoNombreRenombrar &&
+    !STOPWORDS_NOMBRE.has(quitarTildes(nombreRenombrar.toLowerCase())) &&
+    !/\bcarpeta\b/.test(quitarTildes(nombreRenombrar.toLowerCase()));
+  if (esRenombrarUnArchivo && matchRenombrar) {
+    const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchRenombrar, 1).trim());
+    if (res.error) return { respuesta: res.error, acciones };
+    const nuevoNombre = grupoOriginal(msgLower, matchRenombrar, 2).trim();
+    if (res.opciones) {
+      registrarAclaracion(usuarioId, "renombrar_archivo", { nuevo_nombre: nuevoNombre }, "nombre", res.opciones, res.sugerencia);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "renombrar_archivo");
+    }
+    const r = await actualizarArchivo(res.archivo!.id, usuarioId, { nombre: nuevoNombre });
+    acciones.push(`Renombrado a "${r.nombre}"`);
     return { respuesta: "Hecho.", acciones };
   }
 
