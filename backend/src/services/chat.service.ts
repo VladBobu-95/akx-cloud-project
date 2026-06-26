@@ -524,7 +524,15 @@ const ejecutarTool = async (
         if (res.error) return { error: res.error };
         if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         const carpetaArg = extraerRuta(args, "carpeta", "carpeta_destino", "destino", "ruta");
-        if (!carpetaArg) return { error: "Falta indicar la carpeta destino." };
+        if (!carpetaArg) {
+          return registrarFaltaValor(
+            usuarioId,
+            "mover_archivo",
+            { nombre: res.archivo!.nombre },
+            "carpeta",
+            `¿A qué carpeta quieres mover "${res.archivo!.nombre}"?`,
+          );
+        }
         const r = await actualizarArchivo(res.archivo!.id, usuarioId, { carpeta: carpetaArg });
         acciones.push(`Movido "${r.nombre}" a ${r.carpeta}`);
         return { ok: true, nombre: r.nombre, resumen: "Hecho." };
@@ -668,11 +676,19 @@ const ejecutarTool = async (
           typeof args.carpeta_destino === "string" && args.carpeta_destino.trim()
             ? args.carpeta_destino
             : undefined;
-        if (!destinoArg) return { error: "Falta indicar la carpeta destino." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
         if (res.error) {
           const comoArchivo = await resolverArchivo(usuarioId, hojaRuta(rutaArg));
           if (comoArchivo.archivo) {
+            if (!destinoArg) {
+              return registrarFaltaValor(
+                usuarioId,
+                "mover_archivo",
+                { nombre: comoArchivo.archivo.nombre },
+                "carpeta",
+                `¿A qué carpeta quieres mover "${comoArchivo.archivo.nombre}"?`,
+              );
+            }
             const r = await actualizarArchivo(comoArchivo.archivo.id, usuarioId, {
               carpeta: normalizarRuta(destinoArg),
             });
@@ -683,7 +699,7 @@ const ejecutarTool = async (
             return registrarAclaracion(
               usuarioId,
               "mover_archivo",
-              { carpeta: destinoArg },
+              destinoArg ? { carpeta: destinoArg } : {},
               "nombre",
               comoArchivo.opciones,
               comoArchivo.sugerencia,
@@ -692,6 +708,15 @@ const ejecutarTool = async (
         }
         if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones, res.sugerencia);
         const origen = res.ruta!;
+        if (!destinoArg) {
+          return registrarFaltaValor(
+            usuarioId,
+            "mover_carpeta",
+            { ruta: origen },
+            "carpeta_destino",
+            `¿A qué carpeta quieres mover "${origen}"?`,
+          );
+        }
         const destino = unirRuta(normalizarRuta(destinoArg), hojaRuta(origen));
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
         acciones.push(`Carpeta movida a ${destino} (${r.movidos} archivo/s)`);
@@ -1193,14 +1218,14 @@ export const chatear = async (
     // ya viene sin tildes (quitarTildes convierte "año" -> "ano").
     if (mes === undefined && anio === undefined) {
       const ahora = new Date();
-      if (/\bmes\s+pasado\b/.test(texto) || /\bel\s+mes\s+anterior\b/.test(texto)) {
+      if (/\bmes\s+pasado\b/.test(texto) || /\b(el|del)\s+mes\s+anterior\b/.test(texto)) {
         const fecha = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1);
         mes = fecha.getMonth() + 1;
         anio = fecha.getFullYear();
       } else if (/\b(este|el)\s+mes\b/.test(texto) || /\bmes\s+actual\b/.test(texto)) {
         mes = ahora.getMonth() + 1;
         anio = ahora.getFullYear();
-      } else if (/\bano\s+pasado\b/.test(texto) || /\bel\s+ano\s+anterior\b/.test(texto)) {
+      } else if (/\bano\s+pasado\b/.test(texto) || /\b(el|del)\s+ano\s+anterior\b/.test(texto)) {
         anio = ahora.getFullYear() - 1;
       } else if (/\b(este|el)\s+ano\b/.test(texto) || /\bano\s+actual\b/.test(texto)) {
         anio = ahora.getFullYear();
@@ -1858,7 +1883,7 @@ export const chatear = async (
   // pasado"...) — mismas frases que reconoce detectarMesAnio, para decidir si
   // un mensaje "tiene periodo" sin necesidad de un mes/año explícito.
   const RELATIVO_PERIODO =
-    /\b(mes\s+pasado|el\s+mes\s+anterior|(este|el)\s+mes\b|mes\s+actual|ano\s+pasado|el\s+ano\s+anterior|(este|el)\s+ano\b|ano\s+actual)\b/;
+    /\b(mes\s+pasado|(el|del)\s+mes\s+anterior|(este|el)\s+mes\b|mes\s+actual|ano\s+pasado|(el|del)\s+ano\s+anterior|(este|el)\s+ano\b|ano\s+actual)\b/;
 
   // Pre-flight: "busca/dame/qué facturas tengo de [mes/año]" es un LISTADO de
   // facturas concretas (con botón para abrir cada una), distinto de los totales
