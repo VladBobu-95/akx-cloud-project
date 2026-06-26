@@ -1,13 +1,5 @@
-src/services/chat.service.ts(1348,9): error TS2322: Type 'FiltroFacturas' is not assignable to type 'Record<string, unknown>'.
-  Index signature for type 'string' is missing in type 'FiltroFacturas'.
-src/services/chat.service.ts(1395,9): error TS2322: Type 'FiltroFacturas' is not assignable to type 'Record<string, unknown>'.
-  Index signature for type 'string' is missing in type 'FiltroFacturas'.
-src/services/chat.service.ts(1429,11): error TS2322: Type 'FiltroFacturas' is not assignable to type 'Record<string, unknown>'.
-  Index signature for type 'string' is missing in type 'FiltroFacturas'.
-EXIT:0
 
-
-si seleciono todo y borro me da error archivo no encontrado pero si cambio de tab archivos desaparecen pero carpetas no
+- haz una copia de x
 -restaurar todo
 - que no se invente cosas
 - mover varios seleccionados

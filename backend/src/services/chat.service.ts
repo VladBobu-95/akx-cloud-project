@@ -73,6 +73,33 @@ const unirRuta = (padre: string, nombre: string): string =>
 const quitarTildes = (s: string): string =>
   s.normalize("NFD").replace(/[̀-ͯ]/g, "");
 
+// Distancia de edición (Levenshtein) y similitud normalizada [0..1], para el
+// respaldo "fuzzy" de resolverArchivo: si la búsqueda exacta por substring no
+// encuentra nada (p.ej. una errata como "nustras" por "nuestras"), se compara
+// el nombre pedido contra los reales y se acepta el más parecido si supera el
+// umbral. O(n·m) por par, pero solo se usa en el camino de fallo (no el normal).
+const distanciaLev = (a: string, b: string): number => {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const fila = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    let prev = fila[0];
+    fila[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = fila[j];
+      fila[j] = Math.min(fila[j] + 1, fila[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return fila[n];
+};
+const similitud = (a: string, b: string): number => {
+  const max = Math.max(a.length, b.length);
+  return max === 0 ? 1 : 1 - distanciaLev(a, b) / max;
+};
+
 // quitarTildes no cambia la longitud de la cadena (cada letra con tilde se
 // queda en una sola letra sin tilde), así que los índices de un match hecho
 // sobre el texto sin tildes coinciden 1 a 1 con el texto original. Esto deja
@@ -143,7 +170,15 @@ export interface MensajeChat {
 const resolverArchivo = async (
   usuarioId: string,
   nombre: string,
-): Promise<{ archivo?: Archivo; error?: string; opciones?: { nombre: string; carpeta: string }[] }> => {
+): Promise<{
+  archivo?: Archivo;
+  error?: string;
+  opciones?: { nombre: string; carpeta: string }[];
+  // true cuando las `opciones` NO son coincidencias exactas sino sugerencias por
+  // parecido (el nombre pedido no existía tal cual): el caller muestra "¿Querías
+  // decir...?" en vez de "Hay varias coincidencias".
+  sugerencia?: boolean;
+}> => {
   let lista = await buscarArchivos(usuarioId, nombre);
   if (lista.length === 0) {
     // El modelo a veces adivina una extensión que no es la real (ej. pide
@@ -152,6 +187,28 @@ const resolverArchivo = async (
     // por la extensión aunque el nombre base sí exista. Reintenta sin ella.
     const sinExtension = nombre.replace(/\.[a-z0-9]{1,5}$/i, "");
     if (sinExtension !== nombre) lista = await buscarArchivos(usuarioId, sinExtension);
+  }
+  // Respaldo fuzzy: si la búsqueda exacta por substring no encontró nada, suele
+  // ser una errata ("nustras armas" por "nuestras armas") o una palabra de más.
+  // Se comparan los nombres reales por similitud (Levenshtein) y se devuelven los
+  // más parecidos como SUGERENCIAS para que el usuario elija (nunca se auto-
+  // resuelve: el usuario quiere confirmar, no que se adivine el archivo).
+  if (lista.length === 0) {
+    const objetivo = quitarTildes(nombre.replace(/\.[a-z0-9]{1,5}$/i, "").toLowerCase()).trim();
+    if (objetivo.length >= 4) {
+      const todos = (await listarArchivos(usuarioId, undefined, 1, 500)).archivos;
+      const conSim = todos
+        .map((a) => ({
+          a,
+          s: similitud(quitarTildes(a.nombre.replace(/\.[a-z0-9]{1,5}$/i, "").toLowerCase()), objetivo),
+        }))
+        .filter((x) => x.s >= 0.6)
+        .sort((x, y) => y.s - x.s)
+        .slice(0, 5);
+      if (conSim.length > 0) {
+        return { opciones: conSim.map((x) => ({ nombre: x.a.nombre, carpeta: x.a.carpeta })), sugerencia: true };
+      }
+    }
   }
   if (lista.length === 0) return { error: `No encontré ningún archivo que coincida con "${nombre}".` };
   const exacto = lista.find((a) => a.nombre.toLowerCase() === nombre.toLowerCase());
@@ -179,7 +236,7 @@ const resolverArchivo = async (
 const resolverCarpeta = async (
   usuarioId: string,
   nombreORuta: string,
-): Promise<{ ruta?: string; error?: string; opciones?: string[] }> => {
+): Promise<{ ruta?: string; error?: string; opciones?: string[]; sugerencia?: boolean }> => {
   const texto = nombreORuta.trim();
   if (texto.startsWith("/")) {
     const ruta = normalizarRuta(texto);
@@ -193,6 +250,18 @@ const resolverCarpeta = async (
   const buscado = hojaRuta(texto).toLowerCase();
   const coincidencias = todas.filter((c) => hojaRuta(c.ruta).toLowerCase() === buscado);
   if (coincidencias.length === 0) {
+    // Respaldo fuzzy (igual que en resolverArchivo): el nombre exacto no existe,
+    // probablemente una errata. Se sugieren las carpetas con el último tramo más
+    // parecido para que el usuario elija; nunca se auto-resuelve.
+    const objetivo = quitarTildes(buscado).trim();
+    if (objetivo.length >= 3) {
+      const cercanas = todas
+        .map((c) => ({ c, s: similitud(quitarTildes(hojaRuta(c.ruta).toLowerCase()), objetivo) }))
+        .filter((x) => x.s >= 0.6)
+        .sort((x, y) => y.s - x.s)
+        .slice(0, 5);
+      if (cercanas.length > 0) return { opciones: cercanas.map((x) => x.c.ruta), sugerencia: true };
+    }
     return { error: `No encontré ninguna carpeta llamada "${nombreORuta}".` };
   }
   if (coincidencias.length === 1) return { ruta: coincidencias[0].ruta };
@@ -203,7 +272,12 @@ const resolverCarpeta = async (
 const resolverEnPapelera = async (
   usuarioId: string,
   nombre: string,
-): Promise<{ archivo?: Archivo; error?: string; opciones?: { nombre: string; carpeta: string }[] }> => {
+): Promise<{
+  archivo?: Archivo;
+  error?: string;
+  opciones?: { nombre: string; carpeta: string }[];
+  sugerencia?: boolean;
+}> => {
   const lista = (await listarPapelera(usuarioId)).filter((a) =>
     a.nombre.toLowerCase().includes(nombre.toLowerCase()),
   );
@@ -247,9 +321,30 @@ const registrarAclaracion = (
   args: Record<string, unknown>,
   clave: "nombre" | "ruta",
   opciones: OpcionAclaracion[],
+  sugerencia = false,
 ) => {
   pendientesAclaracion.set(usuarioId, { tool, args, clave, opciones, ts: Date.now() });
-  return { necesita_aclaracion: true, opciones };
+  return { necesita_aclaracion: true, opciones, sugerencia };
+};
+
+// Encabezado de la pregunta de aclaración. Si las opciones son SUGERENCIAS por
+// parecido (el nombre pedido no existía tal cual), pregunta "¿Querías decir...?";
+// si son varias coincidencias reales del nombre dado, "¿cuál quieres?".
+const cabeceraAclaracion = (sugerencia?: boolean): string =>
+  sugerencia
+    ? "No encontré ese nombre exacto. ¿Querías decir alguno de estos?"
+    : "Hay varias coincidencias, ¿cuál quieres?";
+
+// Construye el mensaje completo de aclaración (encabezado + lista de opciones).
+const mensajeAclaracion = (opciones: OpcionAclaracion[], sugerencia?: boolean): string => {
+  const lista = opciones
+    .map((o) =>
+      typeof o === "string"
+        ? `- ${o}`
+        : `- ${o.nombre}${o.carpeta && o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`,
+    )
+    .join("\n");
+  return `${cabeceraAclaracion(sugerencia)}\n\n${lista}`;
 };
 
 // Traduce los argumentos de las tools de analítica (ventas_top, totales_facturas)
@@ -329,7 +424,7 @@ const ejecutarTool = async (
       case "copiar_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         const r = await copiarArchivo(res.archivo!.id, usuarioId, {
           carpeta: extraerRuta(args, "carpeta", "carpeta_destino", "destino", "ruta"),
         });
@@ -339,7 +434,7 @@ const ejecutarTool = async (
       case "mover_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         const carpetaArg = extraerRuta(args, "carpeta", "carpeta_destino", "destino", "ruta");
         if (!carpetaArg) return { error: "Falta indicar la carpeta destino." };
         const r = await actualizarArchivo(res.archivo!.id, usuarioId, { carpeta: carpetaArg });
@@ -349,7 +444,7 @@ const ejecutarTool = async (
       case "renombrar_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         const r = await actualizarArchivo(res.archivo!.id, usuarioId, {
           nombre: String(args.nuevo_nombre),
         });
@@ -359,7 +454,7 @@ const ejecutarTool = async (
       case "eliminar_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         await eliminarArchivo(res.archivo!.id, usuarioId);
         acciones.push(`Enviado a la papelera "${res.archivo!.nombre}"`);
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
@@ -396,10 +491,10 @@ const ejecutarTool = async (
             return { ok: true, nombre: comoArchivo.archivo.nombre, resumen: "Hecho." };
           }
           if (comoArchivo.opciones)
-            return registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", comoArchivo.opciones);
+            return registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", comoArchivo.opciones, comoArchivo.sugerencia);
           return { error: res.error };
         }
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones, res.sugerencia);
         const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
         acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados, resumen: "Hecho." };
@@ -409,7 +504,7 @@ const ejecutarTool = async (
         if (!rutaArg) return { error: "Falta indicar la ruta de la carpeta a vaciar." };
         const res = await resolverCarpeta(usuarioId, rutaArg);
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones, res.sugerencia);
         const r = await vaciarCarpeta(usuarioId, res.ruta!);
         acciones.push(`Contenido de ${res.ruta} enviado a la papelera (${r.borrados} archivo/s)`);
         return { ok: true, borrados: r.borrados, resumen: "Hecho." };
@@ -444,7 +539,7 @@ const ejecutarTool = async (
       case "restaurar_archivo": {
         const res = await resolverEnPapelera(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         await restaurarArchivo(res.archivo!.id, usuarioId);
         acciones.push(`Restaurado "${res.archivo!.nombre}"`);
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
@@ -457,7 +552,7 @@ const ejecutarTool = async (
       case "borrar_permanente": {
         const res = await resolverEnPapelera(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         await borrarPermanente(res.archivo!.id, usuarioId);
         acciones.push(`Borrado definitivamente "${res.archivo!.nombre}"`);
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
@@ -493,10 +588,11 @@ const ejecutarTool = async (
               { carpeta: destinoArg },
               "nombre",
               comoArchivo.opciones,
+              comoArchivo.sugerencia,
             );
           return { error: res.error };
         }
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones, res.sugerencia);
         const origen = res.ruta!;
         const destino = unirRuta(normalizarRuta(destinoArg), hojaRuta(origen));
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
@@ -528,10 +624,11 @@ const ejecutarTool = async (
               { nuevo_nombre: nuevoNombre },
               "nombre",
               comoArchivo.opciones,
+              comoArchivo.sugerencia,
             );
           return { error: res.error };
         }
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones, res.sugerencia);
         const origen = res.ruta!;
         const destino = unirRuta(padreRuta(origen), nuevoNombre);
         const r = await moverCarpetaConContenido(usuarioId, origen, destino);
@@ -558,10 +655,11 @@ const ejecutarTool = async (
               { carpeta: typeof args.carpeta_destino === "string" ? args.carpeta_destino : undefined },
               "nombre",
               comoArchivo.opciones,
+              comoArchivo.sugerencia,
             );
           return { error: res.error };
         }
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "ruta", res.opciones, res.sugerencia);
         const origen = res.ruta!;
         const destino =
           typeof args.carpeta_destino === "string" && args.carpeta_destino
@@ -575,7 +673,7 @@ const ejecutarTool = async (
       case "leer_archivo": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         // Mismo criterio que el pre-flight de "abre/lee X": si todavía se está
         // indexando/escaneando en segundo plano, el texto puede no existir o
         // estar a medias — se avisa en vez de devolver eso.
@@ -642,7 +740,7 @@ const ejecutarTool = async (
       case "obtener_factura": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         const r = await obtenerFactura(usuarioId, res.archivo!.id, res.archivo!.nombre);
         if (!r.encontrada) {
           return {
@@ -660,7 +758,7 @@ const ejecutarTool = async (
       case "escanear_factura": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
-        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones);
+        if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
         const pista = typeof args.pista === "string" ? args.pista : undefined;
         const r = await escanearFactura(usuarioId, res.archivo!.id, { pista });
         acciones.push(
@@ -793,6 +891,13 @@ const pareceIntentoToolCallInvalido = (content: string): boolean =>
       return false;
     }
   });
+
+// El modelo pequeño (7b/3b), ante una petición que no entiende, a veces no pide
+// que se reformule sino que "responde" con la palabra suelta "error" (visto con
+// mensajes ambiguos/sin sentido, ej. "haz una copia de desconecta la red"). Sin
+// este filtro ese texto crudo se mostraba tal cual en el chat, pareciendo un
+// fallo de la app en vez de una respuesta del bot.
+const esRespuestaInutil = (content: string): boolean => /^error[.!]*$/i.test(content.trim());
 
 // Tiempo máximo para UNA llamada a Ollama. Sin esto, una petición colgada
 // (modelo cargándose, GPU ocupada, lo que sea) deja al usuario esperando
@@ -999,10 +1104,19 @@ export const chatear = async (
     pendientesAclaracion.delete(usuarioId);
     if (Date.now() - pendiente.ts < TTL_ACLARACION_MS) {
       const normalizado = ultimoMensaje.trim().replace(/^[-•]\s*/, "").toLowerCase();
-      const candidatos = pendiente.opciones.filter((o) => {
-        const texto = (typeof o === "string" ? o : o.nombre).toLowerCase();
-        return normalizado === texto || normalizado.includes(texto);
-      });
+      // Si solo se ofreció UNA opción, un "sí"/"vale"/"ok" también la confirma
+      // (no hace falta que el usuario repita el nombre completo).
+      const esAfirmacion =
+        pendiente.opciones.length === 1 &&
+        /^(?:si|si\s+por\s+favor|vale|ok(?:ay)?|dale|claro|correcto|exacto|afirmativo)[.,!¡]*$/.test(
+          quitarTildes(normalizado),
+        );
+      const candidatos = esAfirmacion
+        ? pendiente.opciones
+        : pendiente.opciones.filter((o) => {
+            const texto = (typeof o === "string" ? o : o.nombre).toLowerCase();
+            return normalizado === texto || normalizado.includes(texto);
+          });
       if (candidatos.length === 1) {
         const elegido = candidatos[0];
         const valor = typeof elegido === "string" ? elegido : elegido.nombre;
@@ -1014,16 +1128,13 @@ export const chatear = async (
           acciones,
         )) as Record<string, unknown>;
         if (resultado.necesita_aclaracion === true && Array.isArray(resultado.opciones)) {
-          const lista = (resultado.opciones as unknown[])
-            .map((o) =>
-              typeof o === "string"
-                ? `- ${o}`
-                : `- ${(o as { nombre: string }).nombre}${
-                    (o as { carpeta: string }).carpeta !== "/" ? ` (${(o as { carpeta: string }).carpeta})` : ""
-                  }`,
-            )
-            .join("\n");
-          return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+          return {
+            respuesta: mensajeAclaracion(
+              resultado.opciones as OpcionAclaracion[],
+              resultado.sugerencia === true,
+            ),
+            acciones,
+          };
         }
         if (typeof resultado.error === "string") return { respuesta: resultado.error, acciones };
         if (typeof resultado.resumen === "string") {
@@ -1036,7 +1147,270 @@ export const chatear = async (
                 : undefined,
           };
         }
+        // leer_archivo (sin factura escaneada) no devuelve "resumen" sino
+        // {nombre, contenido} directo: hay que formatearlo aquí igual que el
+        // resto de rutas de lectura, o se perdía el contenido y solo se veía "Hecho.".
+        if (typeof resultado.contenido === "string" && typeof resultado.nombre === "string") {
+          return {
+            respuesta: `**${resultado.nombre}**:\n\n${resultado.contenido}`,
+            acciones,
+          };
+        }
         return { respuesta: "Hecho.", acciones };
+      }
+    }
+  }
+
+  // Pre-flight: COMANDOS COMPUESTOS ("ábreme X y Y", "crea X y copia Y y borra Z").
+  // Los pre-flights de abajo resuelven UNA sola acción y hacen return en cuanto
+  // casan, así que un mensaje con varias órdenes encadenadas solo ejecutaba la
+  // primera (o caía al modelo, que con varias acciones encadena mal). Aquí se
+  // parte el mensaje por conectores (" y ", comas, "luego", "además"...), se
+  // parsea cada segmento a una acción y se ejecutan TODAS en orden.
+  //
+  // Es opt-in y conservador: solo intercepta si hay 2+ segmentos que parsean a
+  // una acción clara Y todos sus objetivos resuelven (validación en modo
+  // solo-lectura ANTES de ejecutar nada). Si algo no resuelve -p.ej. "muéstrame
+  // las facturas de enero y febrero", donde "las facturas de enero" no es un
+  // archivo-, NO intercepta y deja pasar al flujo normal de abajo (que sí lo
+  // maneja). Así un comando simple (1 solo segmento) o un listado nunca se ven
+  // afectados.
+  type AccionCompuesta =
+    | { tipo: "abrir"; nombre: string }
+    | { tipo: "tool"; tool: string; args: Record<string, unknown>; verbo: "eliminar" | "otro" };
+
+  // Limpia un nombre capturado: comillas, puntuación final, artículo inicial.
+  const limpiarNombreComp = (s: string): string =>
+    s
+      .trim()
+      .replace(/^["']+|["']+$/g, "")
+      .replace(/[?¿.!¡]+$/g, "")
+      .replace(/^(?:el|la|los|las|un|una|mi|mis)\s+/i, "")
+      .trim();
+  // Limpia un destino ("a la carpeta X", "en X", "dentro de X") -> "X".
+  const limpiarDestinoComp = (s: string): string =>
+    limpiarNombreComp(
+      s
+        .trim()
+        .replace(/^(?:a|al|en|hacia|dentro\s+de)\s+/i, "")
+        .replace(/^(?:la\s+|el\s+)?carpeta\s+/i, ""),
+    );
+
+  // Parte el mensaje por conectores. Trabaja sobre la versión sin tildes para
+  // reconocer "luego/después/además" acentuados, pero corta el original-lower
+  // (misma longitud) para conservar tildes en los nombres.
+  const dividirSegmentos = (textoLower: string): string[] => {
+    const sin = quitarTildes(textoLower);
+    const re =
+      /\s+y\s+luego\s+|\s+y\s+despues\s+|\s+y\s+tambien\s+|\s+y\s+ademas\s+|\s+y\s+|\s+luego\s+|\s+despues\s+|\s+ademas\s+|\s+tambien\s+|\s*[,;]\s*/g;
+    const segmentos: string[] = [];
+    let ultimo = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(sin)) !== null) {
+      segmentos.push(textoLower.slice(ultimo, m.index));
+      ultimo = m.index + m[0].length;
+    }
+    segmentos.push(textoLower.slice(ultimo));
+    return segmentos.map((s) => s.trim()).filter(Boolean);
+  };
+
+  // Parsea un segmento a una acción. `ctx.ultimaCarpeta` es la última carpeta
+  // creada/mencionada en segmentos anteriores, para resolver destinos implícitos
+  // ("...y mueve X ahí"). Devuelve la acción, "carry" (no tiene verbo: es un
+  // objeto suelto del verbo anterior, p.ej. la "Y" de "abre X y Y"), o null (no
+  // es una acción reconocible -> aborta el modo compuesto).
+  const parsearSegmento = (
+    seg: string,
+    ctx: { ultimaCarpeta?: string },
+  ): AccionCompuesta | "carry" | null => {
+    const sin = quitarTildes(seg);
+    let m: RegExpMatchArray | null;
+    const okNombre = (n: string): boolean =>
+      !!n && !STOPWORDS_NOMBRE.has(quitarTildes(n.toLowerCase())) &&
+      !/^(todo|todos|todas)\b/.test(quitarTildes(n.toLowerCase()));
+
+    // mover X ahí / allí / a esa carpeta -> destino = última carpeta del mensaje
+    if (
+      ctx.ultimaCarpeta &&
+      (m = sin.match(/^(?:mueve(?:lo|la|los|las)?|mover|traslada(?:r|lo|la|los|las)?)\s+(.+?)\s+(?:ahi|alli|alla|aca|aqui|a\s+esa\s+carpeta|a\s+esa|a\s+la\s+carpeta)$/))
+    ) {
+      const nombre = limpiarNombreComp(grupoOriginal(seg, m, 1));
+      if (okNombre(nombre)) return { tipo: "tool", tool: "mover_archivo", args: { nombre, carpeta: ctx.ultimaCarpeta }, verbo: "otro" };
+    }
+    // mover X a Y
+    if ((m = sin.match(/^(?:mueve(?:lo|la|los|las)?|mover|traslada(?:r|lo|la|los|las)?)\s+(.+?)\s+(?:a|al|en|hacia|dentro\s+de)\s+(.+)$/))) {
+      const nombre = limpiarNombreComp(grupoOriginal(seg, m, 1));
+      const carpeta = limpiarDestinoComp(grupoOriginal(seg, m, 2));
+      if (okNombre(nombre) && carpeta) return { tipo: "tool", tool: "mover_archivo", args: { nombre, carpeta }, verbo: "otro" };
+    }
+    // renombrar X a/como/por Y
+    if ((m = sin.match(/^(?:renombra(?:lo|la|los|las)?|renombrar)\s+(.+?)\s+(?:a|como|por)\s+(.+)$/))) {
+      const nombre = limpiarNombreComp(grupoOriginal(seg, m, 1));
+      const nuevo = limpiarNombreComp(grupoOriginal(seg, m, 2));
+      if (okNombre(nombre) && nuevo) return { tipo: "tool", tool: "renombrar_archivo", args: { nombre, nuevo_nombre: nuevo }, verbo: "otro" };
+    }
+    // copiar X ahí / a esa carpeta -> destino = última carpeta del mensaje
+    if (
+      ctx.ultimaCarpeta &&
+      (m = sin.match(/^(?:copia(?:lo|la|los|las)?|copiar|duplica(?:r|lo|la|los|las)?)\s+(.+?)\s+(?:ahi|alli|alla|aca|aqui|a\s+esa\s+carpeta|a\s+esa|a\s+la\s+carpeta)$/))
+    ) {
+      const nombre = limpiarNombreComp(grupoOriginal(seg, m, 1));
+      if (okNombre(nombre)) return { tipo: "tool", tool: "copiar_archivo", args: { nombre, carpeta: ctx.ultimaCarpeta }, verbo: "otro" };
+    }
+    // copiar X [a Y]
+    if ((m = sin.match(/^(?:copia(?:lo|la|los|las)?|copiar|duplica(?:r|lo|la|los|las)?)\s+(.+?)(?:\s+(?:a|al|en|hacia|dentro\s+de)\s+(.+))?$/))) {
+      const nombre = limpiarNombreComp(grupoOriginal(seg, m, 1));
+      const carpeta = m[2] ? limpiarDestinoComp(grupoOriginal(seg, m, 2)) : undefined;
+      if (okNombre(nombre)) return { tipo: "tool", tool: "copiar_archivo", args: { nombre, ...(carpeta ? { carpeta } : {}) }, verbo: "otro" };
+    }
+    // crear carpeta X (antes que "crear nota/archivo")
+    if ((m = sin.match(/^(?:crea(?:me)?(?:lo|la|los|las)?|crear)\s+(?:la\s+|una\s+)?carpeta\s+(?:llamad[oa]\s+)?(.+)$/))) {
+      const ruta = limpiarNombreComp(grupoOriginal(seg, m, 1));
+      if (ruta) return { tipo: "tool", tool: "crear_carpeta", args: { ruta }, verbo: "otro" };
+    }
+    // crear nota/archivo/documento X [con: ...]
+    if ((m = sin.match(/^(?:crea(?:me)?(?:lo|la|los|las)?|crear)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:nota|archivo|documento|fichero)\s+(?:llamad[oa]\s+)?(.+)$/))) {
+      const resto = grupoOriginal(seg, m, 1);
+      const conContenido = resto.match(/^(.+?)\s+(?:con\s+esto|con\s+el\s+contenido|con\s+texto|que\s+diga|que\s+ponga|con)\s*:?\s*([\s\S]+)$/i);
+      let nombre = limpiarNombreComp(conContenido ? conContenido[1] : resto);
+      const contenido = conContenido ? conContenido[2].trim() : "";
+      if (nombre && !/\.(md|txt)$/i.test(nombre)) nombre = `${nombre}.md`;
+      if (nombre) return { tipo: "tool", tool: "crear_archivo", args: { nombre, contenido }, verbo: "otro" };
+    }
+    // borrar/eliminar X (archivo o carpeta)
+    if ((m = sin.match(/^(?:borra(?:r|lo|la|los|las)?|elimina(?:r|lo|la|los|las)?|quita(?:r|lo|la|los|las)?)\s+(.+)$/))) {
+      const esCarpeta = /\bcarpeta\b/.test(sin);
+      const crudo = grupoOriginal(seg, m, 1).replace(
+        /^(?:el\s+archivo\s+|la\s+nota\s+|el\s+documento\s+|el\s+fichero\s+|la\s+carpeta\s+)/i,
+        "",
+      );
+      const nombre = limpiarNombreComp(crudo);
+      if (okNombre(nombre))
+        return { tipo: "tool", tool: esCarpeta ? "eliminar_carpeta" : "eliminar_archivo", args: { nombre, ruta: nombre }, verbo: "eliminar" };
+      return null; // "borra todo" y similares -> no es comando compuesto
+    }
+    // abrir/leer/mostrar X
+    if ((m = sin.match(/^(?:abre(?:me)?(?:lo|la|los|las)?|abrir|lee(?:me)?|muestra(?:me)?(?:lo|la|los|las)?|ensena(?:me)?(?:lo|la|los|las)?|que\s+dice)\s+(.+)$/))) {
+      const crudo = grupoOriginal(seg, m, 1).replace(
+        /^(?:el\s+archivo\s+|la\s+nota\s+|el\s+documento\s+|el\s+fichero\s+)/i,
+        "",
+      );
+      const nombre = limpiarNombreComp(crudo);
+      if (okNombre(nombre)) return { tipo: "abrir", nombre };
+      return null;
+    }
+    return "carry";
+  };
+
+  const segmentos = dividirSegmentos(msgLower);
+  if (segmentos.length >= 2 && segmentos.length <= 8) {
+    const acciones2: AccionCompuesta[] = [];
+    let ultimoVerbo: "abrir" | "eliminar" | null = null;
+    const ctx: { ultimaCarpeta?: string } = {};
+    let parseOk = true;
+    for (const seg of segmentos) {
+      const p = parsearSegmento(seg, ctx);
+      if (p === "carry") {
+        // Objeto suelto: hereda el verbo anterior (solo abrir/eliminar, los que
+        // se reparten de forma natural: "abre X y Y", "borra A, B y C").
+        const nombre = limpiarNombreComp(seg);
+        const ok = !!nombre && !STOPWORDS_NOMBRE.has(quitarTildes(nombre.toLowerCase()));
+        if (ultimoVerbo === "abrir" && ok) acciones2.push({ tipo: "abrir", nombre });
+        else if (ultimoVerbo === "eliminar" && ok && !/^(todo|todos|todas)\b/.test(quitarTildes(nombre.toLowerCase())))
+          acciones2.push({ tipo: "tool", tool: "eliminar_archivo", args: { nombre, ruta: nombre }, verbo: "eliminar" });
+        else { parseOk = false; break; }
+      } else if (p) {
+        acciones2.push(p);
+        ultimoVerbo = p.tipo === "abrir" ? "abrir" : p.verbo === "eliminar" ? "eliminar" : null;
+        // Recuerda la última carpeta creada/usada como destino, para resolver
+        // "...y mueve X ahí" en un segmento posterior.
+        if (p.tipo === "tool") {
+          if (p.tool === "crear_carpeta") ctx.ultimaCarpeta = String(p.args.ruta);
+          else if ((p.tool === "mover_archivo" || p.tool === "copiar_archivo") && typeof p.args.carpeta === "string")
+            ctx.ultimaCarpeta = p.args.carpeta;
+        }
+      } else {
+        parseOk = false;
+        break;
+      }
+    }
+
+    if (parseOk && acciones2.length >= 2) {
+      // ¿Ejecutar el modo compuesto? Un compuesto formado SOLO por "abrir/leer"
+      // se solapa con consultas que NO son comandos ("muéstrame las facturas de
+      // enero y febrero"): para esos exigimos que TODOS los objetivos resuelvan;
+      // si alguno no, se abandona el modo compuesto y se deja pasar al flujo
+      // normal de abajo (que sí maneja esas consultas). En cambio, si hay alguna
+      // acción de crear/mover/copiar/borrar/renombrar (cualquier `tipo: "tool"`),
+      // la intención de comando es inequívoca: se ejecuta SIEMPRE, best-effort
+      // (cada parte por su cuenta, avisando de la que falle) en vez de caer al
+      // modelo, que dejaría el trabajo a medias y confuso.
+      const soloAbrir = acciones2.every((a) => a.tipo === "abrir");
+      let ejecutar = true;
+      if (soloAbrir) {
+        for (const a of acciones2) {
+          const res = await resolverArchivo(usuarioId, (a as { nombre: string }).nombre);
+          if (!res.archivo) { ejecutar = false; break; }
+        }
+      }
+
+      if (ejecutar) {
+        const lecturas: string[] = [];
+        for (const a of acciones2) {
+          if (a.tipo === "abrir") {
+            const res = await resolverArchivo(usuarioId, a.nombre);
+            if (res.opciones) {
+              // Nombre con errata: se ofrecen sugerencias y se corta aquí (la
+              // aclaración queda registrada para completarla cuando el usuario
+              // elija). Lo ya hecho en segmentos anteriores se conserva en `acciones`.
+              registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
+              const previo = lecturas.length ? `${lecturas.join("\n\n---\n\n")}\n\n---\n\n` : "";
+              return {
+                respuesta: previo + mensajeAclaracion(res.opciones, res.sugerencia),
+                acciones,
+                archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
+              };
+            }
+            if (!res.archivo) {
+              lecturas.push(`⚠️ ${res.error ?? `No encontré ningún archivo que coincida con "${a.nombre}".`}`);
+              continue;
+            }
+            const archivo = res.archivo;
+            archivosParaAbrir.push({ id: archivo.id, nombre: archivo.nombre });
+            if (archivo.estadoEscaneo === "pendiente" || archivo.estadoEscaneo === "escaneando") {
+              lecturas.push(`**${archivo.nombre}**: todavía se está procesando, inténtalo en unos segundos.`);
+              continue;
+            }
+            const factura = await obtenerFactura(usuarioId, archivo.id, archivo.nombre);
+            if (factura.encontrada) { lecturas.push(factura.resumen!); continue; }
+            try {
+              const contenido = await leerTextoArchivo(archivo.id, usuarioId);
+              lecturas.push(`**${archivo.nombre}**:\n\n${contenido}`);
+            } catch (err) {
+              lecturas.push(`**${archivo.nombre}**: ${err instanceof AppError ? err.message : "no pude leer el contenido."}`);
+            }
+          } else {
+            const r = (await ejecutarTool(a.tool, a.args, usuarioId, acciones)) as Record<string, unknown>;
+            if (r.necesita_aclaracion === true && Array.isArray(r.opciones)) {
+              // Nombre con errata en una acción (mover/copiar/borrar...): ejecutarTool
+              // ya dejó registrada la aclaración con sus args (incl. destino), así
+              // que basta cortar aquí mostrando las sugerencias; al elegir, se
+              // completa la acción original. Lo ya hecho se conserva en `acciones`.
+              const previo = lecturas.length ? `${lecturas.join("\n\n---\n\n")}\n\n---\n\n` : "";
+              return {
+                respuesta: previo + mensajeAclaracion(r.opciones as OpcionAclaracion[], r.sugerencia === true),
+                acciones,
+                archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
+              };
+            }
+            if (typeof r.error === "string") lecturas.push(`⚠️ ${r.error}`);
+          }
+        }
+        return {
+          respuesta: lecturas.length ? lecturas.join("\n\n---\n\n") : "Hecho.",
+          acciones,
+          archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
+        };
       }
     }
   }
@@ -1130,10 +1504,7 @@ export const chatear = async (
       if (res.opciones) {
         const tool = tieneIntencionRestaurar ? "restaurar_archivo" : "borrar_permanente";
         registrarAclaracion(usuarioId, tool, {}, "nombre", res.opciones);
-        const lista = res.opciones
-          .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
-          .join("\n");
-        return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+        return { respuesta: mensajeAclaracion(res.opciones), acciones };
       }
       if (tieneIntencionRestaurar) {
         await restaurarArchivo(res.archivo!.id, usuarioId);
@@ -1174,11 +1545,8 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, matchNombreFactura[0]);
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "obtener_factura", {}, "nombre", res.opciones);
-      const lista = res.opciones
-        .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
-        .join("\n");
-      return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+      registrarAclaracion(usuarioId, "obtener_factura", {}, "nombre", res.opciones, res.sugerencia);
+      return { respuesta: mensajeAclaracion(res.opciones, res.sugerencia), acciones };
     }
     if (res.archivo!.estadoEscaneo === "pendiente" || res.archivo!.estadoEscaneo === "escaneando") {
       return {
@@ -1376,12 +1744,7 @@ export const chatear = async (
     const res = await resolverCarpeta(usuarioId, nombreCarpeta);
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      return {
-        respuesta: `Hay varias carpetas con ese nombre, ¿cuál quieres?\n\n${res.opciones
-          .map((o) => `- ${o}`)
-          .join("\n")}`,
-        acciones,
-      };
+      return { respuesta: mensajeAclaracion(res.opciones, res.sugerencia), acciones };
     }
     const ruta = res.ruta!;
     const filtro: FiltroFacturas = { carpeta: ruta };
@@ -1534,11 +1897,8 @@ export const chatear = async (
   if (matchLeerSimple) {
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchLeerSimple).trim());
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones);
-      const lista2 = res.opciones
-        .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
-        .join("\n");
-      return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista2}`, acciones };
+      registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
+      return { respuesta: mensajeAclaracion(res.opciones, res.sugerencia), acciones };
     }
     // Solo cortamos si de verdad hay un archivo; si no se encontró (res.error),
     // dejamos pasar al flujo normal (era una pregunta, no un "abre X").
@@ -1630,11 +1990,8 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchNombreArchivoABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", res.opciones);
-      const lista = res.opciones
-        .map((o) => `- ${o.nombre}${o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`)
-        .join("\n");
-      return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+      registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", res.opciones, res.sugerencia);
+      return { respuesta: mensajeAclaracion(res.opciones, res.sugerencia), acciones };
     }
     await eliminarArchivo(res.archivo!.id, usuarioId);
     acciones.push(`Enviado a la papelera "${res.archivo!.nombre}"`);
@@ -1652,9 +2009,8 @@ export const chatear = async (
     const res = await resolverCarpeta(usuarioId, grupoOriginal(msgLower, matchNombreCarpetaABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "eliminar_carpeta", {}, "ruta", res.opciones);
-      const lista = res.opciones.map((o) => `- ${o}`).join("\n");
-      return { respuesta: `Hay varias carpetas con ese nombre, ¿cuál quieres?\n\n${lista}`, acciones };
+      registrarAclaracion(usuarioId, "eliminar_carpeta", {}, "ruta", res.opciones, res.sugerencia);
+      return { respuesta: mensajeAclaracion(res.opciones, res.sugerencia), acciones };
     }
     const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
     acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
@@ -1756,12 +2112,7 @@ export const chatear = async (
     const res = await resolverCarpeta(usuarioId, matchCarpetaObjetivo[1]);
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      return {
-        respuesta: `Hay varias carpetas con ese nombre, ¿cuál quieres?\n\n${res.opciones
-          .map((o) => `- ${o}`)
-          .join("\n")}`,
-        acciones,
-      };
+      return { respuesta: mensajeAclaracion(res.opciones, res.sugerencia), acciones };
     }
     const ruta = res.ruta!;
     const partes: string[] = [];
@@ -1896,7 +2247,10 @@ export const chatear = async (
       toolCalls = extraerToolCallsDeTexto(respuesta.content);
     }
     if (toolCalls.length === 0) {
-      if (respuesta.content && pareceIntentoToolCallInvalido(respuesta.content)) {
+      if (
+        respuesta.content &&
+        (pareceIntentoToolCallInvalido(respuesta.content) || esRespuestaInutil(respuesta.content))
+      ) {
         return {
           respuesta: "No he podido completar esa acción. ¿Puedes reformular la petición?",
           acciones,
@@ -1931,14 +2285,10 @@ export const chatear = async (
       // pregunta aquí mismo: dejarlo en manos del modelo a veces resultaba en
       // que preguntara "¿cuál quieres?" sin listar ninguna opción real.
       if (r.necesita_aclaracion === true && Array.isArray(r.opciones)) {
-        const lista = (r.opciones as unknown[])
-          .map((o) => {
-            if (typeof o === "string") return `- ${o}`;
-            const obj = o as { nombre?: string; carpeta?: string };
-            return `- ${obj.nombre}${obj.carpeta && obj.carpeta !== "/" ? ` (${obj.carpeta})` : ""}`;
-          })
-          .join("\n");
-        return { respuesta: `Hay varias coincidencias, ¿cuál quieres?\n\n${lista}`, acciones };
+        return {
+          respuesta: mensajeAclaracion(r.opciones as OpcionAclaracion[], r.sugerencia === true),
+          acciones,
+        };
       }
 
       // Cualquier herramienta que devuelva un "resumen" (facturas, ventas_top,
@@ -1975,7 +2325,10 @@ export const chatear = async (
       });
       const final = await llamarOllama(messages, true);
       return {
-        respuesta: final.content || "He realizado las acciones solicitadas.",
+        respuesta:
+          final.content && !esRespuestaInutil(final.content)
+            ? final.content
+            : "He realizado las acciones solicitadas.",
         acciones,
         archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
       };
@@ -1990,5 +2343,11 @@ export const chatear = async (
       "Ya tienes los datos reales en el resultado de la herramienta (mensaje anterior, rol \"tool\"). Usa ESOS datos para responder ahora a la pregunta del usuario, en texto. No describas qué herramientas existen ni para qué sirven, y no vuelvas a llamar a ninguna.",
   });
   const final = await llamarOllama(messages, true);
-  return { respuesta: final.content || "He realizado las acciones solicitadas.", acciones };
+  return {
+    respuesta:
+      final.content && !esRespuestaInutil(final.content)
+        ? final.content
+        : "He realizado las acciones solicitadas.",
+    acciones,
+  };
 };

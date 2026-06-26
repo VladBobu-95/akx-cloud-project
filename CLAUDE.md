@@ -207,6 +207,4 @@ app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), style
 - Tipos permitidos: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máx 50 MB. Subida: 1 archivo/petición (paralelas en el front).
 
 ## Preferencias de trabajo (Vlad)
-- **Minimizar tokens**: respuestas concisas, lecturas dirigidas (solo el trozo de fichero necesario), sin escaneos amplios ni subagentes salvo que se pidan.
-- **Avisar en puntos de corte naturales** cuándo conviene `/clear` (se cierra una tarea / cambio de tema) vs `/compact` (hilo largo, mismo tema).
 - **Solo pedir confirmación para decisiones de diseño**, no para llamadas de herramienta rutinarias.
