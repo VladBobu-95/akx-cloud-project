@@ -382,7 +382,7 @@ export class ArchivosPage {
           const esImagen = /^image\//.test(mimeType);
           const cuerpo = esImagen
             ? `<img src="${url}">`
-            : `<iframe src="${url}"></iframe>`;
+            : `<iframe src="${url}#zoom=100"></iframe>`;
           const estilos = esImagen
             ? `body{margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;}img{max-width:100%;max-height:100vh;object-fit:contain;}`
             : `html,body{height:100%;margin:0;padding:0;overflow:hidden;}iframe{width:100%;height:100%;border:none;}`;

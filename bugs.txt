@@ -1,18 +1,8 @@
 
-- mueve modelo ,Por favor, indica la carpeta destino.
 -copia factura en la carpeta demo22 y despues copia la carpeta demo22 
-- haz una copia de x c
--restaurar todo
 - que no se invente cosas
 - mover varios seleccionados
-- resumen de todo
-- si borras factura se tiene que borrar tmb desde resumen(/facturas)
-- problemas con 123 (ficheros grandes?)
-- cuando se escanean cosas (el chat tiene que prohibir o infomrar)
-- mejorrar errores (abre mientras escanea)
 - el buscador tarda mucho, es por si se escanea algo al mismo tiempo?
-- bugs que puedes salir con la carpeta facturas
-- puede ser que al aparecer la carpeta facuturas se resaturo arboles qunue lo hya borrado?
 - highlight palabra en buscador
 - el texto del chat se guarda de un usuario  otro
 - si se sube un archiv oque no reconoce ,error. El chat si no sabe algo error
