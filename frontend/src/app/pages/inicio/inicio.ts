@@ -65,13 +65,15 @@ export class InicioPage implements AfterViewInit {
   }
 
   // Pulsar una fila de la tabla de aclaración manda su `valor` igual que si el
-  // usuario lo hubiera escrito y dado a Enter: reutiliza el mismo pre-flight del
-  // backend que completa la acción pendiente con la opción elegida.
-  protected seleccionarAclaracion(valor: string) {
-    this.enviarTexto(valor);
+  // usuario lo hubiera escrito y dado a Enter (para que la burbuja lea bien),
+  // más el `id` exacto de la opción (si la tiene) como `idOpcion`: el backend
+  // lo usa para resolverla sin ambigüedad en vez de re-comparar texto (dos
+  // opciones pueden compartir el mismo nombre en carpetas distintas).
+  protected seleccionarAclaracion(valor: string, id?: string) {
+    this.enviarTexto(valor, id);
   }
 
-  private enviarTexto(texto: string) {
+  private enviarTexto(texto: string, idOpcion?: string) {
     if (!texto || this.pensando()) return;
 
     this.chat.añadir({ de: 'usuario', texto });
@@ -89,7 +91,7 @@ export class InicioPage implements AfterViewInit {
       .slice(-8)
       .map((m) => ({ rol: m.de, contenido: m.texto }));
 
-    this.chat.enviar(historial).subscribe({
+    this.chat.enviar(historial, idOpcion).subscribe({
       next: (r) => {
         const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
         this.chat.añadir({
@@ -176,7 +178,7 @@ export class InicioPage implements AfterViewInit {
   protected totalPaginasAclaracion(t: TablaAclaracion): number {
     return Math.max(1, Math.ceil(t.filas.length / t.limite));
   }
-  protected filasAclaracionVisibles(t: TablaAclaracion): { etiqueta: string; valor: string; archivoId?: string }[] {
+  protected filasAclaracionVisibles(t: TablaAclaracion): { etiqueta: string; valor: string; id?: string }[] {
     const pagina = t.pagina ?? 1;
     const ini = (pagina - 1) * t.limite;
     return t.filas.slice(ini, ini + t.limite);

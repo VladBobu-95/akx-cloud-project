@@ -355,25 +355,25 @@ const mensajeAclaracion = (opciones: OpcionAclaracion[], sugerencia?: boolean): 
 // un botón "Abrir" además de completar la acción, porque elegir una opción no
 // hace nada irreversible. El resto (mover/copiar/renombrar/eliminar/restaurar...)
 // solo ofrece "Elegir": no tiene sentido previsualizar un archivo que se va a
-// mover o borrar, y dos botones ahí solo añade confusión.
+// mover o borrar, y dos botones ahí solo añade confusión. La tabla manda este
+// flag a nivel de tabla (no por fila): el mismo `tool` aplica a todas las
+// opciones de una misma pregunta.
 const TOOLS_LECTURA = new Set(["leer_archivo", "obtener_factura"]);
 
 // Una fila de la tabla clicable de aclaración: `etiqueta` es lo que se muestra,
-// `valor` es lo que se manda como mensaje al pulsarla (debe coincidir con lo
-// que el pre-flight de aclaración pendiente compara contra `opciones`).
-// `archivoId` solo se incluye para tools de lectura (ver TOOLS_LECTURA): es lo
-// que el frontend usa para decidir entre mostrar "Resumen"+"Abrir" o solo
-// "Elegir".
-const filaAclaracion = (
-  o: OpcionAclaracion,
-  lectura: boolean,
-): { etiqueta: string; valor: string; archivoId?: string } =>
+// `valor` es lo que se manda como mensaje al pulsarla (para que la burbuja del
+// chat lea bien). `id` (solo si la opción es un archivo, no una carpeta) es lo
+// que el frontend manda ADEMÁS como `idOpcion` para resolverla por id exacto en
+// vez de re-comparar texto — necesario porque dos opciones pueden compartir el
+// mismo nombre en carpetas distintas, y comparar solo por texto no encontraba
+// un candidato único (ver el pre-flight de aclaración pendiente).
+const filaAclaracion = (o: OpcionAclaracion): { etiqueta: string; valor: string; id?: string } =>
   typeof o === "string"
     ? { etiqueta: o, valor: o }
     : {
         etiqueta: `${o.nombre}${o.carpeta && o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`,
         valor: o.nombre,
-        archivoId: lectura ? o.id : undefined,
+        id: o.id,
       };
 
 // Construye la respuesta completa de aclaración (texto markdown + tabla
@@ -392,23 +392,22 @@ const respuestaAclaracion = (
   tablaAclaracion: {
     titulo: string;
     sugerencia: boolean;
+    lectura: boolean;
     limite: number;
-    filas: { etiqueta: string; valor: string; archivoId?: string }[];
+    filas: { etiqueta: string; valor: string; id?: string }[];
   };
-} => {
-  const lectura = TOOLS_LECTURA.has(tool);
-  return {
-    respuesta: (extra.previo ?? "") + mensajeAclaracion(opciones, sugerencia),
-    acciones,
-    archivos: extra.archivos,
-    tablaAclaracion: {
-      titulo: cabeceraAclaracion(sugerencia),
-      sugerencia: sugerencia === true,
-      limite: 20,
-      filas: opciones.map((o) => filaAclaracion(o, lectura)),
-    },
-  };
-};
+} => ({
+  respuesta: (extra.previo ?? "") + mensajeAclaracion(opciones, sugerencia),
+  acciones,
+  archivos: extra.archivos,
+  tablaAclaracion: {
+    titulo: cabeceraAclaracion(sugerencia),
+    sugerencia: sugerencia === true,
+    lectura: TOOLS_LECTURA.has(tool),
+    limite: 20,
+    filas: opciones.map(filaAclaracion),
+  },
+});
 
 // Traduce los argumentos de las tools de analítica (ventas_top, totales_facturas)
 // a un FiltroFacturas y a un título legible para el markdown del resultado.
@@ -1024,6 +1023,11 @@ const LISTADO_LIMITE = 20;
 export const chatear = async (
   usuarioId: string,
   mensajes: MensajeChat[],
+  // Cuando el usuario elige una opción pulsando un botón de la tabla de
+  // aclaración (en vez de escribirla a mano), el frontend manda también el
+  // `id` exacto de esa opción para resolverla sin ambigüedad (ver el pre-flight
+  // de aclaración pendiente más abajo).
+  idOpcion?: string,
 ): Promise<{
   respuesta: string;
   acciones: string[];
@@ -1065,8 +1069,9 @@ export const chatear = async (
   tablaAclaracion?: {
     titulo: string;
     sugerencia: boolean;
+    lectura: boolean;
     limite: number;
-    filas: { etiqueta: string; valor: string; archivoId?: string }[];
+    filas: { etiqueta: string; valor: string; id?: string }[];
   };
 }> => {
   // Solo el último mensaje del usuario. En un asistente de archivos cada orden es
@@ -1177,30 +1182,43 @@ export const chatear = async (
   if (pendiente) {
     pendientesAclaracion.delete(usuarioId);
     if (Date.now() - pendiente.ts < TTL_ACLARACION_MS) {
-      const normalizado = ultimoMensaje.trim().replace(/^[-•]\s*/, "").toLowerCase();
-      // Si el usuario rechaza la aclaración ("no", "ninguna", "cancela"...) hay
-      // que responder algo claro aquí mismo: como ya se borró el pendiente y
-      // "no" no es un mensaje con contenido propio, dejarlo caer al flujo
-      // normal mandaba "no" suelto al modelo (pequeño) y este devolvía "{}".
-      const esNegacion =
-        /^(?:no|nope|nah)(?:\s+(?:gracias|por\s+ahora|era\s+es[ao]|es\s+es[ao]|quiero|asi))?[.,!¡]*$|^ninguna?(?:\s+de\s+(?:esas|estas|ellas))?[.,!¡]*$|^(?:cancela(?:r|lo)?|olvidalo|dejalo|mejor\s+no|para\s+nada)[.,!¡]*$/
-          .test(quitarTildes(normalizado));
-      if (esNegacion) {
-        return { respuesta: "Vale, lo dejo así. Dime si quieres que busque otra cosa.", acciones };
+      // Si la elección viene de un clic en la tabla (manda el `id` exacto de
+      // la opción), se resuelve por id y NO por texto: dos opciones pueden
+      // compartir el mismo nombre (el mismo archivo, o uno igual de nombre,
+      // en carpetas distintas) y comparar solo por texto podía no encontrar
+      // ningún candidato único, cayendo al flujo normal (mensaje suelto sin
+      // contexto) donde el modelo "adivinaba" otra cosa (ej. escanear en vez
+      // de copiar). Si no llega `idOpcion` (el usuario escribió la opción a
+      // mano), se sigue comparando por texto como antes.
+      let candidatos: OpcionAclaracion[];
+      if (idOpcion) {
+        candidatos = pendiente.opciones.filter((o) => typeof o !== "string" && o.id === idOpcion);
+      } else {
+        const normalizado = ultimoMensaje.trim().replace(/^[-•]\s*/, "").toLowerCase();
+        // Si el usuario rechaza la aclaración ("no", "ninguna", "cancela"...) hay
+        // que responder algo claro aquí mismo: como ya se borró el pendiente y
+        // "no" no es un mensaje con contenido propio, dejarlo caer al flujo
+        // normal mandaba "no" suelto al modelo (pequeño) y este devolvía "{}".
+        const esNegacion =
+          /^(?:no|nope|nah)(?:\s+(?:gracias|por\s+ahora|era\s+es[ao]|es\s+es[ao]|quiero|asi))?[.,!¡]*$|^ninguna?(?:\s+de\s+(?:esas|estas|ellas))?[.,!¡]*$|^(?:cancela(?:r|lo)?|olvidalo|dejalo|mejor\s+no|para\s+nada)[.,!¡]*$/
+            .test(quitarTildes(normalizado));
+        if (esNegacion) {
+          return { respuesta: "Vale, lo dejo así. Dime si quieres que busque otra cosa.", acciones };
+        }
+        // Si solo se ofreció UNA opción, un "sí"/"vale"/"ok" también la confirma
+        // (no hace falta que el usuario repita el nombre completo).
+        const esAfirmacion =
+          pendiente.opciones.length === 1 &&
+          /^(?:si|si\s+por\s+favor|vale|ok(?:ay)?|dale|claro|correcto|exacto|afirmativo)[.,!¡]*$/.test(
+            quitarTildes(normalizado),
+          );
+        candidatos = esAfirmacion
+          ? pendiente.opciones
+          : pendiente.opciones.filter((o) => {
+              const texto = (typeof o === "string" ? o : o.nombre).toLowerCase();
+              return normalizado === texto || normalizado.includes(texto);
+            });
       }
-      // Si solo se ofreció UNA opción, un "sí"/"vale"/"ok" también la confirma
-      // (no hace falta que el usuario repita el nombre completo).
-      const esAfirmacion =
-        pendiente.opciones.length === 1 &&
-        /^(?:si|si\s+por\s+favor|vale|ok(?:ay)?|dale|claro|correcto|exacto|afirmativo)[.,!¡]*$/.test(
-          quitarTildes(normalizado),
-        );
-      const candidatos = esAfirmacion
-        ? pendiente.opciones
-        : pendiente.opciones.filter((o) => {
-            const texto = (typeof o === "string" ? o : o.nombre).toLowerCase();
-            return normalizado === texto || normalizado.includes(texto);
-          });
       if (candidatos.length === 1) {
         const elegido = candidatos[0];
         const valor = typeof elegido === "string" ? elegido : elegido.nombre;

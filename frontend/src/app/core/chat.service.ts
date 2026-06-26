@@ -54,16 +54,20 @@ export interface TablaCarpetas {
 }
 
 // Tabla clicable que acompaña a una pregunta de aclaración ("¿cuál quieres?" /
-// "¿querías decir...?"). `valor` de la fila pulsada se manda como si el usuario
-// lo hubiera escrito, así reutiliza el mismo flujo que si lo tecleara a mano.
-// `archivoId` solo está cuando la opción es un archivo real (no una carpeta):
-// habilita el botón "Abrir" además de "Resumen".
+// "¿querías decir...?"). Al pulsar una fila se manda `valor` (para que la
+// burbuja del chat lea bien) y, si la opción es un archivo, también `id` como
+// `idOpcion` para resolverla SIN ambigüedad por id exacto (dos opciones pueden
+// compartir el mismo nombre en carpetas distintas). `lectura` (a nivel de
+// tabla: la tool es la misma para todas las opciones) decide si además del
+// botón de elegir se ofrece "Abrir" (solo tiene sentido para tools de consulta
+// como leer_archivo/obtener_factura, no para mover/copiar/eliminar...).
 export interface TablaAclaracion {
   titulo: string;
   sugerencia: boolean;
+  lectura: boolean;
   limite: number;
   pagina?: number; // estado local de paginación en memoria (el backend manda todas las filas)
-  filas: { etiqueta: string; valor: string; archivoId?: string }[];
+  filas: { etiqueta: string; valor: string; id?: string }[];
 }
 
 // Mensaje tal y como lo muestra la UI.
@@ -146,8 +150,10 @@ export class ChatService {
   }
 
   // Envía el historial de la conversación y devuelve la respuesta del asistente.
-  enviar(mensajes: MensajeChat[]) {
-    return this.http.post<RespuestaChat>(this.base, { mensajes });
+  // `idOpcion` solo se manda cuando el mensaje es la elección de una fila de
+  // tablaAclaracion pulsada como botón (ver TablaAclaracion).
+  enviar(mensajes: MensajeChat[], idOpcion?: string) {
+    return this.http.post<RespuestaChat>(this.base, { mensajes, idOpcion });
   }
 
   private cargar(): Mensaje[] {
