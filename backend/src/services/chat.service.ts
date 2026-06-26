@@ -832,12 +832,17 @@ const ejecutarTool = async (
         // explorador): NO espera al resultado. Con varias facturas el OCR/IA
         // puede tardar minutos y colgaba la petición del chat hasta el 504
         // de nginx (ver bugs.txt). El progreso se ve en la columna "Estado".
+        // Por defecto solo PDFs: las imágenes sueltas casi nunca son
+        // facturas y su OCR es mucho más lento, así que solo se incluyen si
+        // el usuario lo pide explícitamente (incluirImagenes).
+        const incluirImagenes = args.incluirImagenes === true;
         const todos = (await listarArchivos(usuarioId, undefined, 1, 200)).archivos;
-        const facturas = todos.filter((a) =>
-          (/\.(pdf|jpg|jpeg|png|webp|tiff?)$/i.test(a.nombre) ||
-            /^(application\/pdf|image\/)/.test(a.mimeType)) &&
-          a.estadoEscaneo !== "pendiente" && a.estadoEscaneo !== "escaneando",
-        );
+        const facturas = todos.filter((a) => {
+          const esPdf = /\.pdf$/i.test(a.nombre) || a.mimeType === "application/pdf";
+          const esImagen = /\.(jpe?g|png|webp|tiff?)$/i.test(a.nombre) || /^image\//.test(a.mimeType);
+          if (!esPdf && !(incluirImagenes && esImagen)) return false;
+          return a.estadoEscaneo !== "pendiente" && a.estadoEscaneo !== "escaneando";
+        });
         if (facturas.length === 0) {
           return { ok: true, resumen: "No se encontraron facturas pendientes de escanear." };
         }
@@ -1925,6 +1930,27 @@ export const chatear = async (
       string,
       unknown
     >;
+    if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
+  // Pre-flight: "escanea/procesa todas las facturas/imágenes" — el modelo no
+  // siempre fija bien el flag "incluirImagenes" (ver escanear_todas_facturas
+  // en chat.tools.ts: por defecto solo escanea PDFs, las imágenes solo si se
+  // piden explícitamente). Se resuelve aquí de forma determinista: sin
+  // dígitos en el mensaje (si nombra una factura concreta como "factura_08"
+  // es "escanear_factura", no esto) y con el verbo + "todas/todos".
+  const esEscanearTodas =
+    /\b(escane[ao](?:r|me|lo|la|los|las)?|procesa(?:r|me|lo|la|los|las)?)\b/.test(msgSinTildes) &&
+    /\btodas?\b/.test(msgSinTildes) &&
+    !/\d/.test(msgSinTildes);
+  if (esEscanearTodas) {
+    const incluirImagenes = /\bimagen(es)?\b|\bfotos?\b/.test(msgSinTildes);
+    const resultado = (await ejecutarTool(
+      "escanear_todas_facturas",
+      { incluirImagenes },
+      usuarioId,
+      acciones,
+    )) as Record<string, unknown>;
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
