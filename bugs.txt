@@ -1,4 +1,7 @@
 
+- si solo pongo el nombre que la abra(ahora escanea)
+- boton para escanear
+- error al decir no
 - haz una copia de x
 -restaurar todo
 - que no se invente cosas

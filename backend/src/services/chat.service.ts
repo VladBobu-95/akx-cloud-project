@@ -1104,6 +1104,16 @@ export const chatear = async (
     pendientesAclaracion.delete(usuarioId);
     if (Date.now() - pendiente.ts < TTL_ACLARACION_MS) {
       const normalizado = ultimoMensaje.trim().replace(/^[-•]\s*/, "").toLowerCase();
+      // Si el usuario rechaza la aclaración ("no", "ninguna", "cancela"...) hay
+      // que responder algo claro aquí mismo: como ya se borró el pendiente y
+      // "no" no es un mensaje con contenido propio, dejarlo caer al flujo
+      // normal mandaba "no" suelto al modelo (pequeño) y este devolvía "{}".
+      const esNegacion =
+        /^(?:no|nope|nah)(?:\s+(?:gracias|por\s+ahora|era\s+es[ao]|es\s+es[ao]|quiero|asi))?[.,!¡]*$|^ninguna?(?:\s+de\s+(?:esas|estas|ellas))?[.,!¡]*$|^(?:cancela(?:r|lo)?|olvidalo|dejalo|mejor\s+no|para\s+nada)[.,!¡]*$/
+          .test(quitarTildes(normalizado));
+      if (esNegacion) {
+        return { respuesta: "Vale, lo dejo así. Dime si quieres que busque otra cosa.", acciones };
+      }
       // Si solo se ofreció UNA opción, un "sí"/"vale"/"ok" también la confirma
       // (no hace falta que el usuario repita el nombre completo).
       const esAfirmacion =
