@@ -2000,10 +2000,19 @@ export const chatear = async (
     !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes)
   ) {
     const cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
-    if (cliente) {
-      const filtro: FiltroFacturas = { cliente };
+    // Sin cliente: "muestra/dame/lista todas las facturas" (sin periodo, sin
+    // carpeta, sin cliente) es un LISTADO de TODAS las facturas sin filtro.
+    // Sin este caso, el mensaje no encajaba en ningún pre-flight y caía en el
+    // bucle de tools del modelo, que no tiene una tool de listado genérico y
+    // se quedaba reintentando sin converger (respuesta colgada).
+    const esListadoGenerico =
+      !cliente && new RegExp(`(${VERBO_LISTAR}|${VERBO_ABRIR})\\s+(todas\\s+)?(mis\\s+)?(las\\s+)?facturas?\\b`).test(
+        msgSinTildes,
+      );
+    if (cliente || esListadoGenerico) {
+      const filtro: FiltroFacturas = cliente ? { cliente } : {};
       const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
-      const titulo = `Facturas de ${cliente}`;
+      const titulo = cliente ? `Facturas de ${cliente}` : "Todas las facturas";
       return {
         respuesta: listadoFacturasMd(filas, titulo),
         acciones,
