@@ -176,7 +176,7 @@ export class InicioPage implements AfterViewInit {
   protected totalPaginasAclaracion(t: TablaAclaracion): number {
     return Math.max(1, Math.ceil(t.filas.length / t.limite));
   }
-  protected filasAclaracionVisibles(t: TablaAclaracion): { etiqueta: string; valor: string }[] {
+  protected filasAclaracionVisibles(t: TablaAclaracion): { etiqueta: string; valor: string; archivoId?: string }[] {
     const pagina = t.pagina ?? 1;
     const ini = (pagina - 1) * t.limite;
     return t.filas.slice(ini, ini + t.limite);

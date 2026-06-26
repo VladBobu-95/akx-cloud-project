@@ -97,10 +97,15 @@
                         @for (o of filasAclaracionVisibles(tac); track o.valor) {
                           <tr>
                             <td>{{ o.etiqueta }}</td>
-                            <td>
+                            <td class="acciones-aclaracion">
                               <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="seleccionarAclaracion(o.valor)">
-                                Elegir
+                                Resumen
                               </button>
+                              @if (o.archivoId) {
+                                <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: o.archivoId, nombre: o.valor })">
+                                  📂 Abrir
+                                </button>
+                              }
                             </td>
                           </tr>
                         }

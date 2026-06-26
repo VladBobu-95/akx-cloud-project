@@ -149,6 +149,11 @@
       .tabla-chat .btn {
         font-size: 0.85rem;
       }
+      .acciones-aclaracion {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+      }
       /* Listado de carpetas (se pagina en memoria). */
       .lista-carpetas {
         margin: 0 0 6px;

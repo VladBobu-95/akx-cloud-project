@@ -173,7 +173,7 @@ const resolverArchivo = async (
 ): Promise<{
   archivo?: Archivo;
   error?: string;
-  opciones?: { nombre: string; carpeta: string }[];
+  opciones?: { id: string; nombre: string; carpeta: string }[];
   // true cuando las `opciones` NO son coincidencias exactas sino sugerencias por
   // parecido (el nombre pedido no existía tal cual): el caller muestra "¿Querías
   // decir...?" en vez de "Hay varias coincidencias".
@@ -206,7 +206,10 @@ const resolverArchivo = async (
         .sort((x, y) => y.s - x.s)
         .slice(0, 5);
       if (conSim.length > 0) {
-        return { opciones: conSim.map((x) => ({ nombre: x.a.nombre, carpeta: x.a.carpeta })), sugerencia: true };
+        return {
+          opciones: conSim.map((x) => ({ id: x.a.id, nombre: x.a.nombre, carpeta: x.a.carpeta })),
+          sugerencia: true,
+        };
       }
     }
   }
@@ -224,7 +227,7 @@ const resolverArchivo = async (
   const sinResumenes = lista.filter((a) => !/^resumen-/i.test(a.nombre));
   if (sinResumenes.length === 1) return { archivo: sinResumenes[0] };
   const final = sinResumenes.length > 0 ? sinResumenes : lista;
-  return { opciones: final.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
+  return { opciones: final.map((a) => ({ id: a.id, nombre: a.nombre, carpeta: a.carpeta })) };
 };
 
 // Localiza una carpeta EXISTENTE por nombre o ruta completa. Si el argumento ya
@@ -275,7 +278,7 @@ const resolverEnPapelera = async (
 ): Promise<{
   archivo?: Archivo;
   error?: string;
-  opciones?: { nombre: string; carpeta: string }[];
+  opciones?: { id: string; nombre: string; carpeta: string }[];
   sugerencia?: boolean;
 }> => {
   const lista = (await listarPapelera(usuarioId)).filter((a) =>
@@ -286,13 +289,14 @@ const resolverEnPapelera = async (
   const exacto = lista.find((a) => a.nombre.toLowerCase() === nombre.toLowerCase());
   if (exacto) return { archivo: exacto };
   if (lista.length === 1) return { archivo: lista[0] };
-  return { opciones: lista.map((a) => ({ nombre: a.nombre, carpeta: a.carpeta })) };
+  return { opciones: lista.map((a) => ({ id: a.id, nombre: a.nombre, carpeta: a.carpeta })) };
 };
 
 // Tipo de las opciones que se ofrecen al pedir aclaración: objeto (archivo,
-// con nombre+carpeta) cuando viene de resolverArchivo/resolverEnPapelera, o
-// string (ruta completa) cuando viene de resolverCarpeta.
-type OpcionAclaracion = { nombre: string; carpeta: string } | string;
+// con id+nombre+carpeta) cuando viene de resolverArchivo/resolverEnPapelera, o
+// string (ruta completa) cuando viene de resolverCarpeta. El `id` solo está en
+// el caso archivo y es lo que permite ofrecer el botón "Abrir" en la tabla.
+type OpcionAclaracion = { id: string; nombre: string; carpeta: string } | string;
 
 // Cuando una tool no puede decidir entre varias coincidencias y pregunta al
 // usuario, se recuerda aquí qué se estaba intentando hacer (tool + argumentos
@@ -350,10 +354,16 @@ const mensajeAclaracion = (opciones: OpcionAclaracion[], sugerencia?: boolean): 
 // Una fila de la tabla clicable de aclaración: `etiqueta` es lo que se muestra,
 // `valor` es lo que se manda como mensaje al pulsarla (debe coincidir con lo
 // que el pre-flight de aclaración pendiente compara contra `opciones`).
-const filaAclaracion = (o: OpcionAclaracion): { etiqueta: string; valor: string } =>
+// `archivoId` solo está cuando la opción es un archivo real (no una carpeta):
+// el frontend lo usa para ofrecer un botón "Abrir" además de "Resumen".
+const filaAclaracion = (o: OpcionAclaracion): { etiqueta: string; valor: string; archivoId?: string } =>
   typeof o === "string"
     ? { etiqueta: o, valor: o }
-    : { etiqueta: `${o.nombre}${o.carpeta && o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`, valor: o.nombre };
+    : {
+        etiqueta: `${o.nombre}${o.carpeta && o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`,
+        valor: o.nombre,
+        archivoId: o.id,
+      };
 
 // Construye la respuesta completa de aclaración (texto markdown + tabla
 // clicable equivalente) para no repetir esto en cada punto que la necesita.
@@ -366,7 +376,12 @@ const respuestaAclaracion = (
   respuesta: string;
   acciones: string[];
   archivos?: { id: string; nombre: string }[];
-  tablaAclaracion: { titulo: string; sugerencia: boolean; limite: number; filas: { etiqueta: string; valor: string }[] };
+  tablaAclaracion: {
+    titulo: string;
+    sugerencia: boolean;
+    limite: number;
+    filas: { etiqueta: string; valor: string; archivoId?: string }[];
+  };
 } => ({
   respuesta: (extra.previo ?? "") + mensajeAclaracion(opciones, sugerencia),
   acciones,
@@ -1035,7 +1050,7 @@ export const chatear = async (
     titulo: string;
     sugerencia: boolean;
     limite: number;
-    filas: { etiqueta: string; valor: string }[];
+    filas: { etiqueta: string; valor: string; archivoId?: string }[];
   };
 }> => {
   // Solo el último mensaje del usuario. En un asistente de archivos cada orden es

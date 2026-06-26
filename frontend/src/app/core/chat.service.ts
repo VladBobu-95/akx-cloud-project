@@ -56,12 +56,14 @@ export interface TablaCarpetas {
 // Tabla clicable que acompaña a una pregunta de aclaración ("¿cuál quieres?" /
 // "¿querías decir...?"). `valor` de la fila pulsada se manda como si el usuario
 // lo hubiera escrito, así reutiliza el mismo flujo que si lo tecleara a mano.
+// `archivoId` solo está cuando la opción es un archivo real (no una carpeta):
+// habilita el botón "Abrir" además de "Resumen".
 export interface TablaAclaracion {
   titulo: string;
   sugerencia: boolean;
   limite: number;
   pagina?: number; // estado local de paginación en memoria (el backend manda todas las filas)
-  filas: { etiqueta: string; valor: string }[];
+  filas: { etiqueta: string; valor: string; archivoId?: string }[];
 }
 
 // Mensaje tal y como lo muestra la UI.
