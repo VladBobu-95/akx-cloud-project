@@ -98,12 +98,16 @@
                           <tr>
                             <td>{{ o.etiqueta }}</td>
                             <td class="acciones-aclaracion">
-                              <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="seleccionarAclaracion(o.valor)">
-                                Resumen
-                              </button>
                               @if (o.archivoId) {
+                                <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="seleccionarAclaracion(o.valor)">
+                                  Resumen
+                                </button>
                                 <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: o.archivoId, nombre: o.valor })">
                                   📂 Abrir
+                                </button>
+                              } @else {
+                                <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="seleccionarAclaracion(o.valor)">
+                                  Elegir
                                 </button>
                               }
                             </td>

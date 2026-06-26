@@ -351,26 +351,39 @@ const mensajeAclaracion = (opciones: OpcionAclaracion[], sugerencia?: boolean): 
   return `${cabeceraAclaracion(sugerencia)}\n\n${lista}`;
 };
 
+// Tools que solo CONSULTAN (no mutan nada): para estas tiene sentido ofrecer
+// un botón "Abrir" además de completar la acción, porque elegir una opción no
+// hace nada irreversible. El resto (mover/copiar/renombrar/eliminar/restaurar...)
+// solo ofrece "Elegir": no tiene sentido previsualizar un archivo que se va a
+// mover o borrar, y dos botones ahí solo añade confusión.
+const TOOLS_LECTURA = new Set(["leer_archivo", "obtener_factura"]);
+
 // Una fila de la tabla clicable de aclaración: `etiqueta` es lo que se muestra,
 // `valor` es lo que se manda como mensaje al pulsarla (debe coincidir con lo
 // que el pre-flight de aclaración pendiente compara contra `opciones`).
-// `archivoId` solo está cuando la opción es un archivo real (no una carpeta):
-// el frontend lo usa para ofrecer un botón "Abrir" además de "Resumen".
-const filaAclaracion = (o: OpcionAclaracion): { etiqueta: string; valor: string; archivoId?: string } =>
+// `archivoId` solo se incluye para tools de lectura (ver TOOLS_LECTURA): es lo
+// que el frontend usa para decidir entre mostrar "Resumen"+"Abrir" o solo
+// "Elegir".
+const filaAclaracion = (
+  o: OpcionAclaracion,
+  lectura: boolean,
+): { etiqueta: string; valor: string; archivoId?: string } =>
   typeof o === "string"
     ? { etiqueta: o, valor: o }
     : {
         etiqueta: `${o.nombre}${o.carpeta && o.carpeta !== "/" ? ` (${o.carpeta})` : ""}`,
         valor: o.nombre,
-        archivoId: o.id,
+        archivoId: lectura ? o.id : undefined,
       };
 
 // Construye la respuesta completa de aclaración (texto markdown + tabla
 // clicable equivalente) para no repetir esto en cada punto que la necesita.
+// `tool` es la tool que se completará al elegir una opción (ver TOOLS_LECTURA).
 const respuestaAclaracion = (
   opciones: OpcionAclaracion[],
   sugerencia: boolean | undefined,
   acciones: string[],
+  tool: string,
   extra: { previo?: string; archivos?: { id: string; nombre: string }[] } = {},
 ): {
   respuesta: string;
@@ -382,17 +395,20 @@ const respuestaAclaracion = (
     limite: number;
     filas: { etiqueta: string; valor: string; archivoId?: string }[];
   };
-} => ({
-  respuesta: (extra.previo ?? "") + mensajeAclaracion(opciones, sugerencia),
-  acciones,
-  archivos: extra.archivos,
-  tablaAclaracion: {
-    titulo: cabeceraAclaracion(sugerencia),
-    sugerencia: sugerencia === true,
-    limite: 20,
-    filas: opciones.map(filaAclaracion),
-  },
-});
+} => {
+  const lectura = TOOLS_LECTURA.has(tool);
+  return {
+    respuesta: (extra.previo ?? "") + mensajeAclaracion(opciones, sugerencia),
+    acciones,
+    archivos: extra.archivos,
+    tablaAclaracion: {
+      titulo: cabeceraAclaracion(sugerencia),
+      sugerencia: sugerencia === true,
+      limite: 20,
+      filas: opciones.map((o) => filaAclaracion(o, lectura)),
+    },
+  };
+};
 
 // Traduce los argumentos de las tools de analítica (ventas_top, totales_facturas)
 // a un FiltroFacturas y a un título legible para el markdown del resultado.
@@ -1200,6 +1216,7 @@ export const chatear = async (
             resultado.opciones as OpcionAclaracion[],
             resultado.sugerencia === true,
             acciones,
+            pendiente.tool,
           );
         }
         if (typeof resultado.error === "string") return { respuesta: resultado.error, acciones };
@@ -1431,7 +1448,7 @@ export const chatear = async (
               // elija). Lo ya hecho en segmentos anteriores se conserva en `acciones`.
               registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
               const previo = lecturas.length ? `${lecturas.join("\n\n---\n\n")}\n\n---\n\n` : "";
-              return respuestaAclaracion(res.opciones, res.sugerencia, acciones, {
+              return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "leer_archivo", {
                 previo,
                 archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
               });
@@ -1462,7 +1479,7 @@ export const chatear = async (
               // que basta cortar aquí mostrando las sugerencias; al elegir, se
               // completa la acción original. Lo ya hecho se conserva en `acciones`.
               const previo = lecturas.length ? `${lecturas.join("\n\n---\n\n")}\n\n---\n\n` : "";
-              return respuestaAclaracion(r.opciones as OpcionAclaracion[], r.sugerencia === true, acciones, {
+              return respuestaAclaracion(r.opciones as OpcionAclaracion[], r.sugerencia === true, acciones, a.tool, {
                 previo,
                 archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
               });
@@ -1568,7 +1585,7 @@ export const chatear = async (
       if (res.opciones) {
         const tool = tieneIntencionRestaurar ? "restaurar_archivo" : "borrar_permanente";
         registrarAclaracion(usuarioId, tool, {}, "nombre", res.opciones);
-        return respuestaAclaracion(res.opciones, undefined, acciones);
+        return respuestaAclaracion(res.opciones, undefined, acciones, tool);
       }
       if (tieneIntencionRestaurar) {
         await restaurarArchivo(res.archivo!.id, usuarioId);
@@ -1610,7 +1627,7 @@ export const chatear = async (
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
       registrarAclaracion(usuarioId, "obtener_factura", {}, "nombre", res.opciones, res.sugerencia);
-      return respuestaAclaracion(res.opciones, res.sugerencia, acciones);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "obtener_factura");
     }
     if (res.archivo!.estadoEscaneo === "pendiente" || res.archivo!.estadoEscaneo === "escaneando") {
       return {
@@ -1808,7 +1825,7 @@ export const chatear = async (
     const res = await resolverCarpeta(usuarioId, nombreCarpeta);
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      return respuestaAclaracion(res.opciones, res.sugerencia, acciones);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "facturas_de_carpeta");
     }
     const ruta = res.ruta!;
     const filtro: FiltroFacturas = { carpeta: ruta };
@@ -1962,7 +1979,7 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchLeerSimple).trim());
     if (res.opciones) {
       registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
-      return respuestaAclaracion(res.opciones, res.sugerencia, acciones);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "leer_archivo");
     }
     // Solo cortamos si de verdad hay un archivo; si no se encontró (res.error),
     // dejamos pasar al flujo normal (era una pregunta, no un "abre X").
@@ -2055,7 +2072,7 @@ export const chatear = async (
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
       registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", res.opciones, res.sugerencia);
-      return respuestaAclaracion(res.opciones, res.sugerencia, acciones);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "eliminar_archivo");
     }
     await eliminarArchivo(res.archivo!.id, usuarioId);
     acciones.push(`Enviado a la papelera "${res.archivo!.nombre}"`);
@@ -2074,7 +2091,7 @@ export const chatear = async (
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
       registrarAclaracion(usuarioId, "eliminar_carpeta", {}, "ruta", res.opciones, res.sugerencia);
-      return respuestaAclaracion(res.opciones, res.sugerencia, acciones);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "eliminar_carpeta");
     }
     const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
     acciones.push(`Carpeta enviada a la papelera: ${res.ruta} (${r.borrados} archivo/s)`);
@@ -2176,7 +2193,7 @@ export const chatear = async (
     const res = await resolverCarpeta(usuarioId, matchCarpetaObjetivo[1]);
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      return respuestaAclaracion(res.opciones, res.sugerencia, acciones);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "listar_carpeta");
     }
     const ruta = res.ruta!;
     const partes: string[] = [];
@@ -2349,7 +2366,7 @@ export const chatear = async (
       // pregunta aquí mismo: dejarlo en manos del modelo a veces resultaba en
       // que preguntara "¿cuál quieres?" sin listar ninguna opción real.
       if (r.necesita_aclaracion === true && Array.isArray(r.opciones)) {
-        return respuestaAclaracion(r.opciones as OpcionAclaracion[], r.sugerencia === true, acciones);
+        return respuestaAclaracion(r.opciones as OpcionAclaracion[], r.sugerencia === true, acciones, tc.function.name);
       }
 
       // Cualquier herramienta que devuelva un "resumen" (facturas, ventas_top,
