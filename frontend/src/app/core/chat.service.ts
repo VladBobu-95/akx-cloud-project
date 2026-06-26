@@ -53,6 +53,17 @@ export interface TablaCarpetas {
   filas: { ruta: string }[];
 }
 
+// Tabla clicable que acompaña a una pregunta de aclaración ("¿cuál quieres?" /
+// "¿querías decir...?"). `valor` de la fila pulsada se manda como si el usuario
+// lo hubiera escrito, así reutiliza el mismo flujo que si lo tecleara a mano.
+export interface TablaAclaracion {
+  titulo: string;
+  sugerencia: boolean;
+  limite: number;
+  pagina?: number; // estado local de paginación en memoria (el backend manda todas las filas)
+  filas: { etiqueta: string; valor: string }[];
+}
+
 // Mensaje tal y como lo muestra la UI.
 export interface Mensaje {
   de: 'usuario' | 'bot';
@@ -61,6 +72,7 @@ export interface Mensaje {
   tablaFacturas?: TablaFacturas;
   tablaArchivos?: TablaArchivos;
   tablaCarpetas?: TablaCarpetas;
+  tablaAclaracion?: TablaAclaracion;
 }
 
 export interface RespuestaChat {
@@ -70,6 +82,7 @@ export interface RespuestaChat {
   tablaFacturas?: TablaFacturas;
   tablaArchivos?: TablaArchivos;
   tablaCarpetas?: TablaCarpetas;
+  tablaAclaracion?: TablaAclaracion;
 }
 
 const CHAT_KEY = 'akx_chat';

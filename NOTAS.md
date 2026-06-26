@@ -73,6 +73,14 @@ Para listados largos, `chatear()` puede devolver tablas paginadas además del ma
 
 El front (`inicio.ts`/`inicio.html`) las pinta como tablas con controles ← Página X de Y →; al cambiar de página de facturas/archivos sustituye las filas del mensaje (`ChatService.actualizarMensaje`) tras pedir la página vía REST.
 
+## Chat — tabla clicable de aclaración
+
+Cuando `resolverArchivo`/`resolverCarpeta` devuelven varias `opciones` (coincidencias exactas o sugerencias por parecido), `chatear()` ya armaba el texto markdown (`mensajeAclaracion`, lista con guiones) — ahora además devuelve `tablaAclaracion: {titulo, sugerencia, limite, filas: {etiqueta, valor}[]}` con las MISMAS opciones, para no tener que escribir el nombre a mano. `titulo` es el encabezado (`cabeceraAclaracion`, "¿Querías decir...?" / "¿cuál quieres?") y sustituye al texto plano cuando hay tabla, igual que con `tablaArchivos`/`tablaCarpetas`/`tablaFacturas`.
+
+Construcción centralizada en `respuestaAclaracion(opciones, sugerencia, acciones, extra?)`: hay ~9 puntos en `chatear()` que antes devolvían `{ respuesta: mensajeAclaracion(...), acciones }` a mano; todos pasan por este helper para no desincronizar el texto y la tabla. `filaAclaracion` mapea cada opción (string para carpetas, `{nombre,carpeta}` para archivos) a `{etiqueta, valor}` — `valor` es lo que se manda al pulsar.
+
+El front (`inicio.ts`): pulsar una fila llama `seleccionarAclaracion(valor)`, que reusa el mismo camino que escribir y enviar el texto a mano (`enviarTexto`, extraído de `enviar()`). Esto funciona SIN tocar el backend porque `pendientesAclaracion` ya comparaba el siguiente mensaje del usuario contra las opciones ofrecidas (ver "Resolución fuzzy de nombres" arriba) — la tabla es solo un atajo de UI para no escribir el nombre, no un mecanismo nuevo de selección. Paginación en memoria igual que `tablaCarpetas` (el backend manda todas las opciones, como mucho 5 por la cascada fuzzy o todas las coincidencias exactas).
+
 ---
 
 ## OCR y descripción de imágenes (`extraccion.service.ts`) — cascada de 3 pasadas

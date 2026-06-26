@@ -2,7 +2,7 @@ import { AfterViewInit, Component, ElementRef, inject, signal, viewChild } from 
 import { FormsModule } from '@angular/forms';
 import { marked } from 'marked';
 import { AuthService } from '../../core/auth.service';
-import { ChatService, TablaCarpetas } from '../../core/chat.service';
+import { ChatService, TablaAclaracion, TablaCarpetas } from '../../core/chat.service';
 import { ArchivosService } from '../../core/archivos.service';
 import { ToastService } from '../../core/toast.service';
 import { mensajeError } from '../../shared/errores';
@@ -60,10 +60,22 @@ export class InicioPage implements AfterViewInit {
   enviar() {
     const texto = this.chat.borrador().trim();
     if (!texto || this.pensando()) return;
+    this.chat.borrador.set('');
+    this.enviarTexto(texto);
+  }
+
+  // Pulsar una fila de la tabla de aclaración manda su `valor` igual que si el
+  // usuario lo hubiera escrito y dado a Enter: reutiliza el mismo pre-flight del
+  // backend que completa la acción pendiente con la opción elegida.
+  protected seleccionarAclaracion(valor: string) {
+    this.enviarTexto(valor);
+  }
+
+  private enviarTexto(texto: string) {
+    if (!texto || this.pensando()) return;
 
     this.chat.añadir({ de: 'usuario', texto });
     this.scrollAbajo();
-    this.chat.borrador.set('');
     this.pensando.set(true);
 
     // Como contexto enviamos SOLO tus mensajes (no las respuestas del bot). Si
@@ -87,6 +99,7 @@ export class InicioPage implements AfterViewInit {
           tablaFacturas: r.tablaFacturas,
           tablaArchivos: r.tablaArchivos,
           tablaCarpetas: r.tablaCarpetas,
+          tablaAclaracion: r.tablaAclaracion,
         });
         this.pensando.set(false);
         this.scrollAbajo();
@@ -156,6 +169,23 @@ export class InicioPage implements AfterViewInit {
     const t = m?.tablaCarpetas;
     if (!t || nuevaPagina < 1 || nuevaPagina > this.totalPaginasCarpetas(t)) return;
     this.chat.actualizarMensaje(index, { ...m, tablaCarpetas: { ...t, pagina: nuevaPagina } });
+  }
+
+  // Aclaración: igual que carpetas, todas las opciones vienen en el mensaje y se
+  // pagina en memoria (normalmente son pocas, pero por si hay muchas coincidencias).
+  protected totalPaginasAclaracion(t: TablaAclaracion): number {
+    return Math.max(1, Math.ceil(t.filas.length / t.limite));
+  }
+  protected filasAclaracionVisibles(t: TablaAclaracion): { etiqueta: string; valor: string }[] {
+    const pagina = t.pagina ?? 1;
+    const ini = (pagina - 1) * t.limite;
+    return t.filas.slice(ini, ini + t.limite);
+  }
+  protected paginarAclaracion(index: number, nuevaPagina: number) {
+    const m = this.mensajes()[index];
+    const t = m?.tablaAclaracion;
+    if (!t || nuevaPagina < 1 || nuevaPagina > this.totalPaginasAclaracion(t)) return;
+    this.chat.actualizarMensaje(index, { ...m, tablaAclaracion: { ...t, pagina: nuevaPagina } });
   }
 
   // Abre el archivo igual que en el explorador: PDF/imagen/texto en una pestaña

@@ -19,7 +19,7 @@
           @for (m of mensajes(); track $index) {
             <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
               @if (m.de === 'bot') {
-                @if (m.tablaCarpetas || m.tablaArchivos || m.tablaFacturas) {
+                @if (m.tablaCarpetas || m.tablaArchivos || m.tablaFacturas || m.tablaAclaracion) {
                   @if (m.tablaCarpetas; as tc) {
                     <h3 class="tabla-titulo">{{ tc.titulo }} ({{ tc.filas.length }})</h3>
                     <ul class="lista-carpetas">
@@ -87,6 +87,30 @@
                         <button class="btn btn-outline btn-sm" [disabled]="tf.pagina <= 1" (click)="paginarFacturas($index, tf.pagina - 1)">←</button>
                         <span class="muted">Página {{ tf.pagina }} de {{ tf.totalPaginas }}</span>
                         <button class="btn btn-outline btn-sm" [disabled]="tf.pagina >= tf.totalPaginas" (click)="paginarFacturas($index, tf.pagina + 1)">→</button>
+                      </div>
+                    }
+                  }
+                  @if (m.tablaAclaracion; as tac) {
+                    <p class="tabla-titulo">{{ tac.titulo }}</p>
+                    <table class="table tabla-chat">
+                      <tbody>
+                        @for (o of filasAclaracionVisibles(tac); track o.valor) {
+                          <tr>
+                            <td>{{ o.etiqueta }}</td>
+                            <td>
+                              <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="seleccionarAclaracion(o.valor)">
+                                Elegir
+                              </button>
+                            </td>
+                          </tr>
+                        }
+                      </tbody>
+                    </table>
+                    @if (totalPaginasAclaracion(tac) > 1) {
+                      <div class="pag-chat">
+                        <button class="btn btn-outline btn-sm" [disabled]="(tac.pagina ?? 1) <= 1" (click)="paginarAclaracion($index, (tac.pagina ?? 1) - 1)">←</button>
+                        <span class="muted">Página {{ tac.pagina ?? 1 }} de {{ totalPaginasAclaracion(tac) }}</span>
+                        <button class="btn btn-outline btn-sm" [disabled]="(tac.pagina ?? 1) >= totalPaginasAclaracion(tac)" (click)="paginarAclaracion($index, (tac.pagina ?? 1) + 1)">→</button>
                       </div>
                     }
                   }
