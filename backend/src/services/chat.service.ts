@@ -1165,6 +1165,20 @@ export const chatear = async (
   // Sin tildes, para los pre-flights de verbos de acción: así "bórralo todo" /
   // "elimínalo" / "vacíalas" casan igual que "borra todo" / "elimina" / "vacia".
   const msgSinTildes = quitarTildes(msgLower);
+  // Detecta "factura(s)" tolerando una errata de 1 letra (ej. "fcaturas",
+  // "facturs") SIN reescribir msgSinTildes: los pre-flights de abajo usan
+  // /\bfacturas?\b/.test(msgSinTildes) y, si esa palabra concreta tiene una
+  // errata, ninguno encaja y el mensaje cae en el bucle de tools del modelo
+  // (poco fiable, ver NOTAS.md), que se queda reintentando sin converger —
+  // de ahí el chat "colgado". Se usa una función aparte (en vez de corregir
+  // el texto in-place) para no desalinear los índices que extraerClienteDeFrase
+  // / resolverCarpeta necesitan para extraer substrings del mensaje original.
+  const contieneFactura = (texto: string): boolean =>
+    texto.split(/\s+/).some((palabra) => {
+      const p = palabra.replace(/[^a-z]/gi, "");
+      if (/^facturas?$/.test(p)) return true;
+      return p.length >= 6 && p.length <= 9 && (distanciaLev(p, "factura") === 1 || distanciaLev(p, "facturas") === 1);
+    });
   // Patrones de verbo reutilizados por los pre-flights de borrado/restaurar:
   // admiten el pronombre enclítico pegado ("bórralo", "elimínala", "sácalos")
   // ya que sin él "borra"/"elimina" no aparecen como palabra completa dentro
@@ -1649,7 +1663,7 @@ export const chatear = async (
   // comprueba ANTES del listado general para que tenga prioridad cuando se
   // menciona "factura(s)".
   const esListarFacturasPapelera =
-    /\bfacturas?\b/.test(msgSinTildes) &&
+    contieneFactura(msgSinTildes) &&
     /papelera/.test(msgSinTildes) &&
     !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes);
   if (esListarFacturasPapelera) {
@@ -1689,7 +1703,7 @@ export const chatear = async (
     /papelera/.test(msgLower) &&
     /(qu[eé]\s+hay|lista(r)?|dame|mu[eé]stra(me)?|ense[ñn]a(me)?|p[aá]sa(me)?|ver)/.test(msgLower) &&
     !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes) &&
-    !/\bfacturas?\b/.test(msgSinTildes);
+    !contieneFactura(msgSinTildes);
   if (esListarPapelera) {
     const lista = await listarPapelera(usuarioId);
     if (lista.length === 0) return { respuesta: "La papelera está vacía.", acciones };
@@ -1894,7 +1908,7 @@ export const chatear = async (
   // si además pide total/facturado/vendido/ranking, que ya tienen su propio
   // pre-flight.
   const esListarFacturasPeriodo =
-    /\bfacturas?\b/.test(msgSinTildes) &&
+    contieneFactura(msgSinTildes) &&
     !pideTotales &&
     !esRankingVentas &&
     (new RegExp(`\\b(${Object.keys(MESES).join("|")}|20\\d{2})\\b`).test(msgSinTildes) ||
@@ -1994,7 +2008,7 @@ export const chatear = async (
   // literalmente "factura") se leía como "cliente = factura a factura222" y
   // devolvía un listado vacío en vez de renombrar nada.
   if (
-    /\bfacturas?\b/.test(msgSinTildes) &&
+    contieneFactura(msgSinTildes) &&
     !pideTotales &&
     !esRankingVentas &&
     !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes)
@@ -2006,9 +2020,7 @@ export const chatear = async (
     // bucle de tools del modelo, que no tiene una tool de listado genérico y
     // se quedaba reintentando sin converger (respuesta colgada).
     const esListadoGenerico =
-      !cliente && new RegExp(`(${VERBO_LISTAR}|${VERBO_ABRIR})\\s+(todas\\s+)?(mis\\s+)?(las\\s+)?facturas?\\b`).test(
-        msgSinTildes,
-      );
+      !cliente && new RegExp(`\\b(${VERBO_LISTAR}|${VERBO_ABRIR})\\b`).test(msgSinTildes);
     if (cliente || esListadoGenerico) {
       const filtro: FiltroFacturas = cliente ? { cliente } : {};
       const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
@@ -2607,7 +2619,33 @@ export const chatear = async (
   // se fuerza una respuesta final sin más herramientas en vez de seguir el bucle.
   const llamadasVistas = new Map<string, unknown>();
 
+  // Presupuesto de tiempo total del turno: con MAX_ITER=15 y hasta
+  // OLLAMA_TIMEOUT_MS (45s) por llamada, el peor caso son ~11 minutos si el
+  // modelo va "probando" tools distintas sin converger (no cae en la
+  // detección de llamada repetida porque cambia de tool cada vez). Eso es lo
+  // que el usuario ve como chat "colgado". Cortamos el bucle si se supera
+  // este presupuesto, igual que el camino de "llamada repetida": se le pide
+  // al modelo una respuesta final sin tools con lo que ya tenga.
+  const TURNO_TIMEOUT_MS = 60_000;
+  const turnoInicio = Date.now();
+
   for (let i = 0; i < MAX_ITER; i++) {
+    if (Date.now() - turnoInicio > TURNO_TIMEOUT_MS) {
+      messages.push({
+        role: "user",
+        content:
+          "Se ha agotado el tiempo disponible. Responde YA en texto con lo que tengas (datos reales de mensajes \"tool\" anteriores si los hay), sin llamar a ninguna herramienta más.",
+      });
+      const final = await llamarOllama(messages, true);
+      return {
+        respuesta:
+          final.content && !esRespuestaInutil(final.content)
+            ? final.content
+            : "No he podido completar esa petición a tiempo. ¿Puedes reformularla de forma más concreta (por ejemplo, indicando qué facturas o qué periodo)?",
+        acciones,
+        archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
+      };
+    }
     const respuesta = await llamarOllama(messages);
     messages.push(respuesta);
 
