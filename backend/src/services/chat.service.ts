@@ -327,6 +327,7 @@ const registrarAclaracion = (
   opciones: OpcionAclaracion[],
   sugerencia = false,
 ) => {
+  console.log("[DEBUG aclaracion] registrarAclaracion", { usuarioId, tool, args, clave, opciones, sugerencia });
   pendientesAclaracion.set(usuarioId, { tool, args, clave, opciones, ts: Date.now() });
   return { necesita_aclaracion: true, opciones, sugerencia };
 };
@@ -1179,6 +1180,13 @@ export const chatear = async (
   // sin contexto. Si no coincide con ninguna opción, se descarta para no
   // aplicar un estado obsoleto a una petición distinta.
   const pendiente = pendientesAclaracion.get(usuarioId);
+  console.log("[DEBUG aclaracion] check pendiente", {
+    usuarioId,
+    idOpcion,
+    ultimoMensaje,
+    encontrado: !!pendiente,
+    pendiente,
+  });
   if (pendiente) {
     pendientesAclaracion.delete(usuarioId);
     if (Date.now() - pendiente.ts < TTL_ACLARACION_MS) {
