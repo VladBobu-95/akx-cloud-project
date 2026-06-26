@@ -31,7 +31,6 @@ import {
 } from "./carpetas.service";
 import { buscarSemantica } from "./rag.service";
 import {
-  escanearFactura,
   obtenerFactura,
   ventasTop,
   totalesFacturado,
@@ -45,9 +44,7 @@ import {
   clientesTopMd,
   listadoFacturasMd,
   formatearFecha,
-  encolarExtraccion,
-  PRIORIDAD_ALTA,
-  PRIORIDAD_BAJA,
+  encolarEscaneoManual,
   type FiltroFacturas,
 } from "./facturas.service";
 import { SYSTEM_PROMPT, TOOLS } from "./chat.tools";
@@ -830,35 +827,28 @@ const ejecutarTool = async (
         };
       }
       case "escanear_todas_facturas": {
-        // Busca todos los PDFs e imágenes. Se escanean de uno en uno (vía la
-        // misma cola de extracción que usa la subida): el OCR/IA de visión es
-        // pesado y escanearlos todos en paralelo competiría por la misma GPU.
-        // No se relanza el OCR aquí (eso solo pasa al subir, vía encolarOcr):
-        // si una imagen no tiene texto extraído es porque ya se intentó y no
-        // encontró nada (o el usuario aún no la describió a mano).
+        // Busca todos los PDFs e imágenes y los pone a escanear en segundo
+        // plano (vía encolarEscaneoManual, igual que "Escanear" en el
+        // explorador): NO espera al resultado. Con varias facturas el OCR/IA
+        // puede tardar minutos y colgaba la petición del chat hasta el 504
+        // de nginx (ver bugs.txt). El progreso se ve en la columna "Estado".
         const todos = (await listarArchivos(usuarioId, undefined, 1, 200)).archivos;
         const facturas = todos.filter((a) =>
-          /\.(pdf|jpg|jpeg|png|webp|tiff?)$/i.test(a.nombre) ||
-          /^(application\/pdf|image\/)/.test(a.mimeType),
+          (/\.(pdf|jpg|jpeg|png|webp|tiff?)$/i.test(a.nombre) ||
+            /^(application\/pdf|image\/)/.test(a.mimeType)) &&
+          a.estadoEscaneo !== "pendiente" && a.estadoEscaneo !== "escaneando",
         );
-        if (facturas.length === 0) return { ok: true, escaneadas: 0, nota: "No se encontraron facturas." };
-        let ok = 0;
-        let errores = 0;
-        await Promise.all(
-          facturas.map(async (a) => {
-            // Igual que al subir: los PDFs (rápidos) adelantan a las imágenes
-            // (OCR de visión, mucho más lento) que aún no hayan empezado.
-            const prioridad = /^image\//.test(a.mimeType) ? PRIORIDAD_BAJA : PRIORIDAD_ALTA;
-            try {
-              await encolarExtraccion(() => escanearFactura(usuarioId, a.id), prioridad);
-              ok++;
-            } catch {
-              errores++;
-            }
-          }),
-        );
-        acciones.push(`${ok} factura(s) escaneada(s)${errores ? `, ${errores} error(es)` : ""}`);
-        return { ok: true, escaneadas: ok, errores };
+        if (facturas.length === 0) {
+          return { ok: true, resumen: "No se encontraron facturas pendientes de escanear." };
+        }
+        for (const a of facturas) {
+          await encolarEscaneoManual(usuarioId, a.id);
+        }
+        acciones.push(`${facturas.length} factura(s) puesta(s) a escanear en segundo plano`);
+        return {
+          ok: true,
+          resumen: `He puesto a escanear ${facturas.length} factura(s) en segundo plano. Puede tardar varios minutos según cuántas sean — sigue el progreso en la columna "Estado" del explorador, o pregúntame de nuevo más tarde.`,
+        };
       }
       case "obtener_factura": {
         const res = await resolverArchivo(usuarioId, String(args.nombre));
@@ -882,34 +872,54 @@ const ejecutarTool = async (
         const res = await resolverArchivo(usuarioId, String(args.nombre));
         if (res.error) return { error: res.error };
         if (res.opciones) return registrarAclaracion(usuarioId, nombre, args, "nombre", res.opciones, res.sugerencia);
+        if (res.archivo!.estadoEscaneo === "pendiente" || res.archivo!.estadoEscaneo === "escaneando") {
+          return {
+            ok: true,
+            resumen: `"${res.archivo!.nombre}" ya se está escaneando — dame unos segundos y pregúntame de nuevo.`,
+          };
+        }
+        // No se espera al resultado: el OCR/IA de visión puede tardar
+        // minutos y colgaba la petición del chat hasta el 504 de nginx (ver
+        // bugs.txt). Se encola igual que "Escanear" en el explorador.
         const pista = typeof args.pista === "string" ? args.pista : undefined;
-        const r = await escanearFactura(usuarioId, res.archivo!.id, { pista });
-        acciones.push(
-          `Factura escaneada${r.numero ? ` (${r.numero})` : ""}: ${r.lineas} línea/s`,
-        );
-        return { ok: true, resumen: r.resumen, numero: r.numero, lineas: r.lineas };
+        await encolarEscaneoManual(usuarioId, res.archivo!.id, pista);
+        acciones.push(`Escaneo de "${res.archivo!.nombre}" puesto en marcha`);
+        return {
+          ok: true,
+          resumen: `He puesto a escanear "${res.archivo!.nombre}". Puede tardar unos segundos o minutos según el tamaño — pregúntame de nuevo en breve (p. ej. "muéstrame la factura ${res.archivo!.nombre}") para ver el resultado.`,
+        };
       }
       case "ventas_top": {
         const { filtro, titulo } = filtroFacturasDesdeArgs(args);
-        // Si nombra facturas concretas, escanea al vuelo las que aún no lo estén.
+        // Si nombra facturas concretas, pone a escanear (en segundo plano, sin
+        // esperar) las que aún no lo estén: esperar al OCR aquí podía colgar
+        // la petición del chat.
+        let pendientes = 0;
         if (filtro.facturas?.length) {
-          const n = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
-          if (n > 0) acciones.push(`${n} factura(s) escaneada(s) automáticamente`);
+          pendientes = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
         }
         const orden: "asc" | "desc" = args.orden === "menos" ? "asc" : "desc";
         const limite = typeof args.limite === "number" ? args.limite : 10;
         const top = await ventasTop(usuarioId, filtro, { orden, limite });
         const prefijo = orden === "asc" ? "Productos menos vendidos" : "Productos más vendidos";
-        return { resumen: rankingMd(top, `${prefijo} (${titulo})`) };
+        const aviso = pendientes > 0
+          ? `\n\n_${pendientes} factura(s) se están escaneando en segundo plano y todavía no están incluidas — pregúntame de nuevo en breve._`
+          : "";
+        if (pendientes > 0) acciones.push(`${pendientes} factura(s) puesta(s) a escanear`);
+        return { resumen: rankingMd(top, `${prefijo} (${titulo})`) + aviso };
       }
       case "totales_facturas": {
         const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        let pendientes = 0;
         if (filtro.facturas?.length) {
-          const n = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
-          if (n > 0) acciones.push(`${n} factura(s) escaneada(s) automáticamente`);
+          pendientes = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
         }
         const totales = await totalesFacturado(usuarioId, filtro);
-        return { resumen: totalesMd(totales, `Totales facturados (${titulo})`) };
+        const aviso = pendientes > 0
+          ? `\n\n_${pendientes} factura(s) se están escaneando en segundo plano y todavía no están incluidas — pregúntame de nuevo en breve._`
+          : "";
+        if (pendientes > 0) acciones.push(`${pendientes} factura(s) puesta(s) a escanear`);
+        return { resumen: totalesMd(totales, `Totales facturados (${titulo})`) + aviso };
       }
       case "clientes_top": {
         const { filtro, titulo } = filtroFacturasDesdeArgs(args);

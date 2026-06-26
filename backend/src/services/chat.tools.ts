@@ -366,7 +366,7 @@ export const TOOLS = [
     function: {
       name: "escanear_factura",
       description:
-        "Escanea una factura (PDF o imagen) por su nombre: extrae sus datos (artículos, cantidades, precios, totales) y los guarda. Crea un resumen .md. Úsalo cuando pidan escanear/procesar/leer una factura.",
+        "Pone a escanear una factura (PDF o imagen) por su nombre EN SEGUNDO PLANO (no espera al resultado, que puede tardar minutos): extrae sus datos (artículos, cantidades, precios, totales) y los guarda. Crea un resumen .md. Úsalo cuando pidan escanear/procesar/leer una factura.",
       parameters: {
         type: "object",
         properties: {
@@ -382,7 +382,7 @@ export const TOOLS = [
     function: {
       name: "escanear_todas_facturas",
       description:
-        "Escanea TODAS las facturas (PDFs) del usuario de una sola vez y devuelve cuántas se procesaron. Úsalo cuando pidan 'escanea todas las facturas', 'procesa todas', 'analiza mis facturas', 'hazme un resumen de todas las facturas', 'qué facturas tengo', etc. Tras el escaneo, ventas_top devolverá el ranking completo.",
+        "Pone a escanear EN SEGUNDO PLANO todas las facturas (PDFs/imágenes) del usuario que no lo estén ya (no espera al resultado, que puede tardar varios minutos). Úsalo cuando pidan 'escanea todas las facturas', 'procesa todas', 'analiza mis facturas', 'hazme un resumen de todas las facturas', 'qué facturas tengo', etc. El ranking/totales completos solo estarán disponibles unos minutos después, cuando el escaneo termine.",
       parameters: { type: "object", properties: {} },
     },
   },

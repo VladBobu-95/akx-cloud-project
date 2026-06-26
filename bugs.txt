@@ -8,11 +8,7 @@
 - un pdf con imagenes como sabe si utilizar pdf parse o no
 - al selecionar autocompletado en login  usuario y depsues contraseña desaparece la linea vertical
 - pensar en segundo plano(el chatbot) para poder mover 
-- guardar mensaje del chabot (pensando)
-- si le digo muéstrame todas las facturas que me las muestre, o todos los ficheros llamados x.
-- si le digo abre la factura que la abra directamente 
-- Si le digo que copie una fichero me da esto (el resumen de facturas/factura escaneada)
-- si intento copiar despues de elegir de las varias varientes del mismo archivo me sale el resumen
+- guardar mensaje del chabot (pensando) 
 
 -escanea todas las facturas 
  Error 504 (supongo pq ya se escanean en segundo plano al subirlas)

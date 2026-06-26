@@ -1020,9 +1020,11 @@ export const clientesTopMd = (
 };
 
 // Dado un conjunto de identificadores (nº/nombre de archivo), localiza los ficheros
-// de factura que casan y escanea los que aún NO estén escaneados. Devuelve cuántos
-// escaneó. Sirve para que las consultas analíticas funcionen aunque el usuario no
-// haya escaneado antes esas facturas.
+// de factura que casan y PONE A ESCANEAR en segundo plano los que aún no lo
+// estén (vía encolarEscaneoManual: no espera al OCR/IA, que puede tardar
+// minutos y colgaría la petición del chat — ver bugs.txt "escanea todas las
+// facturas... 504"). Devuelve cuántas quedaron encoladas: el llamador debe
+// avisar de que esas aún no entran en el resultado y reintentar más tarde.
 export const asegurarFacturasEscaneadas = async (
   usuarioId: string,
   identificadores: string[],
@@ -1053,20 +1055,17 @@ export const asegurarFacturasEscaneadas = async (
   if (facturasArchivo.length === 0) return 0;
 
   const facturaRepo = AppDataSource.getRepository(Factura);
-  let escaneadas = 0;
+  let encoladas = 0;
   for (const archivo of facturasArchivo) {
+    if (archivo.estadoEscaneo === "pendiente" || archivo.estadoEscaneo === "escaneando") continue;
     const ya = await facturaRepo.findOne({
       where: { archivo: { id: archivo.id }, propietario: { id: usuarioId } },
     });
     if (ya) continue; // ya estaba escaneada
-    try {
-      await escanearFactura(usuarioId, archivo.id);
-      escaneadas++;
-    } catch {
-      // Si un archivo no se puede escanear, lo ignoramos y seguimos con los demás.
-    }
+    await encolarEscaneoManual(usuarioId, archivo.id);
+    encoladas++;
   }
-  return escaneadas;
+  return encoladas;
 };
 
 // Totales globales de ventas + top productos/clientes. Usa el mismo
