@@ -428,6 +428,7 @@ export const TOOLS = [
           cliente: { type: "string", description: "filtrar por cliente (a quién se factura)" },
           emisor: { type: "string", description: "filtrar por emisor/proveedor (quién emite)" },
           producto: { type: "string", description: "filtrar por un producto concreto, ej: tornillos" },
+          moneda: { type: "string", description: "filtrar por divisa, código ISO 4217, ej: EUR, USD, JPY, GBP. Solo si el usuario menciona una moneda (euros, dólares, yenes...)" },
           orden: { type: "string", enum: ["mas", "menos"], description: "'mas' = más vendido (defecto), 'menos' = menos vendido" },
           mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
           anio: { type: "number", description: "año, solo si lo especifica" },
@@ -454,6 +455,7 @@ export const TOOLS = [
           },
           cliente: { type: "string", description: "filtrar por cliente" },
           emisor: { type: "string", description: "filtrar por emisor/proveedor" },
+          moneda: { type: "string", description: "filtrar por divisa, código ISO 4217, ej: EUR, USD, JPY, GBP. Solo si el usuario menciona una moneda (euros, dólares, yenes...)" },
           mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
           anio: { type: "number", description: "año, solo si lo especifica" },
           desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
@@ -472,6 +474,7 @@ export const TOOLS = [
         type: "object",
         properties: {
           emisor: { type: "string", description: "filtrar por emisor/proveedor (quién emite)" },
+          moneda: { type: "string", description: "filtrar por divisa, código ISO 4217, ej: EUR, USD, JPY, GBP. Solo si el usuario menciona una moneda (euros, dólares, yenes...)" },
           orden: { type: "string", enum: ["mas", "menos"], description: "'mas' = quién más gastó (defecto), 'menos' = quién menos" },
           mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
           anio: { type: "number", description: "año, solo si lo especifica" },

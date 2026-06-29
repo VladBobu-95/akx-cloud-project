@@ -1,18 +1,13 @@
 
 -copia factura en la carpeta demo22 y despues copia la carpeta demo22 
-- que no se invente cosas
 - mover varios seleccionados
-- el buscador tarda mucho, es por si se escanea algo al mismo tiempo?
 - highlight palabra en buscador
 - si se sube un archiv oque no reconoce ,error. El chat si no sabe algo error
-- un pdf con imagenes como sabe si utilizar pdf parse o no
-- al selecionar autocompletado en login  usuario y depsues contraseña desaparece la linea vertical
+- al selecionar autocompletado en login usuario y depsues contraseña desaparece la linea vertical
 - pensar en segundo plano(el chatbot) para poder mover 
 - guardar mensaje del chabot (pensando) 
-- abre x( titulo)
-- x
-- abre factura /Error interno del servidor
 - facturas en yen o ...
+- abre facturas junio 2026  de Suministros López SA (o sin de)
 
 -escanea todas las facturas 
  Error 504 (supongo pq ya se escanean en segundo plano al subirlas)

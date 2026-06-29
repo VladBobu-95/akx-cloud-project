@@ -26,7 +26,7 @@ export const ctrlEscanear = async (
   }
 };
 
-// GET /api/facturas?cliente=&emisor=&carpeta=&desde=&hasta=&facturas=a,b&papelera=true&pagina=&limite=
+// GET /api/facturas?cliente=&emisor=&carpeta=&moneda=&desde=&hasta=&facturas=a,b&papelera=true&pagina=&limite=
 // Listado paginado de facturas. Lo usa el cuadro HTML del chat ("facturas de
 // X cliente/carpeta/mes/papelera"): la 1ª página la devuelve el chat ya
 // resuelta; las páginas siguientes las pide el frontend aquí directamente
@@ -47,6 +47,7 @@ export const ctrlListarFacturas = async (
     if (typeof req.query.cliente === "string" && req.query.cliente) filtro.cliente = req.query.cliente;
     if (typeof req.query.emisor === "string" && req.query.emisor) filtro.emisor = req.query.emisor;
     if (typeof req.query.carpeta === "string" && req.query.carpeta) filtro.carpeta = req.query.carpeta;
+    if (typeof req.query.moneda === "string" && req.query.moneda) filtro.moneda = req.query.moneda;
     if (typeof req.query.desde === "string" && req.query.desde) filtro.desde = req.query.desde;
     if (typeof req.query.hasta === "string" && req.query.hasta) filtro.hasta = req.query.hasta;
     if (typeof req.query.facturas === "string" && req.query.facturas) {

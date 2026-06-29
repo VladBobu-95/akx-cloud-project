@@ -146,6 +146,15 @@
         text-align: right;
         white-space: nowrap;
       }
+      /* La primera columna (nombre/archivo) absorbe el ancho sobrante de la
+         tabla, así el resto de columnas —incluida la de botones— se ajustan a su
+         contenido. Sin esto, cuando faltaba la columna "Total" (tablas de
+         archivos/aclaración) la columna de acciones se ensanchaba y los botones
+         "Resumen"/"Abrir" quedaban flotando con mucho hueco a los lados. */
+      .tabla-chat td:first-child,
+      .tabla-chat th:first-child {
+        width: 100%;
+      }
       .tabla-chat .btn {
         font-size: 0.85rem;
       }

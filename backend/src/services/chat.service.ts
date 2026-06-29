@@ -45,6 +45,7 @@ import {
   listadoFacturasMd,
   formatearFecha,
   encolarEscaneoManual,
+  nombreMoneda,
   type FiltroFacturas,
 } from "./facturas.service";
 import { SYSTEM_PROMPT, TOOLS } from "./chat.tools";
@@ -96,6 +97,36 @@ const similitud = (a: string, b: string): number => {
   const max = Math.max(a.length, b.length);
   return max === 0 ? 1 : 1 - distanciaLev(a, b) / max;
 };
+
+// Divisas reconocidas en lenguaje natural → código ISO 4217. El ORDEN importa:
+// las variantes específicas ("dólar canadiense", "peso mexicano") van ANTES que
+// las genéricas ("dólar", "peso"), y USD va al final para que "dólar canadiense"
+// case con CAD y no con USD. Se evita el singular ambiguo ("peso" = masa, "real"
+// = adjetivo): para esos se exige plural o el gentilicio. Se evalúa sobre el
+// texto SIN tildes y en minúsculas (msgSinTildes), por eso "dolar"/"libra" van
+// sin acento. Los símbolos (€, $, £, ¥) se conservan tras quitarTildes/lowercase.
+const MONEDAS: { iso: string; re: RegExp }[] = [
+  { iso: "EUR", re: /\beuros?\b|\beur\b|€/ },
+  { iso: "GBP", re: /\blibras?\b|\bgbp\b|£/ },
+  { iso: "JPY", re: /\byen(es)?\b|\bjpy\b|¥/ },
+  { iso: "CHF", re: /\bfrancos?\s+suizos?\b|\bfrancos?\b|\bchf\b/ },
+  { iso: "CNY", re: /\byuan(es)?\b|\bcny\b|\brenminbi\b/ },
+  { iso: "CAD", re: /\bdolares?\s+canadienses?\b|\bcad\b/ },
+  { iso: "AUD", re: /\bdolares?\s+australianos?\b|\baud\b/ },
+  { iso: "ARS", re: /\bpesos?\s+argentinos?\b|\bars\b/ },
+  { iso: "COP", re: /\bpesos?\s+colombianos?\b|\bcop\b/ },
+  { iso: "CLP", re: /\bpesos?\s+chilenos?\b|\bclp\b/ },
+  { iso: "MXN", re: /\bpesos?\s+mexicanos?\b|\bpesos\b|\bmxn\b/ },
+  { iso: "BRL", re: /\breales\b|\breal\s+brasilen[oa]s?\b|\bbrl\b/ },
+  { iso: "USD", re: /\bdolares?\b|\busd\b|us\$|\$/ },
+];
+// Devuelve el código ISO de la divisa mencionada en el texto, o undefined.
+const detectarMoneda = (texto: string): string | undefined =>
+  MONEDAS.find((m) => m.re.test(texto))?.iso;
+// Regex combinada para BORRAR cualquier mención de divisa de un texto (sin
+// tildes/minúsculas), p. ej. al extraer el nombre de un cliente de "...de Acme
+// en dólares" (para que la divisa no se cuele dentro del nombre del cliente).
+const RE_MONEDA_TODAS = new RegExp(MONEDAS.map((m) => m.re.source).join("|"), "g");
 
 // quitarTildes no cambia la longitud de la cadena (cada letra con tilde se
 // queda en una sola letra sin tilde), así que los índices de un match hecho
@@ -458,6 +489,16 @@ const filtroFacturasDesdeArgs = (
   if (typeof args.producto === "string" && args.producto.trim()) {
     filtro.producto = args.producto.trim();
     partes.push(`producto "${filtro.producto}"`);
+  }
+  // moneda: acepta un código ISO ya normalizado ("USD") o una palabra suelta
+  // ("dólares"), que se normaliza con detectarMoneda. Así funciona tanto si lo
+  // pone un pre-flight (ISO) como si lo alucina el modelo (palabra).
+  if (typeof args.moneda === "string" && args.moneda.trim()) {
+    const iso = detectarMoneda(quitarTildes(args.moneda.toLowerCase())) ?? args.moneda.trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(iso)) {
+      filtro.moneda = iso;
+      partes.push(`en ${nombreMoneda(iso).toLowerCase()}`);
+    }
   }
 
   // Periodo: mes/anio tienen prioridad; si no, año suelto o desde/hasta explícitos.
@@ -1294,6 +1335,47 @@ export const chatear = async (
     return { mes, anio };
   };
 
+  // Divisa mencionada en el mensaje (código ISO o undefined). Se calcula una vez
+  // y la usan todos los pre-flights de facturas de abajo para filtrar por moneda
+  // ("facturas en dólares", "cuánto he facturado en yenes"). Calcularlo siempre
+  // es inocuo: solo se aplica dentro de ramas ya acotadas a facturas.
+  const monedaDetectada = detectarMoneda(msgSinTildes);
+
+  // Limpia el periodo de un nombre de cliente recién extraído. El último "de" de
+  // una frase como "facturas de junio 2026 [de] Acme" arrastra el periodo al
+  // capturar el cliente ("junio 2026 Acme", o "junio 2026" si no hay cliente).
+  // Si el texto NO contiene ningún token de periodo se devuelve TAL CUAL (se
+  // conservan mayúsculas/tildes, p. ej. "Suministros López SA"); si lo contiene,
+  // se quitan meses/años/conectores y se devuelve lo que reste (o null si era
+  // solo periodo). Cuando hay que limpiar, la BD filtra el cliente con
+  // unaccent+ILIKE, así que perder tildes/mayúsculas no afecta a la coincidencia.
+  const limpiarClientePeriodo = (c: string): string | null => {
+    const sin = quitarTildes(c.toLowerCase());
+    const tienePeriodo = new RegExp(`\\b(${Object.keys(MESES).join("|")}|20\\d{2})\\b`).test(sin);
+    if (!tienePeriodo) return c.trim() || null;
+    const limpio = sin
+      .replace(new RegExp(`\\b(${Object.keys(MESES).join("|")})\\b`, "g"), " ")
+      .replace(/\b20\d{2}\b/g, " ")
+      .replace(/\b(de|del|en|mes|ano|este|el|la|los|las|pasado|anterior|actual)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return limpio || null;
+  };
+
+  // Quita cualquier mención de divisa de un nombre de cliente recién extraído
+  // (p. ej. "Acme en dólares" → "acme"); devuelve null si tras quitarla no queda
+  // nada. La BD filtra el cliente con unaccent+ILIKE, así que perder
+  // tildes/mayúsculas aquí no afecta a la coincidencia. Solo se usa cuando se
+  // detectó una moneda en el mensaje (si no, el cliente se conserva tal cual).
+  const limpiarClienteMoneda = (c: string): string | null => {
+    const limpio = quitarTildes(c.toLowerCase())
+      .replace(RE_MONEDA_TODAS, " ")
+      .replace(/\b(en|de|del)\b\s*$/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return limpio || null;
+  };
+
   // Pre-flight: si en el turno anterior se preguntó por un dato libre que
   // faltaba (ej. "¿qué nombre quieres ponerle a X?"), este mensaje ES esa
   // respuesta: se usa tal cual (texto libre, no una opción de una lista) como
@@ -1882,28 +1964,39 @@ export const chatear = async (
       msgSinTildes,
     );
   if (esTotalesMultiple) {
+    const args: Record<string, unknown> = { facturas: nombresFactura };
+    if (monedaDetectada) args.moneda = monedaDetectada;
     const resultado = (await ejecutarTool(
       "totales_facturas",
-      { facturas: nombresFactura },
+      args,
       usuarioId,
       acciones,
     )) as Record<string, unknown>;
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
-  // Pre-flight: "cuánto he facturado/total facturado [en abril] [de cliente X]"
-  // sin nombrar facturas concretas — total agregado filtrado por periodo y/o
-  // cliente (single-dimensión: si hay periodo, no se busca también cliente).
-  // Distinto de esTotalesMultiple (varias facturas nombradas).
+  // Pre-flight: "cuánto he facturado/total facturado [en abril] [de cliente X]
+  // [en dólares]" sin nombrar facturas concretas — total agregado que combina
+  // periodo + cliente + moneda (las dimensiones que aparezcan). Si no se da
+  // ninguna pero el mensaje habla claramente de facturas ("cuánto he facturado
+  // en total"), devuelve los totales de TODO (agrupados por moneda). Distinto de
+  // esTotalesMultiple (varias facturas nombradas).
   const esTotalesGeneral = pideTotales && !esTotalesMultiple && nombresFactura.length < 2;
   if (esTotalesGeneral) {
     const { mes, anio } = detectarMesAnio(msgSinTildes);
-    const cliente = !mes && !anio ? extraerClienteDeFrase(msgSinTildes, msgLower) : null;
-    if (mes || anio || cliente) {
+    const clienteRaw = extraerClienteDeFrase(msgSinTildes, msgLower);
+    let cliente = clienteRaw ? limpiarClientePeriodo(clienteRaw) : null;
+    if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
+    // Señal explícita de facturas, para permitir el total de TODO sin filtros
+    // ("cuánto he facturado") sin disparar con "cuántos archivos tengo en total"
+    // (que también lleva "total" pero no es una pregunta de facturación).
+    const senalFacturas = /\bfacturado\b/.test(msgLower) || contieneFactura(msgSinTildes);
+    if (mes || anio || cliente || monedaDetectada || senalFacturas) {
       const args: Record<string, unknown> = {};
       if (mes) args.mes = mes;
       if (anio) args.anio = anio;
       if (cliente) args.cliente = cliente;
+      if (monedaDetectada) args.moneda = monedaDetectada;
       const resultado = (await ejecutarTool(
         "totales_facturas",
         args,
@@ -1939,9 +2032,12 @@ export const chatear = async (
     // "qué es lo más vendido DE [cliente] X" — ranking de productos acotado a
     // ese cliente, no global. Solo si no hay periodo (single-dimensión).
     if (!mes && !anio) {
-      const cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
+      let cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
+      if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
       if (cliente) args.cliente = cliente;
     }
+    // "lo más vendido en dólares" — ranking acotado a esa divisa.
+    if (monedaDetectada) args.moneda = monedaDetectada;
     const resultado = (await ejecutarTool("ventas_top", args, usuarioId, acciones)) as Record<
       string,
       unknown
@@ -2010,6 +2106,21 @@ export const chatear = async (
       filtro.hasta = `${anio}-12-31`;
       partes.push(`${anio}`);
     }
+    // Combinar el periodo con cliente ("facturas de junio 2026 de Acme") y/o
+    // moneda ("...en dólares"): el periodo no es la única dimensión. El cliente
+    // se descarta si en realidad es solo el periodo (el "de junio 2026" suelto
+    // que captura extraerClienteDeFrase del último "de").
+    const clienteRaw = extraerClienteDeFrase(msgSinTildes, msgLower);
+    let cliente = clienteRaw ? limpiarClientePeriodo(clienteRaw) : null;
+    if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
+    if (cliente) {
+      filtro.cliente = cliente;
+      partes.push(`de ${cliente}`);
+    }
+    if (monedaDetectada) {
+      filtro.moneda = monedaDetectada;
+      partes.push(`en ${nombreMoneda(monedaDetectada).toLowerCase()}`);
+    }
     const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
     const titulo = `Facturas de ${partes.join(" ")}`;
     return {
@@ -2053,8 +2164,9 @@ export const chatear = async (
     }
     const ruta = res.ruta!;
     const filtro: FiltroFacturas = { carpeta: ruta };
+    if (monedaDetectada) filtro.moneda = monedaDetectada;
     const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
-    const titulo = `Facturas en ${ruta}`;
+    const titulo = `Facturas en ${ruta}${monedaDetectada ? ` en ${nombreMoneda(monedaDetectada).toLowerCase()}` : ""}`;
     return {
       respuesta: listadoFacturasMd(filas, titulo),
       acciones,
@@ -2116,18 +2228,25 @@ export const chatear = async (
     !esRankingVentas &&
     !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes)
   ) {
-    const cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
+    let cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
+    // Si hay moneda, quitarla del nombre del cliente ("facturas de Acme en
+    // dólares" → cliente "acme", no "acme en dolares").
+    if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
     // Sin cliente: "muestra/dame/lista todas las facturas" (sin periodo, sin
-    // carpeta, sin cliente) es un LISTADO de TODAS las facturas sin filtro.
-    // Sin este caso, el mensaje no encajaba en ningún pre-flight y caía en el
-    // bucle de tools del modelo, que no tiene una tool de listado genérico y
-    // se quedaba reintentando sin converger (respuesta colgada).
+    // carpeta, sin cliente) es un LISTADO de TODAS las facturas sin filtro. Si
+    // se nombra una moneda ("todas las facturas en yenes") también cuenta como
+    // listado genérico aunque no haya verbo de listar. Sin este caso, el mensaje
+    // no encajaba en ningún pre-flight y caía en el bucle de tools del modelo,
+    // que no tiene una tool de listado genérico y se quedaba sin converger.
     const esListadoGenerico =
-      !cliente && new RegExp(`\\b(${VERBO_LISTAR}|${VERBO_ABRIR})\\b`).test(msgSinTildes);
+      !cliente &&
+      (new RegExp(`\\b(${VERBO_LISTAR}|${VERBO_ABRIR})\\b`).test(msgSinTildes) || !!monedaDetectada);
     if (cliente || esListadoGenerico) {
       const filtro: FiltroFacturas = cliente ? { cliente } : {};
+      if (monedaDetectada) filtro.moneda = monedaDetectada;
       const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
-      const titulo = cliente ? `Facturas de ${cliente}` : "Todas las facturas";
+      const sufijoMoneda = monedaDetectada ? ` en ${nombreMoneda(monedaDetectada).toLowerCase()}` : "";
+      const titulo = (cliente ? `Facturas de ${cliente}` : "Todas las facturas") + sufijoMoneda;
       return {
         respuesta: listadoFacturasMd(filas, titulo),
         acciones,

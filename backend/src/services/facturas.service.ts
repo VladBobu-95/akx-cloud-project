@@ -300,7 +300,7 @@ const NOMBRES_MONEDA: Record<string, string> = {
   CHF: "Francos suizos", MXN: "Pesos mexicanos", BRL: "Reales", CNY: "Yuanes",
   CAD: "Dólares canadienses", AUD: "Dólares australianos",
 };
-const nombreMoneda = (m: string): string => NOMBRES_MONEDA[m] ?? m;
+export const nombreMoneda = (m: string): string => NOMBRES_MONEDA[m] ?? m;
 
 // Formato de cantidades (unidades): separador de miles, sin decimales forzados,
 // p. ej. 1500 → "1.500", 2.5 → "2,5".
@@ -896,6 +896,11 @@ export type FiltroFacturas = {
   // carpeta y todo su subárbol. La resolución de nombre→ruta (con manejo de
   // ambigüedad) se hace en el caller (chat.service.ts, vía resolverCarpeta).
   carpeta?: string;
+  // Código ISO 4217 de divisa (ej. "USD", "JPY") YA normalizado por el caller.
+  // Filtra solo las facturas en esa moneda — útil para "facturas en dólares" o
+  // "cuánto he facturado en yenes". Se compara contra f."moneda" (que se guarda
+  // siempre normalizada a ISO en mayúsculas, ver normalizarMoneda).
+  moneda?: string;
 }
 
 // Construye las condiciones WHERE y los parámetros posicionales a partir del filtro.
@@ -944,6 +949,10 @@ const construirFiltro = (
     const r = filtro.carpeta;
     cond.push(`(a."carpeta" = ${add(r)} OR a."carpeta" LIKE ${add(`${r}/%`)})`);
   }
+  // Igualdad exacta: la moneda se guarda siempre normalizada a ISO en mayúsculas,
+  // y el caller normaliza la que pide el usuario de la misma forma.
+  if (filtro.moneda?.trim())
+    cond.push(`f."moneda" = ${add(filtro.moneda.trim().toUpperCase())}`);
 
   return { where: cond.join(" AND "), params };
 };
