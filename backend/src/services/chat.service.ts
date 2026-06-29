@@ -2064,6 +2064,26 @@ export const chatear = async (
     };
   }
 
+  // Detección temprana de "(pásame/dame...) el resumen de X" / "resumen X" (el
+  // resumen de una factura/archivo CONCRETO). Se calcula AQUÍ —antes del pre-flight
+  // de facturas de abajo— porque ese, al ver "factura" en "resumen de factura_29",
+  // lo confundía con un LISTADO por cliente ("Facturas de factura_29 (0)") o pedía
+  // aclaración. Aquí solo se calcula el match para poder excluirlo; la resolución
+  // real se hace más abajo (después de esResumenGeneral, que cubre "de todo/ventas").
+  // Se excluye el caso general (de todo/ventas/general) para que lo trate
+  // esResumenGeneral, y las stopwords ("eso", "esto"...) que no son un nombre.
+  const matchResumenArchivo = msgSinTildes.match(
+    new RegExp(
+      `^(?:(?:${VERBO_LISTAR}|${VERBO_ABRIR}|lee(?:me)?|que\\s+dice)\\s+)?(?:el\\s+|la\\s+)?resumen(?:es)?\\s+(?:de\\s+(?:la\\s+|el\\s+|las\\s+|los\\s+)?|del\\s+)?["']?([\\wÀ-ÿ.\\- ]+?)["']?\\s*\\??\\s*$`,
+    ),
+  );
+  const nombreResumen = matchResumenArchivo?.[1]?.trim();
+  const esResumenArchivoConcreto =
+    !!matchResumenArchivo &&
+    !!nombreResumen &&
+    !STOPWORDS_NOMBRE.has(nombreResumen) &&
+    !/\b(de\s+todo|de\s+ventas|general)\b/.test(msgSinTildes);
+
   // Pre-flight: "pásame/dame/búscame todas las facturas de [cliente] X" es un
   // LISTADO de facturas concretas filtrado por CLIENTE (con botón para abrir
   // cada una) — el modelo a veces no llamaba a ninguna tool para esto, o
@@ -2079,6 +2099,7 @@ export const chatear = async (
   // devolvía un listado vacío en vez de renombrar nada.
   if (
     contieneFactura(msgSinTildes) &&
+    !esResumenArchivoConcreto &&
     !pideTotales &&
     !esRankingVentas &&
     !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes)
@@ -2241,17 +2262,11 @@ export const chatear = async (
   // resumen de un archivo o factura CONCRETOS (no el general "de todo/de ventas",
   // ya cubierto arriba en esResumenGeneral, que retorna antes de llegar aquí). Es
   // el mismo artefacto que "abre/lee X": el resumen estructurado si es factura, el
-  // texto extraído si no. Sin esto, "el resumen de X" no encaja con ninguna tool
-  // (el modelo pedía aclaraciones o se inventaba el contenido). Si el nombre no
-  // resuelve a un archivo real, se deja pasar al flujo normal.
-  const matchResumenArchivo = msgSinTildes.match(
-    new RegExp(
-      `^(?:(?:${VERBO_LISTAR}|${VERBO_ABRIR}|lee(?:me)?|que\\s+dice)\\s+)?(?:el\\s+|la\\s+)?resumen(?:es)?\\s+(?:de\\s+(?:la\\s+|el\\s+|las\\s+|los\\s+)?|del\\s+)?["']?([\\wÀ-ÿ.\\- ]+?)["']?\\s*\\??\\s*$`,
-    ),
-  );
-  const nombreResumen = matchResumenArchivo?.[1]?.trim();
-  if (matchResumenArchivo && nombreResumen && !STOPWORDS_NOMBRE.has(nombreResumen)) {
-    const r = await mostrarContenidoArchivo(grupoOriginal(msgLower, matchResumenArchivo).trim());
+  // texto extraído si no. El match (esResumenArchivoConcreto) se calcula más arriba
+  // para poder excluirlo del pre-flight de facturas; aquí se resuelve de verdad. Si
+  // el nombre no resuelve a un archivo real, se deja pasar al flujo normal.
+  if (esResumenArchivoConcreto) {
+    const r = await mostrarContenidoArchivo(grupoOriginal(msgLower, matchResumenArchivo!).trim());
     if (r) return r;
   }
 
