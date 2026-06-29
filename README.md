@@ -248,6 +248,15 @@ con ejemplos reales de frases que entiende:
   - "¿cuánto le he facturado a Ferretería Sánchez?"
   - "total facturado en 2026" / "totales de factura_01 y factura_02"
   - "top clientes por gasto total" / "¿qué cliente me ha comprado menos?" / "¿quién es mi mejor cliente?"
+  - "pásame todas las facturas en yen / dólares / euros"	Listado filtrado por divisa
+  - "abre facturas de junio 2026 de Suministros López SA"	Listado periodo + cliente
+  - "abre facturas de junio 2026 Suministros López SA" (sin "de")	Igual — separa el periodo del nombre del cliente
+  - "facturas de Acme en dólares"	Listado cliente + divisa (quita "en dólares" del nombre)
+  - "facturas de la carpeta 2026 en yenes"	Listado carpeta + divisa
+  - "cuánto he facturado en dólares"	Totales en USD
+  - "cuánto he facturado en marzo de Acme en euros"	Totales periodo + cliente + divisa
+  - "cuánto he facturado" (en total)	Totales de todo, agrupados por moneda
+  - "lo más vendido en dólares"	Ranking de productos filtrado por divisa
 - **Imágenes** — ver qué contienen, buscarlas por contenido, o tratarlas como factura:
   - "qué dice foto.jpg" / "muéstrame foto.jpg" (la descripción que se generó al
     subirla: el OCR automático si tenía texto real, o la escrita a mano si no lo tenía)

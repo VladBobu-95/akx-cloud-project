@@ -1,5 +1,9 @@
 
+- despues de escribir un mensaje en chat que quede sleccionado el chat para escribir otro
+- si se escanea mediante chat el resumen.md no actualiza creo
+- "de todo" escanea todo
 -copia factura en la carpeta demo22 y despues copia la carpeta demo22 
+-pasame todas las facturas en dolar 
 - mover varios seleccionados
 - highlight palabra en buscador
 - si se sube un archiv oque no reconoce ,error. El chat si no sabe algo error

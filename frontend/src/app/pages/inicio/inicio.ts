@@ -25,6 +25,7 @@ export class InicioPage implements AfterViewInit {
   protected pensando = signal(false);
 
   private mensajesEl = viewChild<ElementRef<HTMLDivElement>>('mensajesContainer');
+  private inputChat = viewChild<ElementRef<HTMLInputElement>>('inputChat');
 
   // Al volver a esta página (Angular recrea el componente), la conversación ya
   // tiene mensajes guardados pero la vista arranca con scroll en 0 — sin esto
@@ -113,11 +114,15 @@ export class InicioPage implements AfterViewInit {
         });
         this.pensando.set(false);
         this.scrollAbajo();
+
+        setTimeout(() => this.inputChat()?.nativeElement.focus(), 0)
       },
       error: (err) => {
         this.chat.añadir({ de: 'bot', texto: mensajeError(err) });
         this.pensando.set(false);
         this.scrollAbajo();
+        
+        setTimeout(() => this.inputChat()?.nativeElement.focus(), 0);
       },
     });
   }
