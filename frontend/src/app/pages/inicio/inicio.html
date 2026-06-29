@@ -48,7 +48,7 @@
                             <td><span class="muted">{{ a.carpeta }}</span></td>
                             <td>
                               <div class="acciones-fila">
-                                <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="resumenArchivo(a.nombre)">📄 Resumen</button>
+                                <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="resumenFactura(a.nombre)">📄 Resumen</button>
                                 <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: a.id, nombre: a.nombre })">📂 Abrir</button>
                               </div>
                             </td>
@@ -79,7 +79,7 @@
                             <td>
                               @if (f.archivoId && f.archivoNombre) {
                                 <div class="acciones-fila">
-                                  <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="resumenArchivo(f.archivoNombre)">📄 Resumen</button>
+                                  <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="resumenFactura(f.archivoNombre)">📄 Resumen</button>
                                   <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">📂 Abrir</button>
                                 </div>
                               }
