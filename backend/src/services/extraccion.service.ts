@@ -30,6 +30,11 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
       ],
       stream: false,
       options: { temperature: 0, num_predict: MAX_TOKENS_OCR },
+      // keep_alive mantiene el VLM (granite/deepseek-ocr) cargado entre imágenes
+      // de un mismo lote. La cola agrupa por fases para que el swap deepseek↔qwen
+      // sea uno por lote (no por imagen); esto evita además que, dentro de la fase,
+      // Ollama descargue el modelo por inactividad entre dos imágenes consecutivas.
+      keep_alive: "10m",
     }),
   });
   const data = (await res.json()) as {

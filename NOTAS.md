@@ -44,7 +44,7 @@ Máx 15 iteraciones: llama Ollama → si hay `tool_calls` → ejecuta → repite
 
 ## Chat — analítica de facturas (`ventas_top`, `totales_facturas`, `clientes_top`)
 
-Las tres aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo `ventas_top`), `mes`/`anio` o `desde`/`hasta`, `orden`. Si se nombran facturas no escaneadas, se escanean al vuelo (`asegurarFacturasEscaneadas`) antes de agregar (excepto `clientes_top`). Los filtros de texto usan `unaccent()` en ambos lados del `ILIKE` (migración `HabilitarUnaccent`). El filtro base excluye facturas cuyo archivo está en la papelera (`a."eliminadoEn" IS NULL`). `clientes_top` agrupa por `f."cliente"` y suma `f."total"`, sin JOIN con `lineas_factura`.
+Las tres aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo `ventas_top`), `mes`/`anio` o `desde`/`hasta`, `orden`. Si se nombran facturas no escaneadas, `asegurarFacturasEscaneadas` las **encola en segundo plano** (`encolarEscaneoManual`, no espera) y devuelve cuántas quedaron pendientes; la respuesta agrega con lo que ya hay y añade un aviso "_N factura(s) se están escaneando…, pregúntame de nuevo_" (excepto `clientes_top`). **Antes se escaneaban sincrónicamente aquí mismo** (`await escanearFactura`), y con varias facturas el OCR/IA tardaba más que el `proxy_read_timeout` de nginx (120s) → la petición del chat colgaba hasta el **504**. Los filtros de texto usan `unaccent()` en ambos lados del `ILIKE` (migración `HabilitarUnaccent`). El filtro base excluye facturas cuyo archivo está en la papelera (`a."eliminadoEn" IS NULL`). `clientes_top` agrupa por `f."cliente"` y suma `f."total"`, sin JOIN con `lineas_factura`.
 
 Las celdas de texto libre de estas tablas (cliente/emisor/producto/descripción) pasan por `celdaMd` (colapsa saltos de línea, neutraliza `|`, acota a 80 chars) para que un valor mal extraído por el modelo pequeño —p. ej. un `cliente` con nombre+email+teléfono pegados— no rompa la estructura de la tabla markdown.
 
@@ -54,7 +54,8 @@ Las celdas de texto libre de estas tablas (cliente/emisor/producto/descripción)
 
 ## Chat — tools con bypass (markdown preconstruido, € server-side)
 
-- `escanear_factura` → OCR (deepseek) + extracción JSON forzada con Ollama → guarda en BD → markdown. Rechaza con 422 en vez de inventar si no hay importes ni número/fecha/emisor reales (`soloSiFactura`; ver "No inventar facturas").
+- `escanear_factura` → **encola el escaneo en segundo plano** (`encolarEscaneoManual`, igual que el botón "Escanear" del explorador) y responde al instante "lo he puesto a escanear, pregúntame de nuevo"; NO espera al OCR/extracción (que tardaba minutos y colgaba el chat hasta el 504 de nginx). El escaneo real (OCR deepseek + extracción JSON forzada con Ollama → BD → markdown) corre en la cola; rechaza con 422 en vez de inventar si no hay importes ni número/fecha/emisor reales (`soloSiFactura`; ver "No inventar facturas"). Si el archivo ya está `pendiente`/`escaneando`, avisa sin re-encolar.
+- `escanear_todas_facturas` → encola en segundo plano todos los archivos candidatos que no estén ya `pendiente`/`escaneando`. Parámetro **`tipo`**: `"pdf"` (por defecto, solo PDFs — las imágenes sueltas casi nunca son factura y su OCR es mucho más lento), `"imagenes"` (SOLO imágenes), `"todo"` (PDFs + imágenes). Hay un **pre-flight determinista** ("escanea/procesa **todas** las facturas/imágenes/todo", sin dígitos) que fija `tipo` por palabra clave sin depender del modelo pequeño.
 - `obtener_factura` → resuelve con `resolverArchivo` (maneja ambigüedad/no-encontrado) y lee de BD, sin re-escanear.
 - `ventas_top` → ranking de productos (GROUP BY sobre `lineas_factura`).
 - `totales_facturas` → totales (nº, subtotal, IVA, total) filtrados.
@@ -119,7 +120,7 @@ Al subir PDF/imagen, además del RAG, `ctrlSubir` dispara `autoEscanearArchivo` 
 1. Si es PDF/imagen, se escanea con `escanearFactura(..., { soloSiFactura: true })`.
 2. Guardia: solo persiste la factura si la extracción parece factura (líneas o importes > 0).
 
-Para facturas subidas antes de esta función: "escanea todas las facturas" en el chat (o nombrarlas, que se auto-escanean al consultarlas).
+Para facturas subidas antes de esta función: "escanea todas las facturas" en el chat (o nombrarlas en una consulta de analítica, que las **encola** en segundo plano vía `asegurarFacturasEscaneadas` — la consulta agrega con lo que ya hay y avisa de las pendientes).
 
 ---
 

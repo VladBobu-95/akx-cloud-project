@@ -172,7 +172,12 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   **facturas**: `escanear_factura`, `escanear_todas_facturas`, `obtener_factura`,
   `ventas_top`, `totales_facturas` y `clientes_top` (ranking de clientes por gasto
   total) — todas filtrables por factura, cliente, emisor, producto (solo `ventas_top`)
-  y periodo. Cuando se resuelve un archivo concreto (p. ej. `obtener_factura`),
+  y periodo. El escaneo desde el chat se **encola en segundo plano** (responde al
+  instante y el progreso se ve en la columna "Estado", igual que el botón "Escanear"
+  del explorador): hacerlo síncrono colgaba la petición hasta el 504 de nginx cuando
+  había varias facturas. `escanear_todas_facturas` solo procesa **PDFs** por defecto;
+  para incluir imágenes hay que pedirlo ("escanea todas las imágenes" → solo imágenes;
+  "escanea todo" → ambos). Cuando se resuelve un archivo concreto (p. ej. `obtener_factura`),
   la respuesta del chat incluye `archivo: {id, nombre}` y el frontend muestra un botón
   para abrirlo en una pestaña nueva, igual que en el explorador.
 
@@ -228,7 +233,9 @@ con ejemplos reales de frases que entiende:
   - "resume lo que tengo sobre Y"
   - "estadísticas" / "¿cuánto espacio uso?"
 - **Facturas** — escanear, ver/abrir una ya escaneada, y analítica filtrable:
-  - "escanea factura_01" / "escanea todas las facturas"
+  - "escanea factura_01" / "escanea todas las facturas" (se ponen a escanear en
+    segundo plano; "escanea todas las facturas" solo procesa PDFs — di "escanea
+    todas las imágenes" para las imágenes, o "escanea todo" para ambos)
   - "muéstrame factura_03" / "abre factura_03" (lee de BD al instante; si no está
     escaneada te lo dice en vez de escanearla sola, y aparece un botón para abrirla
     tal cual en una pestaña nueva)
@@ -306,8 +313,10 @@ docker-compose.override.yml ollama + adminer (solo en local)
   hay un activo con el mismo nombre, le pone sufijo "(restaurado)"), `DELETE /papelera`
 - **Carpetas** (`/api/archivos/carpetas`) 🔒: crear/listar/mover/eliminar
 - **Chat** (`/api/chat`) 🔒: conversación con el asistente → `{respuesta, acciones[], archivo?: {id, nombre}}`
-- **Facturas** (`/api/facturas`) 🔒: `POST /escanear` (OCR + extracción de datos; rechaza
-  con 422 si no hay datos reales de factura, en vez de inventarlos)
+- **Facturas** (`/api/facturas`) 🔒: `POST /escanear` (responde **202** y encola el
+  escaneo en segundo plano — OCR + extracción de datos; el estado final se ve en la
+  columna "Estado", y marca `no_factura` si no hay datos reales en vez de inventarlos),
+  `GET /` (listado paginado y filtrable, lo usa la paginación de tablas del chat)
 - `GET /health`: estado de la API y conexión a BD
 
 ## Tests

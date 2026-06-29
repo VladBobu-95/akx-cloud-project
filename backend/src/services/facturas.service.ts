@@ -102,7 +102,15 @@ const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => 
         messages,
         stream: false,
         format: SCHEMA_FACTURA,
-        options: { temperature: 0 },
+        // num_ctx explícito: el contexto por defecto de Ollama (2048/4096 según
+        // versión) TRUNCA en silencio una factura larga — `textoExtraido` llega
+        // hasta ~20k chars (≈6-7k tokens) y `leerContenidoFactura` no lo recorta,
+        // así que sin esto las líneas/totales del final de una factura densa se
+        // perdían. 8192 cubre el texto completo + el JSON de salida de muchas líneas.
+        // keep_alive mantiene qwen cargado entre facturas de un mismo lote (escanear
+        // 40 de golpe) en vez de descargarlo y recargarlo en cada una.
+        options: { temperature: 0, num_ctx: 8192 },
+        keep_alive: "10m",
       }),
     });
   } catch {
@@ -116,6 +124,50 @@ const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => 
     return JSON.parse(data.message.content) as DatosFactura;
   } catch {
     throw new AppError(503, "La IA devolvió un formato inesperado al leer la factura.");
+  }
+};
+
+const num = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+const redondear2 = (n: number): number => Math.round(n * 100) / 100;
+
+// Concilia los importes que el modelo dejó vacíos o a 0 a partir de los demás,
+// con la aritmética de una factura (líneas → subtotal; subtotal + iva = total).
+// Clave: SOLO rellena huecos, nunca sobreescribe un valor que el modelo sí
+// extrajo — recalcular sobre un importe ya presente podría EMPEORAR una
+// extracción correcta si una sola línea se leyó mal (perder precisión es justo
+// lo que queremos evitar). Rellenar lo ausente es seguro y solo añade datos.
+const conciliarImportes = (datos: DatosFactura): void => {
+  // 1. Por línea: completar total = cantidad × precioUnit, o al revés.
+  for (const l of datos.lineas ?? []) {
+    const cantidad = num(l.cantidad);
+    const precioUnit = num(l.precioUnit);
+    const total = num(l.total);
+    if (total <= 0 && cantidad > 0 && precioUnit > 0) {
+      l.total = redondear2(cantidad * precioUnit);
+    } else if (precioUnit <= 0 && cantidad > 0 && total > 0) {
+      l.precioUnit = redondear2(total / cantidad);
+    }
+  }
+  // 2. subtotal = Σ(líneas.total), solo si falta y hay líneas con importe.
+  const sumaLineas = redondear2(
+    (datos.lineas ?? []).reduce((acc, l) => acc + num(l.total), 0),
+  );
+  if (num(datos.subtotal) <= 0 && sumaLineas > 0) datos.subtotal = sumaLineas;
+  // 3. Completar el importe global que falte a partir de los otros dos.
+  const subtotal = num(datos.subtotal);
+  const iva = num(datos.iva);
+  const total = num(datos.total);
+  if (total <= 0 && subtotal > 0) {
+    datos.total = redondear2(subtotal + iva);
+  } else if (subtotal <= 0 && total > 0) {
+    datos.subtotal = redondear2(total - iva);
+  } else if (iva <= 0 && total > 0 && subtotal > 0 && total > subtotal) {
+    // iva ausente y el total supera al subtotal: la diferencia es el IVA
+    // (si total == subtotal es una factura sin IVA y se deja en 0).
+    datos.iva = redondear2(total - subtotal);
   }
 };
 
@@ -505,6 +557,12 @@ export const escanearFactura = async (
           : "No he encontrado datos reales de una factura en este archivo (ni importes ni número/fecha/emisor). Si es una imagen difícil de leer, indica qué contiene en la pista — se guardará como descripción.",
       );
     }
+
+    // Ya confirmado que es una factura: rellena los importes que el modelo dejó
+    // a 0 a partir de la aritmética (líneas/subtotal/iva/total). Va DESPUÉS de la
+    // guarda de arriba para no fabricar importes que la conviertan en "factura"
+    // de la nada — solo mejora una que ya lo es.
+    conciliarImportes(datos);
 
     const facturaRepo = AppDataSource.getRepository(Factura);
     // Si ya se había escaneado este archivo, reemplazamos su factura (y sus líneas por CASCADE).
