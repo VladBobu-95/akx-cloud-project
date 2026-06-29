@@ -133,6 +133,10 @@ const num = (v: unknown): number => {
 };
 const redondear2 = (n: number): number => Math.round(n * 100) / 100;
 
+// Tipos de IVA vigentes en España (general 21 %, reducido 10 %, superreducido 4 %).
+// Se usan para validar una inferencia de IVA antes de aceptarla (ver conciliarImportes).
+const TIPOS_IVA = [0.21, 0.1, 0.04];
+
 // Concilia los importes que el modelo dejó vacíos o a 0 a partir de los demás,
 // con la aritmética de una factura (líneas → subtotal; subtotal + iva = total).
 // Clave: SOLO rellena huecos, nunca sobreescribe un valor que el modelo sí
@@ -165,9 +169,17 @@ const conciliarImportes = (datos: DatosFactura): void => {
   } else if (subtotal <= 0 && total > 0) {
     datos.subtotal = redondear2(total - iva);
   } else if (iva <= 0 && total > 0 && subtotal > 0 && total > subtotal) {
-    // iva ausente y el total supera al subtotal: la diferencia es el IVA
-    // (si total == subtotal es una factura sin IVA y se deja en 0).
-    datos.iva = redondear2(total - subtotal);
+    // iva ausente y el total supera al subtotal: la diferencia PODRÍA ser el IVA,
+    // pero solo lo aceptamos si el tipo implícito (diferencia / subtotal) encaja
+    // con un tipo estándar español (21/10/4 %), con ±1 punto de margen para
+    // redondeos. Si no encaja, lo dejamos en 0 en vez de inventar: es el caso de
+    // las facturas con retención de IRPF (total = base + IVA − IRPF), donde
+    // total − subtotal NO es el IVA, o de cualquier otro ajuste no estándar.
+    const diferencia = redondear2(total - subtotal);
+    const tipoImplicito = diferencia / subtotal;
+    if (TIPOS_IVA.some((t) => Math.abs(tipoImplicito - t) <= 0.01)) {
+      datos.iva = diferencia;
+    }
   }
 };
 
@@ -715,8 +727,8 @@ const resumenFacturaMd = (d: DatosFactura): string => {
   const lineas = (d.lineas ?? [])
     .map((l) => `| ${celdaMd(l.descripcion)} | ${l.cantidad ?? 0} | ${eur(l.precioUnit ?? 0)} | ${eur(l.total ?? 0)} |`)
     .join("\n");
-  const titulo = [d.numero, d.archivoNombre].filter(Boolean).join(" — ");
-  return `## Factura ${titulo || "sin número"}
+  const titulo = d.archivoNombre || d.numero || "sin nombre";
+  return `## Resumen ${titulo}
 
 - **Fecha:** ${d.fecha ?? "—"}
 - **Emisor:** ${celdaMd(d.emisor) || "—"}

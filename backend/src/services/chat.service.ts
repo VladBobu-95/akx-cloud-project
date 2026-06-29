@@ -2193,6 +2193,68 @@ export const chatear = async (
     };
   }
 
+  // Resuelve un nombre a un archivo y devuelve su contenido legible: el "resumen"
+  // estructurado (numero/fecha/importes/líneas) si X es una factura escaneada, o
+  // el texto extraído (OCR/pdf-parse) si no. Devuelve null si el nombre no resuelve
+  // a ningún archivo real, para que el llamante deje pasar al flujo normal (era una
+  // pregunta, no un "abre/resume X"). Lo comparten los pre-flights de "lee/abre X"
+  // y "resumen de X".
+  const mostrarContenidoArchivo = async (nombre: string) => {
+    const res = await resolverArchivo(usuarioId, nombre);
+    if (res.opciones) {
+      registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
+      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "leer_archivo");
+    }
+    if (!res.archivo) return null;
+    const archivoBoton = [{ id: res.archivo.id, nombre: res.archivo.nombre }];
+    // El indexado RAG (OCR) y el auto-escaneo de factura corren en segundo plano
+    // al subir; mientras estadoEscaneo sea "pendiente"/"escaneando", textoExtraido
+    // puede no existir todavía o tener un resultado intermedio — se avisa en vez de
+    // devolver ese contenido a medias.
+    if (res.archivo.estadoEscaneo === "pendiente" || res.archivo.estadoEscaneo === "escaneando") {
+      return {
+        respuesta: `"${res.archivo.nombre}" todavía se está procesando. Inténtalo de nuevo en unos segundos.`,
+        acciones,
+        archivos: archivoBoton,
+      };
+    }
+    // Si el archivo YA tiene una factura escaneada en BD se muestra ese resumen
+    // limpio (mismo formato que obtener_factura y el .md de resumen) en vez del
+    // texto crudo de OCR/pdf-parse, mucho más legible.
+    const factura = await obtenerFactura(usuarioId, res.archivo.id, res.archivo.nombre);
+    if (factura.encontrada) {
+      return { respuesta: factura.resumen!, acciones, archivos: archivoBoton };
+    }
+    try {
+      const contenido = await leerTextoArchivo(res.archivo.id, usuarioId);
+      return { respuesta: `**${res.archivo.nombre}**:\n\n${contenido}`, acciones, archivos: archivoBoton };
+    } catch (err) {
+      return {
+        respuesta: err instanceof AppError ? err.message : "No pude leer el contenido del archivo.",
+        acciones,
+        archivos: archivoBoton,
+      };
+    }
+  };
+
+  // Pre-flight: "(pásame/dame/muéstrame) el resumen de X" / "resumen X" — el
+  // resumen de un archivo o factura CONCRETOS (no el general "de todo/de ventas",
+  // ya cubierto arriba en esResumenGeneral, que retorna antes de llegar aquí). Es
+  // el mismo artefacto que "abre/lee X": el resumen estructurado si es factura, el
+  // texto extraído si no. Sin esto, "el resumen de X" no encaja con ninguna tool
+  // (el modelo pedía aclaraciones o se inventaba el contenido). Si el nombre no
+  // resuelve a un archivo real, se deja pasar al flujo normal.
+  const matchResumenArchivo = msgSinTildes.match(
+    new RegExp(
+      `^(?:(?:${VERBO_LISTAR}|${VERBO_ABRIR}|lee(?:me)?|que\\s+dice)\\s+)?(?:el\\s+|la\\s+)?resumen(?:es)?\\s+(?:de\\s+(?:la\\s+|el\\s+|las\\s+|los\\s+)?|del\\s+)?["']?([\\wÀ-ÿ.\\- ]+?)["']?\\s*\\??\\s*$`,
+    ),
+  );
+  const nombreResumen = matchResumenArchivo?.[1]?.trim();
+  if (matchResumenArchivo && nombreResumen && !STOPWORDS_NOMBRE.has(nombreResumen)) {
+    const r = await mostrarContenidoArchivo(grupoOriginal(msgLower, matchResumenArchivo).trim());
+    if (r) return r;
+  }
+
   // Pre-flight: "lee/muestra/qué dice X" SIN nada más en el mensaje (solo verbo +
   // nombre, anclado al final). El modelo a veces solo confirma "lo he leído" en
   // vez de mostrar el contenido cuando este es muy corto/trivial, pese a la
@@ -2216,47 +2278,10 @@ export const chatear = async (
   const matchLeerSimple =
     matchLeerSimpleRaw && nombreLeer && !STOPWORDS_NOMBRE.has(nombreLeer) ? matchLeerSimpleRaw : null;
   if (matchLeerSimple) {
-    const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchLeerSimple).trim());
-    if (res.opciones) {
-      registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
-      return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "leer_archivo");
-    }
-    // Solo cortamos si de verdad hay un archivo; si no se encontró (res.error),
-    // dejamos pasar al flujo normal (era una pregunta, no un "abre X").
-    if (res.archivo) {
-      const archivoBoton = [{ id: res.archivo.id, nombre: res.archivo.nombre }];
-      // El indexado RAG (OCR) y el auto-escaneo de factura corren en segundo
-      // plano al subir; mientras estadoEscaneo sea "pendiente"/"escaneando",
-      // textoExtraido puede no existir todavía o tener un resultado intermedio
-      // (ej. el ruido de Tesseract antes de que termine el resumen de factura
-      // bonito) — se avisa en vez de devolver ese contenido a medias.
-      if (res.archivo.estadoEscaneo === "pendiente" || res.archivo.estadoEscaneo === "escaneando") {
-        return {
-          respuesta: `"${res.archivo.nombre}" todavía se está procesando. Inténtalo de nuevo en unos segundos.`,
-          acciones,
-          archivos: archivoBoton,
-        };
-      }
-      // Si el archivo YA tiene una factura escaneada en BD (datos estructurados:
-      // numero/fecha/importes/líneas), se muestra ese resumen limpio en vez del
-      // texto crudo de OCR/pdf-parse — el mismo formato que usan obtener_factura
-      // y el .md de resumen, mucho más legible que el texto plano con el ruido
-      // típico de una tabla escaneada (columnas mezcladas, etc).
-      const factura = await obtenerFactura(usuarioId, res.archivo.id, res.archivo.nombre);
-      if (factura.encontrada) {
-        return { respuesta: factura.resumen!, acciones, archivos: archivoBoton };
-      }
-      try {
-        const contenido = await leerTextoArchivo(res.archivo.id, usuarioId);
-        return { respuesta: `**${res.archivo.nombre}**:\n\n${contenido}`, acciones, archivos: archivoBoton };
-      } catch (err) {
-        return {
-          respuesta: err instanceof AppError ? err.message : "No pude leer el contenido del archivo.",
-          acciones,
-          archivos: archivoBoton,
-        };
-      }
-    }
+    // Solo cortamos si de verdad hay un archivo; si no se encontró, dejamos
+    // pasar al flujo normal (era una pregunta, no un "abre X").
+    const r = await mostrarContenidoArchivo(grupoOriginal(msgLower, matchLeerSimple).trim());
+    if (r) return r;
   }
 
   const esBorrarTodoCompleto =

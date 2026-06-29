@@ -9,6 +9,9 @@
 - al selecionar autocompletado en login  usuario y depsues contraseña desaparece la linea vertical
 - pensar en segundo plano(el chatbot) para poder mover 
 - guardar mensaje del chabot (pensando) 
+- abre x( titulo)
+- selecciona todo bug paginacion
+- resumenn o pasame el rsumen
 
 -escanea todas las facturas 
  Error 504 (supongo pq ya se escanean en segundo plano al subirlas)
