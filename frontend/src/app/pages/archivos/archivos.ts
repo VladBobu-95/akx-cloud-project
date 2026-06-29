@@ -815,9 +815,17 @@ export class ArchivosPage {
   protected seleccionados = signal<Set<string>>(new Set());
   protected haySeleccion = computed(() => this.seleccionados().size > 0);
   protected numSeleccionados = computed(() => this.seleccionados().size);
+  // "Seleccionar todo" se limita a lo que se ve en la página actual.
+  protected clavesPaginaActual = computed(() => {
+    const claves: string[] = [];
+    for (const c of this.subcarpetasPag()) claves.push(this.claveCarpeta(c));
+    for (const a of this.archivosActualesPag()) claves.push(this.claveArchivo(a.id));
+    return claves;
+  });
   protected todosSeleccionados = computed(() => {
-    const total = this.subcarpetas().length + this.archivosActuales().length;
-    return total > 0 && this.seleccionados().size === total;
+    const claves = this.clavesPaginaActual();
+    const sel = this.seleccionados();
+    return claves.length > 0 && claves.every((k) => sel.has(k));
   });
   protected bulkMoverModal = signal(false);
 
@@ -832,14 +840,14 @@ export class ArchivosPage {
     this.seleccionados.set(s);
   }
   protected toggleTodo() {
+    const claves = this.clavesPaginaActual();
+    const s = new Set(this.seleccionados());
     if (this.todosSeleccionados()) {
-      this.seleccionados.set(new Set());
+      for (const k of claves) s.delete(k);
     } else {
-      const s = new Set<string>();
-      for (const c of this.subcarpetas()) s.add(this.claveCarpeta(c));
-      for (const a of this.archivosActuales()) s.add(this.claveArchivo(a.id));
-      this.seleccionados.set(s);
+      for (const k of claves) s.add(k);
     }
+    this.seleccionados.set(s);
   }
   protected limpiarSeleccion() { this.seleccionados.set(new Set()); }
 
