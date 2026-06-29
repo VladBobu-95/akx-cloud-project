@@ -1794,7 +1794,16 @@ export const chatear = async (
   // funciona" cuando en realidad solo está tardando mucho). Se resuelve aquí
   // sin pasar por Ollama; si no está escaneada, se dice al instante en vez de
   // escanearla sin que el usuario lo pidiera.
-  const tieneIntencionAbrirFactura = new RegExp(`\\b${VERBO_ABRIR}\\b`).test(msgSinTildes);
+  // Además del verbo explícito ("abre/muéstrame factura_X"), se acepta que el
+  // mensaje sea ÚNICAMENTE el nombre de una factura ("factura_29",
+  // "factura_F2026-101", con o sin extensión): teclear solo el nombre se trata
+  // como "abre esa factura" (igual que en el explorador). Se exige que sea el
+  // mensaje entero (sin espacios → un solo token) para no capturar frases que
+  // solo mencionan una factura de pasada; el sufijo dígito/_/- obligatorio del
+  // patrón excluye el genérico "facturas" (que es un LISTADO, no un nombre).
+  const esNombreFacturaSuelto = /^["']?facturas?[\d_-][\wÀ-ÿ.-]*["']?\??$/i.test(msgLower.trim());
+  const tieneIntencionAbrirFactura =
+    new RegExp(`\\b${VERBO_ABRIR}\\b`).test(msgSinTildes) || esNombreFacturaSuelto;
   // OJO: el sufijo es OBLIGATORIO (dígito/_/- justo tras "factura(s)", no
   // cualquier letra) por DOS razones: 1) sin él, "facturajpg.jpg" (un archivo
   // cualquiera que solo tiene la mala suerte de empezar por "factura") se

@@ -154,6 +154,11 @@
         justify-content: center;
         gap: 6px;
       }
+      .acciones-fila {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+      }
       /* Listado de carpetas (se pagina en memoria). */
       .lista-carpetas {
         margin: 0 0 6px;

@@ -73,6 +73,14 @@ export class InicioPage implements AfterViewInit {
     this.enviarTexto(valor, id);
   }
 
+  // Botón "Resumen" de la tabla de facturas: pide el resumen de esa factura como
+  // si el usuario hubiera escrito "resumen <nombre>" (lo resuelve el pre-flight
+  // de resumen del backend, que devuelve el resumen estructurado con su botón
+  // "Abrir"). Se manda como mensaje para que quede registrado en la conversación.
+  protected resumenFactura(nombre: string) {
+    this.enviarTexto(`resumen ${nombre}`);
+  }
+
   private enviarTexto(texto: string, idOpcion?: string) {
     if (!texto || this.pensando()) return;
 

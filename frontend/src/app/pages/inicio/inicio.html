@@ -75,7 +75,10 @@
                             <td>{{ formatImporte(f.total, f.moneda) }}</td>
                             <td>
                               @if (f.archivoId && f.archivoNombre) {
-                                <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">📂 Abrir</button>
+                                <div class="acciones-fila">
+                                  <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="resumenFactura(f.archivoNombre)">📄 Resumen</button>
+                                  <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">📂 Abrir</button>
+                                </div>
                               }
                             </td>
                           </tr>
