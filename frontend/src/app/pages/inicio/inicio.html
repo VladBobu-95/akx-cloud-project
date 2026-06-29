@@ -72,7 +72,7 @@
                           <tr>
                             <td>{{ f.archivoNombre || '—' }}</td>
                             <td>{{ f.fecha }}</td>
-                            <td>{{ f.total.toFixed(2) }} €</td>
+                            <td>{{ formatImporte(f.total, f.moneda) }}</td>
                             <td>
                               @if (f.archivoId && f.archivoNombre) {
                                 <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">📂 Abrir</button>

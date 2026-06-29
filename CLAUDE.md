@@ -159,7 +159,7 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 - **usuarios**: `id`, `email` unique, `nombre`, `avatar` (base64, null), `passwordHash`, `rol` (`user`|`admin`, default `user`; el registro ignora `rol` del cliente), `creadoEn`.
 - **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256`, `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `eliminadoEn` (soft delete), `propietario` CASCADE.
 - **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
-- **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `cliente`, `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade.
+- **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `cliente`, `moneda` (código ISO 4217, default `EUR`; la IA la extrae de la factura), `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade. Analítica y resúmenes (totales, ventas_top, clientes_top, resumen-ventas.md) **agrupan por moneda** — nunca se suman divisas distintas.
 - **lineas_factura**: `descripcion`, `cantidad`, `precioUnit`, `total`.
 - **fragmentos** (RAG): `archivoId`, `propietarioId`, `indice`, `texto`, `embedding vector(1024)`.
 

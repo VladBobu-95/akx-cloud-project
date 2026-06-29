@@ -1127,7 +1127,7 @@ export const chatear = async (
     total: number;
     limite: number;
     filtro: Record<string, unknown>;
-    filas: { archivoId: string | null; archivoNombre: string | null; fecha: string; total: number }[];
+    filas: { archivoId: string | null; archivoNombre: string | null; fecha: string; total: number; moneda: string }[];
   };
   tablaArchivos?: {
     titulo: string;
@@ -1733,6 +1733,7 @@ export const chatear = async (
           archivoNombre: f.archivoNombre,
           fecha: formatearFecha(f.fecha),
           total: f.total,
+          moneda: f.moneda,
         })),
       },
     };
@@ -2017,6 +2018,7 @@ export const chatear = async (
           archivoNombre: f.archivoNombre,
           fecha: formatearFecha(f.fecha),
           total: f.total,
+          moneda: f.moneda,
         })),
       },
     };
@@ -2059,6 +2061,7 @@ export const chatear = async (
           archivoNombre: f.archivoNombre,
           fecha: formatearFecha(f.fecha),
           total: f.total,
+          moneda: f.moneda,
         })),
       },
     };
@@ -2131,6 +2134,7 @@ export const chatear = async (
             archivoNombre: f.archivoNombre,
             fecha: formatearFecha(f.fecha),
             total: f.total,
+            moneda: f.moneda,
           })),
         },
       };

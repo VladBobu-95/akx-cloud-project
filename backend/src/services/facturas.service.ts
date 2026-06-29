@@ -44,6 +44,7 @@ interface DatosFactura {
   fecha?: string;
   emisor?: string;
   cliente?: string;
+  moneda?: string;
   subtotal?: number;
   iva?: number;
   total?: number;
@@ -58,6 +59,7 @@ const SCHEMA_FACTURA = {
     fecha: { type: "string" },
     emisor: { type: "string" },
     cliente: { type: "string" },
+    moneda: { type: "string" },
     subtotal: { type: "number" },
     iva: { type: "number" },
     total: { type: "number" },
@@ -88,7 +90,7 @@ const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => 
     {
       role: "system",
       content:
-        "Extrae TODOS los datos de la factura del texto y devuélvelos en JSON. Rellena: numero (nº de factura), fecha (ISO YYYY-MM-DD), emisor (quién la emite), cliente (a quién se factura), subtotal, iva, total, y lineas (un objeto por artículo: descripcion, cantidad, precioUnit, total). Rellena TODOS los campos que aparezcan en el texto; no dejes vacío lo que sí está. Los importes como números, sin símbolo de moneda. No inventes datos que no aparezcan.",
+        "Extrae TODOS los datos de la factura del texto y devuélvelos en JSON. Rellena: numero (nº de factura), fecha (ISO YYYY-MM-DD), emisor (quién la emite), cliente (a quién se factura), moneda (código ISO de 3 letras de la divisa de los importes: EUR para € o euros, USD para $ o dólares, GBP para £ o libras, etc.; si no se indica ninguna, usa EUR), subtotal, iva, total, y lineas (un objeto por artículo: descripcion, cantidad, precioUnit, total). Rellena TODOS los campos que aparezcan en el texto; no dejes vacío lo que sí está. Los importes como números, sin símbolo de moneda. No inventes datos que no aparezcan.",
     },
     { role: "user", content: contenido },
   ];
@@ -183,6 +185,42 @@ const conciliarImportes = (datos: DatosFactura): void => {
   }
 };
 
+// Símbolos/nombres de moneda más comunes → código ISO 4217. La IA ya devuelve
+// normalmente el código (se lo pedimos en el prompt), pero blindamos por si
+// devuelve el símbolo ("$") o el nombre ("dólares"), o nada.
+const ALIAS_MONEDA: Record<string, string> = {
+  "€": "EUR", EUR: "EUR", EURO: "EUR", EUROS: "EUR",
+  $: "USD", USD: "USD", US$: "USD", DOLAR: "USD", DOLARES: "USD", DÓLAR: "USD", DÓLARES: "USD",
+  "£": "GBP", GBP: "GBP", LIBRA: "GBP", LIBRAS: "GBP",
+  "¥": "JPY", JPY: "JPY", YEN: "JPY", YENES: "JPY",
+  CHF: "CHF", FRANCO: "CHF", FRANCOS: "CHF",
+  MXN: "MXN", PESO: "MXN", PESOS: "MXN",
+  ARS: "ARS", COP: "COP", CLP: "CLP", BRL: "BRL", REAL: "BRL", REALES: "BRL",
+  CAD: "CAD", AUD: "AUD", CNY: "CNY", YUAN: "CNY",
+};
+
+// Normaliza la divisa a un código ISO 4217 de 3 letras válido. Si no se reconoce
+// o no es un código que `Intl.NumberFormat` sepa formatear, cae a EUR (la moneda
+// por defecto de toda la app). Así `dinero()` nunca recibe una divisa inválida.
+const normalizarMoneda = (m?: string): string => {
+  const raw = (m ?? "").trim();
+  if (!raw) return "EUR";
+  const clave = raw.toUpperCase();
+  const alias = ALIAS_MONEDA[raw] ?? ALIAS_MONEDA[clave];
+  if (alias) return alias;
+  // Código de 3 letras desconocido pero con pinta de ISO: lo aceptamos solo si
+  // Intl lo reconoce como divisa (evita guardar basura como "ABC").
+  if (/^[A-Z]{3}$/.test(clave)) {
+    try {
+      new Intl.NumberFormat("es-ES", { style: "currency", currency: clave }).format(1);
+      return clave;
+    } catch {
+      return "EUR";
+    }
+  }
+  return "EUR";
+};
+
 // Normaliza la fecha a ISO (YYYY-MM-DD); admite dd/mm/aaaa. null si no es válida.
 const normalizarFecha = (f?: string): string | null => {
   if (!f) return null;
@@ -226,7 +264,52 @@ const reemplazarArchivoTexto = async (
   await crearArchivoTexto(usuarioId, nombre, carpeta, contenido);
 };
 
-const eur = (n: number | string): string => `${Number(n).toFixed(2)} €`;
+// Formato monetario español legible POR DIVISA: separador de miles (.), coma
+// decimal y el símbolo de la moneda en su sitio, p. ej. (1234.5, "EUR") →
+// "1.234,50 €" y (1234.5, "USD") → "1.234,50 US$". Un Intl.NumberFormat por
+// moneda, cacheado (crearlos es caro y se llaman en bucles de rankings/listados).
+// `moneda` ya viene normalizada a ISO por normalizarMoneda al guardar, pero si
+// llegara una inválida no rompemos: número con el código detrás (p. ej. "1.234,50 ABC").
+const fmtPorMoneda = new Map<string, Intl.NumberFormat>();
+const dinero = (n: number | string, moneda = "EUR"): string => {
+  const cod = moneda || "EUR";
+  let fmt = fmtPorMoneda.get(cod);
+  if (!fmt) {
+    try {
+      fmt = new Intl.NumberFormat("es-ES", {
+        style: "currency",
+        currency: cod,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      fmt = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    fmtPorMoneda.set(cod, fmt);
+  }
+  const txt = fmt.format(Number(n) || 0);
+  // Si el código no era una divisa válida, Intl no añade símbolo: lo ponemos nosotros.
+  return /[^\d.,\s-]/.test(txt) ? txt : `${txt} ${cod}`;
+};
+
+// Etiqueta legible de una divisa para los encabezados de sección (solo se usan
+// cuando hay más de una moneda). El símbolo entre paréntesis lo da el propio
+// formateador de 0 (Intl), así no mantenemos otra tabla de símbolos a mano.
+const NOMBRES_MONEDA: Record<string, string> = {
+  EUR: "Euros", USD: "Dólares", GBP: "Libras", JPY: "Yenes",
+  CHF: "Francos suizos", MXN: "Pesos mexicanos", BRL: "Reales", CNY: "Yuanes",
+  CAD: "Dólares canadienses", AUD: "Dólares australianos",
+};
+const nombreMoneda = (m: string): string => NOMBRES_MONEDA[m] ?? m;
+
+// Formato de cantidades (unidades): separador de miles, sin decimales forzados,
+// p. ej. 1500 → "1.500", 2.5 → "2,5".
+const fmtNum = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 });
+const unidadesMd = (n: number | string): string => fmtNum.format(Number(n) || 0);
+
+// Monedas distintas presentes en un conjunto de filas, preservando orden de aparición.
+const monedasDistintas = <T extends { moneda: string }>(filas: T[]): string[] =>
+  [...new Set(filas.map((f) => f.moneda))];
 
 // Sanea un texto libre (cliente/emisor/producto/descripción) antes de meterlo en
 // una celda de tabla o línea de lista markdown: colapsa saltos de línea y espacios,
@@ -591,6 +674,7 @@ export const escanearFactura = async (
       fecha: normalizarFecha(datos.fecha),
       emisor: datos.emisor,
       cliente: datos.cliente,
+      moneda: normalizarMoneda(datos.moneda),
       subtotal: String(datos.subtotal ?? 0),
       iva: String(datos.iva ?? 0),
       total: String(datos.total ?? 0),
@@ -724,8 +808,9 @@ export const autoEscanearArchivo = async (
 };
 
 const resumenFacturaMd = (d: DatosFactura): string => {
+  const m = d.moneda || "EUR";
   const lineas = (d.lineas ?? [])
-    .map((l) => `| ${celdaMd(l.descripcion)} | ${l.cantidad ?? 0} | ${eur(l.precioUnit ?? 0)} | ${eur(l.total ?? 0)} |`)
+    .map((l) => `| ${celdaMd(l.descripcion)} | ${unidadesMd(l.cantidad ?? 0)} | ${dinero(l.precioUnit ?? 0, m)} | ${dinero(l.total ?? 0, m)} |`)
     .join("\n");
   const titulo = d.archivoNombre || d.numero || "sin nombre";
   return `## Resumen ${titulo}
@@ -738,9 +823,9 @@ const resumenFacturaMd = (d: DatosFactura): string => {
 |---|---|---|---|
 ${lineas}
 
-- **Subtotal:** ${eur(d.subtotal ?? 0)}
-- **IVA:** ${eur(d.iva ?? 0)}
-- **TOTAL:** ${eur(d.total ?? 0)}
+- **Subtotal:** ${dinero(d.subtotal ?? 0, m)}
+- **IVA:** ${dinero(d.iva ?? 0, m)}
+- **TOTAL:** ${dinero(d.total ?? 0, m)}
 `;
 };
 
@@ -763,6 +848,7 @@ export const obtenerFactura = async (
     fecha: factura.fecha ?? undefined,
     emisor: factura.emisor,
     cliente: factura.cliente,
+    moneda: factura.moneda,
     subtotal: Number(factura.subtotal),
     iva: Number(factura.iva),
     total: Number(factura.total),
@@ -862,38 +948,54 @@ const construirFiltro = (
   return { where: cond.join(" AND "), params };
 };
 
-// Markdown de un ranking de productos (con € server-side).
+// Encabezado de sección de moneda; solo se muestra cuando hay más de una divisa
+// (con una sola, la columna de importe ya lleva el símbolo y un subtítulo sobra).
+const encabezadoMoneda = (m: string, varias: boolean): string =>
+  varias ? `### ${nombreMoneda(m)} (${dinero(0, m).replace(/[\d.,\s-]/g, "").trim()})\n\n` : "";
+
+// Markdown de un ranking de productos, AGRUPADO POR MONEDA (importes con su
+// símbolo server-side). Una sección por divisa cuando hay varias.
 export const rankingMd = (
-  filas: { producto: string; unidades: number; importe: number }[],
+  filas: { producto: string; moneda: string; unidades: number; importe: number }[],
   titulo: string,
 ): string => {
   if (filas.length === 0) return "No hay datos de ventas para esa consulta.";
-  const cuerpo = filas
-    .map((t, i) => `| ${i + 1} | ${celdaMd(t.producto)} | ${t.unidades} | ${eur(t.importe)} |`)
-    .join("\n");
-  return `## ${titulo}\n\n| # | Producto | Unidades | Importe |\n|---|---|---|---|\n${cuerpo}`;
+  const monedas = monedasDistintas(filas);
+  const varias = monedas.length > 1;
+  const secciones = monedas.map((m) => {
+    const cuerpo = filas
+      .filter((t) => t.moneda === m)
+      .map((t, i) => `| ${i + 1} | ${celdaMd(t.producto)} | ${unidadesMd(t.unidades)} | ${dinero(t.importe, m)} |`)
+      .join("\n");
+    return `${encabezadoMoneda(m, varias)}| # | Producto | Unidades | Importe |\n|---|---|---|---|\n${cuerpo}`;
+  });
+  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
 };
 
-// Markdown de los totales facturados (con € server-side).
-export const totalesMd = (
-  t: { numFacturas: number; subtotal: number; iva: number; total: number },
-  titulo: string,
-): string => {
-  if (t.numFacturas === 0) return "No hay facturas que cumplan esa consulta.";
-  return `## ${titulo}\n\n- **Facturas:** ${t.numFacturas}\n- **Subtotal:** ${eur(t.subtotal)}\n- **IVA:** ${eur(t.iva)}\n- **TOTAL:** ${eur(t.total)}`;
+// Markdown de los totales facturados, AGRUPADO POR MONEDA. Una sección por divisa
+// cuando hay varias (nunca se suman importes de divisas distintas).
+export const totalesMd = (filas: TotalesMoneda[], titulo: string): string => {
+  if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
+  const varias = filas.length > 1;
+  const secciones = filas.map(
+    (t) =>
+      `${encabezadoMoneda(t.moneda, varias)}- **Facturas:** ${unidadesMd(t.numFacturas)}\n- **Subtotal:** ${dinero(t.subtotal, t.moneda)}\n- **IVA:** ${dinero(t.iva, t.moneda)}\n- **TOTAL:** ${dinero(t.total, t.moneda)}`,
+  );
+  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
 };
 
-// Markdown de un listado de facturas (con € server-side). Se usa para "facturas
-// de [mes/año]" cuando se pide el LISTADO, no el total agregado. Es el texto de
-// respaldo para clientes sin UI (curl, etc.); el frontend renderiza estas mismas
-// filas como una tabla con botón "Abrir" (ver `archivos` en chat.service.ts).
+// Markdown de un listado de facturas (importe con su moneda server-side). Se usa
+// para "facturas de [mes/año]" cuando se pide el LISTADO, no el total agregado.
+// Es el texto de respaldo para clientes sin UI (curl, etc.); el frontend renderiza
+// estas mismas filas como una tabla con botón "Abrir" (ver `archivos` en chat.service.ts).
+// Aquí NO se agrupa por moneda (es un listado cronológico): cada línea lleva su divisa.
 export const listadoFacturasMd = (
-  filas: { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number }[],
+  filas: { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number; moneda: string }[],
   titulo: string,
 ): string => {
   if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
   const cuerpo = filas
-    .map((f) => `- **${f.archivoNombre ?? f.numero}** (${formatearFecha(f.fecha)}): ${eur(f.total)}`)
+    .map((f) => `- **${f.archivoNombre ?? f.numero}** (${formatearFecha(f.fecha)}): ${dinero(f.total, f.moneda)}`)
     .join("\n");
   return `## ${titulo}\n\n${cuerpo}`;
 };
@@ -904,26 +1006,35 @@ export const ventasTop = async (
   usuarioId: string,
   filtro: FiltroFacturas = {},
   opts: { orden?: "desc" | "asc"; limite?: number } = {},
-): Promise<{ producto: string; unidades: number; importe: number }[]> => {
+): Promise<{ producto: string; moneda: string; unidades: number; importe: number }[]> => {
   const { where, params } = construirFiltro(usuarioId, filtro);
   const orden = opts.orden === "asc" ? "ASC" : "DESC";
   const limiteParam = `$${params.length + 1}`;
-  const filas: { producto: string; unidades: number; importe: number }[] =
+  // Ranking TOP-N POR MONEDA: no se puede sumar unidades de productos facturados
+  // en divisas distintas en una misma tabla. ROW_NUMBER particionado por moneda
+  // da las N primeras de cada divisa; el llamador (rankingMd) las agrupa en una
+  // sección por moneda.
+  const filas: { producto: string; moneda: string; unidades: number; importe: number }[] =
     await AppDataSource.query(
-      `SELECT lower(l."descripcion") AS producto,
-              SUM(l."cantidad")::float AS unidades,
-              SUM(l."total")::float AS importe
-       FROM "lineas_factura" l
-       JOIN "facturas" f ON f."id" = l."facturaId"
-       LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-       WHERE ${where}
-       GROUP BY lower(l."descripcion")
-       ORDER BY unidades ${orden}
-       LIMIT ${limiteParam}`,
+      `SELECT t.producto, t.moneda, t.unidades, t.importe FROM (
+         SELECT lower(l."descripcion") AS producto,
+                f."moneda" AS moneda,
+                SUM(l."cantidad")::float AS unidades,
+                SUM(l."total")::float AS importe,
+                ROW_NUMBER() OVER (PARTITION BY f."moneda" ORDER BY SUM(l."cantidad") ${orden}) AS rn
+         FROM "lineas_factura" l
+         JOIN "facturas" f ON f."id" = l."facturaId"
+         LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+         WHERE ${where}
+         GROUP BY lower(l."descripcion"), f."moneda"
+       ) t
+       WHERE t.rn <= ${limiteParam}
+       ORDER BY t.moneda, t.unidades ${orden}`,
       [...params, opts.limite ?? 10],
     );
   return filas.map((r) => ({
     producto: r.producto,
+    moneda: r.moneda,
     unidades: Number(r.unidades),
     importe: Number(r.importe),
   }));
@@ -931,28 +1042,44 @@ export const ventasTop = async (
 
 // Totales facturados (nº facturas, subtotal, IVA, total) sobre el filtro dado.
 // El campo `producto` del filtro no aplica aquí (son totales de cabecera).
+export type TotalesMoneda = {
+  moneda: string;
+  numFacturas: number;
+  subtotal: number;
+  iva: number;
+  total: number;
+};
+
+// Totales facturados AGRUPADOS POR MONEDA (una fila por divisa), ordenados por
+// total descendente. Sumar importes de divisas distintas no tiene sentido, así
+// que cada moneda lleva su propio total/subtotal/IVA. Con una sola moneda (el
+// caso normal) devuelve un único elemento.
 export const totalesFacturado = async (
   usuarioId: string,
   filtro: FiltroFacturas = {},
-): Promise<{ numFacturas: number; subtotal: number; iva: number; total: number }> => {
+): Promise<TotalesMoneda[]> => {
   const { producto: _producto, ...rest } = filtro;
   const { where, params } = construirFiltro(usuarioId, rest);
-  const [row] = await AppDataSource.query(
-    `SELECT COUNT(DISTINCT f."id")::int AS numfacturas,
+  const filas = await AppDataSource.query(
+    `SELECT f."moneda" AS moneda,
+            COUNT(DISTINCT f."id")::int AS numfacturas,
             COALESCE(SUM(f."subtotal"), 0)::float AS subtotal,
             COALESCE(SUM(f."iva"), 0)::float AS iva,
             COALESCE(SUM(f."total"), 0)::float AS total
      FROM "facturas" f
      LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-     WHERE ${where}`,
+     WHERE ${where}
+     GROUP BY f."moneda"
+     ORDER BY total DESC`,
     params,
   );
-  return {
+  return filas.map((row: Record<string, unknown>) => ({
+    moneda: (row.moneda as string) || "EUR",
     numFacturas: Number(row.numfacturas),
     subtotal: Number(row.subtotal),
     iva: Number(row.iva),
     total: Number(row.total),
-  };
+  }));
 };
 
 export type FilaFactura = {
@@ -961,6 +1088,7 @@ export type FilaFactura = {
   numero: string;
   fecha: string;
   total: number;
+  moneda: string;
 };
 
 // Lista (no agrega) las facturas que cumplen el filtro, con el archivo asociado
@@ -983,10 +1111,10 @@ export const listarFacturas = async (
     `SELECT COUNT(*)::int AS total FROM "facturas" f LEFT JOIN "archivos" a ON a."id" = f."archivoId" WHERE ${where}`,
     params,
   );
-  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string }[] =
+  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string; moneda: string }[] =
     await AppDataSource.query(
       `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
-              f."fecha"::text AS fecha, f."total" AS total
+              f."fecha"::text AS fecha, f."total" AS total, f."moneda" AS moneda
        FROM "facturas" f
        LEFT JOIN "archivos" a ON a."id" = f."archivoId"
        WHERE ${where}
@@ -1001,6 +1129,7 @@ export const listarFacturas = async (
       numero: r.numero,
       fecha: r.fecha,
       total: Number(r.total),
+      moneda: r.moneda || "EUR",
     })),
     total: Number(total),
     paginas: Math.max(1, Math.ceil(Number(total) / limite)),
@@ -1021,10 +1150,10 @@ export const listarFacturasPapelera = async (
      WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL`,
     [usuarioId],
   );
-  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string }[] =
+  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string; moneda: string }[] =
     await AppDataSource.query(
       `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
-              f."fecha"::text AS fecha, f."total" AS total
+              f."fecha"::text AS fecha, f."total" AS total, f."moneda" AS moneda
        FROM "facturas" f
        JOIN "archivos" a ON a."id" = f."archivoId"
        WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL
@@ -1039,6 +1168,7 @@ export const listarFacturasPapelera = async (
       numero: r.numero,
       fecha: r.fecha,
       total: Number(r.total),
+      moneda: r.moneda || "EUR",
     })),
     total: Number(total),
     paginas: Math.max(1, Math.ceil(Number(total) / limite)),
@@ -1052,41 +1182,55 @@ export const clientesTop = async (
   usuarioId: string,
   filtro: FiltroFacturas = {},
   opts: { orden?: "desc" | "asc"; limite?: number } = {},
-): Promise<{ cliente: string; numFacturas: number; importe: number }[]> => {
+): Promise<{ cliente: string; moneda: string; numFacturas: number; importe: number }[]> => {
   const { producto: _producto, ...rest } = filtro;
   const { where, params } = construirFiltro(usuarioId, rest);
   const orden = opts.orden === "asc" ? "ASC" : "DESC";
   const limiteParam = `$${params.length + 1}`;
-  const filas: { cliente: string; numfacturas: string; importe: string }[] =
+  // TOP-N POR MONEDA: el gasto de un cliente en € y en $ son cifras distintas
+  // que no se suman. ROW_NUMBER particionado por moneda da las N de cada divisa.
+  const filas: { cliente: string; moneda: string; numfacturas: string; importe: string }[] =
     await AppDataSource.query(
-      `SELECT f."cliente" AS cliente,
-              COUNT(*)::int AS numfacturas,
-              SUM(f."total")::float AS importe
-       FROM "facturas" f
-       LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-       WHERE ${where} AND f."cliente" IS NOT NULL AND f."cliente" <> ''
-       GROUP BY f."cliente"
-       ORDER BY importe ${orden}
-       LIMIT ${limiteParam}`,
+      `SELECT t.cliente, t.moneda, t.numfacturas, t.importe FROM (
+         SELECT f."cliente" AS cliente,
+                f."moneda" AS moneda,
+                COUNT(*)::int AS numfacturas,
+                SUM(f."total")::float AS importe,
+                ROW_NUMBER() OVER (PARTITION BY f."moneda" ORDER BY SUM(f."total") ${orden}) AS rn
+         FROM "facturas" f
+         LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+         WHERE ${where} AND f."cliente" IS NOT NULL AND f."cliente" <> ''
+         GROUP BY f."cliente", f."moneda"
+       ) t
+       WHERE t.rn <= ${limiteParam}
+       ORDER BY t.moneda, t.importe ${orden}`,
       [...params, opts.limite ?? 10],
     );
   return filas.map((r) => ({
     cliente: r.cliente,
+    moneda: r.moneda,
     numFacturas: Number(r.numfacturas),
     importe: Number(r.importe),
   }));
 };
 
-// Markdown de un ranking de clientes por gasto total (con € server-side).
+// Markdown de un ranking de clientes por gasto total, AGRUPADO POR MONEDA
+// (importes con su símbolo server-side). Una sección por divisa cuando hay varias.
 export const clientesTopMd = (
-  filas: { cliente: string; numFacturas: number; importe: number }[],
+  filas: { cliente: string; moneda: string; numFacturas: number; importe: number }[],
   titulo: string,
 ): string => {
   if (filas.length === 0) return "No hay datos de clientes para esa consulta.";
-  const cuerpo = filas
-    .map((c, i) => `| ${i + 1} | ${celdaMd(c.cliente)} | ${c.numFacturas} | ${eur(c.importe)} |`)
-    .join("\n");
-  return `## ${titulo}\n\n| # | Cliente | Facturas | Importe |\n|---|---|---|---|\n${cuerpo}`;
+  const monedas = monedasDistintas(filas);
+  const varias = monedas.length > 1;
+  const secciones = monedas.map((m) => {
+    const cuerpo = filas
+      .filter((c) => c.moneda === m)
+      .map((c, i) => `| ${i + 1} | ${celdaMd(c.cliente)} | ${unidadesMd(c.numFacturas)} | ${dinero(c.importe, m)} |`)
+      .join("\n");
+    return `${encabezadoMoneda(m, varias)}| # | Cliente | Facturas | Importe |\n|---|---|---|---|\n${cuerpo}`;
+  });
+  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
 };
 
 // Dado un conjunto de identificadores (nº/nombre de archivo), localiza los ficheros
@@ -1144,25 +1288,30 @@ export const asegurarFacturasEscaneadas = async (
 // la papelera — antes este conteo iba por su cuenta con un COUNT(*) directo
 // sobre "facturas" sin ese JOIN/exclusión, así que una factura borrada (o
 // restaurada) no movía nunca este número.
+export type ResumenMoneda = {
+  moneda: string;
+  numFacturas: number;
+  subtotal: number;
+  iva: number;
+  total: number;
+  ticketMedio: number;
+  top: { producto: string; moneda: string; unidades: number; importe: number }[];
+  clientes: { cliente: string; moneda: string; numFacturas: number; importe: number }[];
+};
+
 export const resumenVentas = async (
   usuarioId: string,
 ): Promise<{
-  numFacturas: number;
-  totalFacturado: number;
-  subtotal: number;
-  iva: number;
-  ticketMedio: number;
+  numFacturas: number; // total de facturas (todas las monedas), para la cabecera general
   primeraFecha: string | null;
   ultimaFecha: string | null;
-  top: { producto: string; unidades: number; importe: number }[];
-  clientes: { cliente: string; numFacturas: number; importe: number }[];
+  porMoneda: ResumenMoneda[];
 }> => {
   const { where, params } = construirFiltro(usuarioId, {});
+  // Cabecera general: conteo y periodo son independientes de la divisa (no se
+  // suman importes aquí, solo se cuentan facturas y se mira el rango de fechas).
   const [row] = await AppDataSource.query(
     `SELECT COUNT(DISTINCT f."id")::int AS numfacturas,
-            COALESCE(SUM(f."subtotal"), 0)::float AS subtotal,
-            COALESCE(SUM(f."iva"), 0)::float AS iva,
-            COALESCE(SUM(f."total"), 0)::float AS total,
             MIN(f."fecha")::text AS primera,
             MAX(f."fecha")::text AS ultima
      FROM "facturas" f
@@ -1170,37 +1319,31 @@ export const resumenVentas = async (
      WHERE ${where}`,
     params,
   );
-  const numFacturas = Number(row.numfacturas);
-  const totalFacturado = Number(row.total);
-  const [top, clientes] = await Promise.all([
+  const [totales, top, clientes] = await Promise.all([
+    totalesFacturado(usuarioId, {}),
     ventasTop(usuarioId, {}, { limite: 5 }),
     clientesTop(usuarioId, {}, { limite: 3 }),
   ]);
+  const porMoneda: ResumenMoneda[] = totales.map((t) => ({
+    moneda: t.moneda,
+    numFacturas: t.numFacturas,
+    subtotal: t.subtotal,
+    iva: t.iva,
+    total: t.total,
+    ticketMedio: t.numFacturas > 0 ? t.total / t.numFacturas : 0,
+    top: top.filter((p) => p.moneda === t.moneda),
+    clientes: clientes.filter((c) => c.moneda === t.moneda),
+  }));
   return {
-    numFacturas,
-    totalFacturado,
-    subtotal: Number(row.subtotal),
-    iva: Number(row.iva),
-    ticketMedio: numFacturas > 0 ? totalFacturado / numFacturas : 0,
+    numFacturas: Number(row.numfacturas),
     primeraFecha: row.primera ?? null,
     ultimaFecha: row.ultima ?? null,
-    top,
-    clientes,
+    porMoneda,
   };
 };
 
 const regenerarResumenVentas = async (usuarioId: string): Promise<void> => {
-  const {
-    numFacturas,
-    totalFacturado,
-    subtotal,
-    iva,
-    ticketMedio,
-    primeraFecha,
-    ultimaFecha,
-    top,
-    clientes,
-  } = await resumenVentas(usuarioId);
+  const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenVentas(usuarioId);
 
   if (numFacturas === 0) {
     // Sin facturas no hay nada que resumir: si quedaba un resumen-ventas.md
@@ -1218,30 +1361,47 @@ const regenerarResumenVentas = async (usuarioId: string): Promise<void> => {
     return;
   }
 
-  const ranking = top
-    .map((t, i) => `${i + 1}. **${t.producto}** — ${t.unidades} ud. — ${eur(t.importe)}`)
-    .join("\n");
-  const rankingClientes = clientes
-    .map((c, i) => `${i + 1}. **${c.cliente}** — ${c.numFacturas} factura/s — ${eur(c.importe)}`)
-    .join("\n");
   const periodo =
     primeraFecha && ultimaFecha
       ? `${formatearFecha(primeraFecha)} – ${formatearFecha(ultimaFecha)}`
       : "—";
-  const md = `# Resumen de ventas
+  const varias = porMoneda.length > 1;
 
-- **Facturas escaneadas:** ${numFacturas}
-- **Periodo:** ${periodo}
-- **Total facturado:** ${eur(totalFacturado)}
-- **Subtotal:** ${eur(subtotal)}
-- **IVA:** ${eur(iva)}
-- **Ticket medio:** ${eur(ticketMedio)}
+  // Una sección por moneda: totales + más vendidos + mejores clientes de esa
+  // divisa. Con una sola moneda (caso normal) el encabezado de divisa se omite y
+  // el resultado se lee igual que el resumen de antes, pero con el símbolo correcto.
+  const secciones = porMoneda
+    .map((m) => {
+      const ranking = m.top
+        .map((t, i) => `${i + 1}. **${t.producto}** — ${unidadesMd(t.unidades)} ud. — ${dinero(t.importe, m.moneda)}`)
+        .join("\n");
+      const rankingClientes = m.clientes
+        .map((c, i) => `${i + 1}. **${c.cliente}** — ${unidadesMd(c.numFacturas)} factura/s — ${dinero(c.importe, m.moneda)}`)
+        .join("\n");
+      const cab = varias ? `## ${nombreMoneda(m.moneda)} (${dinero(0, m.moneda).replace(/[\d.,\s-]/g, "").trim()})\n\n` : "";
+      return `${cab}- **Facturas:** ${unidadesMd(m.numFacturas)}
+- **Total facturado:** ${dinero(m.total, m.moneda)}
+- **Subtotal:** ${dinero(m.subtotal, m.moneda)}
+- **IVA:** ${dinero(m.iva, m.moneda)}
+- **Ticket medio:** ${dinero(m.ticketMedio, m.moneda)}
 
-## Más vendidos
+${varias ? "### Más vendidos" : "## Más vendidos"}
 ${ranking || "_(todavía no hay datos)_"}
 
-## Mejores clientes
-${rankingClientes || "_(todavía no hay datos)_"}
+${varias ? "### Mejores clientes" : "## Mejores clientes"}
+${rankingClientes || "_(todavía no hay datos)_"}`;
+    })
+    .join("\n\n");
+
+  // Cabecera general (independiente de la divisa) + el desglose por moneda.
+  const cabeceraGeneral = `- **Facturas escaneadas:** ${unidadesMd(numFacturas)}
+- **Periodo:** ${periodo}${varias ? `\n- **Monedas:** ${porMoneda.map((m) => m.moneda).join(", ")}` : ""}`;
+
+  const md = `# Resumen de ventas
+
+${cabeceraGeneral}
+
+${secciones}
 `;
   // Sigue al resumen a su ubicación actual si el usuario movió/renombró la
   // carpeta donde vivía (ver `localizarCarpetaFacturas`). Sin esto, mover esa

@@ -190,6 +190,31 @@ export class InicioPage implements AfterViewInit {
     this.chat.actualizarMensaje(index, { ...m, tablaAclaracion: { ...t, pagina: nuevaPagina } });
   }
 
+  // Formatea un importe con su divisa (es-ES: miles con ".", decimales con ","),
+  // p. ej. (1234.5, "USD") → "1.234,50 US$". Si la moneda no es un código válido,
+  // cae a un número con el código detrás, sin romper. Cachea el formateador por
+  // divisa (las tablas de facturas pueden tener muchas filas).
+  private fmtImporte = new Map<string, Intl.NumberFormat>();
+  protected formatImporte(total: number, moneda?: string): string {
+    const cod = moneda || 'EUR';
+    let fmt = this.fmtImporte.get(cod);
+    if (!fmt) {
+      try {
+        fmt = new Intl.NumberFormat('es-ES', {
+          style: 'currency',
+          currency: cod,
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+      } catch {
+        fmt = new Intl.NumberFormat('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+      this.fmtImporte.set(cod, fmt);
+    }
+    const txt = fmt.format(total || 0);
+    return /[^\d.,\s-]/.test(txt) ? txt : `${txt} ${cod}`;
+  }
+
   // Abre el archivo igual que en el explorador: PDF/imagen/texto en una pestaña
   // nueva, el resto se descarga. La ventana se abre en blanco YA (en el gesto
   // del clic) para que el navegador no la bloquee como pop-up, y se rellena

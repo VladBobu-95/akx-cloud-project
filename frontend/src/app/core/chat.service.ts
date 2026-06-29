@@ -12,6 +12,7 @@ export interface FilaFactura {
   archivoNombre: string | null;
   fecha: string;
   total: number;
+  moneda: string;
 }
 
 export interface FilaArchivo {
