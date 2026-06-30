@@ -51,6 +51,17 @@ import {
 import { SYSTEM_PROMPT, TOOLS } from "./chat.tools";
 // Estado conversacional pendiente del chat, persistido en BD (#2).
 import { guardarPendiente, tomarPendiente } from "./chatPendientes.service";
+// Capa de detección de intenciones (pura y testeable, #7).
+import {
+  quitarTildes,
+  distanciaDamerau,
+  contieneFactura,
+  VERBO_BORRAR,
+  VERBO_RESTAURAR,
+  detectarRestaurarTodo,
+  detectarVaciarPapelera,
+  clasificarBorradoMasivo,
+} from "./chat.deteccion";
 
 // Helpers de rutas .
 const padreRuta = (r: string): string => {
@@ -66,12 +77,8 @@ const hojaRuta = (r: string): string => {
 const unirRuta = (padre: string, nombre: string): string =>
   padre === "/" ? `/${nombre}` : `${padre}/${nombre}`;
 
-// Quita tildes (á→a, é→e...) para que los pre-flights de intención reconozcan
-// verbos con pronombre enclítico pegado ("bórralo", "elimínala", "vacíalas"),
-// que desplazan el acento y no casan con los patrones normales ni con \b
-// (no hay límite de palabra entre "borra" y "lo" en "borralo").
-const quitarTildes = (s: string): string =>
-  s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+// quitarTildes / distanciaDamerau / contieneFactura / VERBO_* viven ahora en
+// chat.deteccion.ts (capa de detección pura y testeable, #7) y se importan arriba.
 
 // Distancia de edición (Levenshtein) y similitud normalizada [0..1], para el
 // respaldo "fuzzy" de resolverArchivo: si la búsqueda exacta por substring no
@@ -1281,50 +1288,8 @@ export const chatear = async (
   // Sin tildes, para los pre-flights de verbos de acción: así "bórralo todo" /
   // "elimínalo" / "vacíalas" casan igual que "borra todo" / "elimina" / "vacia".
   const msgSinTildes = quitarTildes(msgLower);
-  // Distancia Damerau-Levenshtein (como distanciaLev, pero una transposición
-  // de letras adyacentes cuenta como 1 solo cambio, no 2): "fcaturas" es
-  // exactamente eso (intercambia "ac" por "ca"), así que con Levenshtein
-  // normal queda a distancia 2-3 y no se detectaba como errata de "facturas".
-  const distanciaDamerau = (a: string, b: string): number => {
-    const m = a.length;
-    const n = b.length;
-    const d: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-    for (let i = 0; i <= m; i++) d[i][0] = i;
-    for (let j = 0; j <= n; j++) d[0][j] = j;
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        const costo = a[i - 1] === b[j - 1] ? 0 : 1;
-        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + costo);
-        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-          d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
-        }
-      }
-    }
-    return d[m][n];
-  };
-  // Detecta "factura(s)" tolerando una errata de 1 cambio (sustitución,
-  // inserción, borrado o transposición de adyacentes) SIN reescribir
-  // msgSinTildes: los pre-flights de abajo usan /\bfacturas?\b/.test(msgSinTildes)
-  // y, si esa palabra concreta tiene una errata, ninguno encaja y el mensaje
-  // cae en el bucle de tools del modelo (poco fiable, ver NOTAS.md), que se
-  // queda reintentando sin converger — de ahí el chat "colgado". Se usa una
-  // función aparte (en vez de corregir el texto in-place) para no desalinear
-  // los índices que extraerClienteDeFrase / resolverCarpeta necesitan para
-  // extraer substrings del mensaje original. Restringido a palabras que
-  // empiezan por "f" para no disparar con palabras sueltas no relacionadas.
-  const contieneFactura = (texto: string): boolean =>
-    texto.split(/\s+/).some((palabra) => {
-      const p = palabra.replace(/[^a-z]/gi, "");
-      if (/^facturas?$/.test(p)) return true;
-      if (!p.startsWith("f") || p.length < 6 || p.length > 9) return false;
-      return distanciaDamerau(p, "factura") <= 1 || distanciaDamerau(p, "facturas") <= 1;
-    });
-  // Patrones de verbo reutilizados por los pre-flights de borrado/restaurar:
-  // admiten el pronombre enclítico pegado ("bórralo", "elimínala", "sácalos")
-  // ya que sin él "borra"/"elimina" no aparecen como palabra completa dentro
-  // de "borralo"/"eliminala" (no hay límite de palabra ahí para \b).
-  const VERBO_BORRAR = "(?:borra(?:r|lo|la|los|las)?|elimina(?:r|lo|la|los|las)?|quita(?:r|lo|la|los|las)?)";
-  const VERBO_RESTAURAR = "(?:restaura(?:r|lo|la|los|las)?|recupera(?:r|lo|la|los|las)?|saca(?:r|lo|la|los|las)?)";
+  // distanciaDamerau / contieneFactura / VERBO_BORRAR / VERBO_RESTAURAR se
+  // importan de chat.deteccion.ts (capa pura y testeable, #7).
   // Mismo tratamiento (pronombre enclítico + sin tildes) para el resto de
   // verbos de acción usados en los pre-flights de abrir/mostrar, buscar,
   // crear, listar, y las listas de exclusión de otras acciones (mover/copiar/
@@ -1850,11 +1815,7 @@ export const chatear = async (
   // exactamente esto: "restaura todos los ficheros" acabó vaciando la papelera,
   // justo la acción opuesta -borrado DEFINITIVO- a la pedida). Se resuelve aquí
   // sin pasar por el modelo, igual que el resto de borrados/restauraciones masivas.
-  const esRestaurarTodo =
-    new RegExp(`\\b${VERBO_RESTAURAR}\\b\\s+todo\\b`).test(msgSinTildes) ||
-    new RegExp(
-      `\\b${VERBO_RESTAURAR}\\b\\s+(?:todos?|todas?)\\s+(?:el\\s+|la\\s+|los\\s+|las\\s+)?(?:archivos?|ficheros?|papelera)\\b`,
-    ).test(msgSinTildes);
+  const esRestaurarTodo = detectarRestaurarTodo(msgSinTildes);
   if (esRestaurarTodo) {
     const r = await restaurarTodo(usuarioId);
     acciones.push(`Restaurados ${r.restaurados} archivo/s de la papelera.`);
@@ -1868,12 +1829,7 @@ export const chatear = async (
   // ejecutar (#9) — ya hubo una pérdida real de datos con el lío restaurar/
   // vaciar. Se excluye "borra X de la papelera" (un archivo concreto), que lo
   // resuelve el pre-flight específico de más abajo.
-  const esVaciarPapelera =
-    /\bpapelera\b/.test(msgSinTildes) &&
-    !contieneFactura(msgSinTildes) &&
-    (/\bvacia(?:r|la|las|lo|los|me|rla|rlas)?\b/.test(msgSinTildes) ||
-      new RegExp(`\\b${VERBO_BORRAR}\\b\\s+(?:todo|toda|todos|todas)\\b`).test(msgSinTildes) ||
-      new RegExp(`\\b${VERBO_BORRAR}\\b\\s+(?:la\\s+|toda\\s+la\\s+)?papelera\\b`).test(msgSinTildes));
+  const esVaciarPapelera = detectarVaciarPapelera(msgSinTildes);
   if (esVaciarPapelera) {
     const lista = await listarPapelera(usuarioId);
     if (lista.length === 0) return { respuesta: "La papelera ya está vacía.", acciones };
@@ -2532,28 +2488,16 @@ export const chatear = async (
     if (r) return r;
   }
 
-  const esBorrarTodoCompleto =
-    /borra(?:r|lo|la|los|las)?\s+todo\b|vacia(?:r|lo|la|los|las)?\s+todo\b|elimina(?:r|lo|la|los|las)?\s+todo\b|empeza(?:r)?\s+de\s+cero/.test(
-      msgSinTildes,
-    );
-  const esBorrarSoloCarpetas =
-    !esBorrarTodoCompleto &&
-    !/archivo|fichero/.test(msgSinTildes) &&
-    /(borra(?:r|lo|la|los|las)?|vacia(?:r|lo|la|los|las)?|elimina(?:r|lo|la|los|las)?|quita(?:r|lo|la|los|las)?)\s+todas?\s+(las\s+)?carpetas?/.test(msgSinTildes);
-  const esBorrarSoloArchivos =
-    !esBorrarTodoCompleto &&
-    !esBorrarSoloCarpetas &&
-    !/carpeta/.test(msgSinTildes) &&
-    /(borra(?:r|lo|la|los|las)?|vacia(?:r|lo|la|los|las)?|elimina(?:r|lo|la|los|las)?|quita(?:r|lo|la|los|las)?)\s+todos?\s+(los\s+)?(archivos?|ficheros?)/.test(
-      msgSinTildes,
-    );
-
-  if (esBorrarTodoCompleto || esBorrarSoloCarpetas || esBorrarSoloArchivos) {
-    const tool = esBorrarTodoCompleto
-      ? "borrar_todo"
-      : esBorrarSoloCarpetas
-        ? "borrar_todas_carpetas"
-        : "borrar_todos_archivos";
+  // Borrado masivo (a la papelera, reversible): "todo" / "todas las carpetas" /
+  // "todos los archivos". La clasificación vive en chat.deteccion.ts (#7).
+  const borradoMasivo = clasificarBorradoMasivo(msgSinTildes);
+  if (borradoMasivo) {
+    const tool =
+      borradoMasivo === "todo"
+        ? "borrar_todo"
+        : borradoMasivo === "carpetas"
+          ? "borrar_todas_carpetas"
+          : "borrar_todos_archivos";
     const resultado = await ejecutarTool(tool, {}, usuarioId, acciones);
     const r = resultado as Record<string, unknown>;
     if (r.ok) {
