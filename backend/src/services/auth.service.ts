@@ -88,6 +88,36 @@ export const schemaActualizarPerfil = z.object({
   password: z.string().min(8, "la contraseña debe tener al menos 8 caracteres").optional(),
 });
 
+// El avatar es un data-URL base64 en una columna `text`, aceptado hasta el
+// límite de express.json (10 MB) sin validar que sea REALMENTE una imagen ni el
+// tamaño decodificado (#10). Aquí comprobamos: formato data-URL, mime permitido,
+// magic bytes coherentes con ese mime y tope de tamaño decodificado (2 MB). Sin
+// esto se podía guardar cualquier cosa (texto/HTML gigante) como "avatar".
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+const VALIDADORES_AVATAR: Record<string, (b: Buffer) => boolean> = {
+  "image/png": (b) => b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47,
+  "image/jpeg": (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  "image/webp": (b) =>
+    b.length >= 12 && b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP",
+};
+
+export const validarAvatar = (dataUrl: string): void => {
+  const m = /^data:([\w/+.-]+);base64,([\s\S]+)$/.exec(dataUrl);
+  if (!m) throw new AppError(400, "El avatar debe ser una imagen en formato data URL base64.");
+  const mime = m[1].toLowerCase();
+  const validador = VALIDADORES_AVATAR[mime];
+  if (!validador) throw new AppError(400, "Formato de avatar no permitido. Usa PNG, JPEG o WEBP.");
+  // Buffer.from(base64) ignora espacios/saltos; nunca lanza (chars no válidos se descartan).
+  const buffer = Buffer.from(m[2], "base64");
+  if (buffer.length === 0) throw new AppError(400, "El avatar está vacío o no es base64 válido.");
+  if (buffer.length > MAX_AVATAR_BYTES) {
+    throw new AppError(400, "El avatar es demasiado grande (máximo 2 MB).");
+  }
+  if (!validador(buffer)) {
+    throw new AppError(400, "El contenido del avatar no coincide con una imagen válida.");
+  }
+};
+
 export const actualizarPerfil = async (
   usuarioId: string,
   datos: z.infer<typeof schemaActualizarPerfil>,
@@ -97,7 +127,11 @@ export const actualizarPerfil = async (
 
   if (datos.nombre !== undefined) usuario.nombre = datos.nombre;
   // null borra la columna; undefined haría que TypeORM la ignore (no se borraría).
-  if (datos.avatar !== undefined) usuario.avatar = datos.avatar || null;
+  // "" quita el avatar; cualquier otro valor debe ser una imagen válida.
+  if (datos.avatar !== undefined) {
+    if (datos.avatar) validarAvatar(datos.avatar);
+    usuario.avatar = datos.avatar || null;
+  }
   if (datos.password) usuario.passwordHash = await bcrypt.hash(datos.password, 12);
 
   await repo().save(usuario);
