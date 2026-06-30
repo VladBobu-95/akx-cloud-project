@@ -147,7 +147,6 @@ export const ctrlSubir = async (
     const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id, hash);
     await marcarPendiente(archivo);
     await marcarIndexadoPendiente(archivo.id);
-    res.status(201).json(archivo);
 
     // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO mediante la
     // COLA DURABLE (tareas.service.ts): encolamos una tarea "indexar" y el worker
@@ -155,6 +154,9 @@ export const ctrlSubir = async (
     // la tarea se reanuda (antes, con la cola en memoria, se perdía con todo y
     // los bytes del closure). El worker, al terminar de indexar, encadena la
     // tarea "autoescanear" si el archivo es candidato a factura.
+    //
+    // Se encola ANTES de responder para que la tarea quede persistida: si el
+    // proceso muere justo después del 201, el archivo no se queda sin indexar.
     //
     // La prioridad reproduce el agrupado por fases que evita que Ollama cambie de
     // modelo por archivo: el OCR de imágenes (deepseek) va con prioridad inferior
@@ -166,6 +168,8 @@ export const ctrlSubir = async (
       usuarioId: req.usuario!.id,
       prioridad: /^image\//.test(archivo.mimeType) ? P_OCR : P_TEXTO,
     });
+
+    res.status(201).json(archivo);
   } catch (error) {
     next(error);
   }

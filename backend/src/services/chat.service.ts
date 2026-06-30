@@ -402,6 +402,34 @@ const registrarFaltaValor = async (
   return { necesita_valor: true, pregunta };
 };
 
+// Forma del payload de una confirmación pendiente (operación masiva irreversible).
+interface PayloadConfirmacion {
+  tool: string;
+  descripcion: string;
+  ts: number;
+}
+
+// Registra una operación masiva IRREVERSIBLE a la espera de un "sí" explícito
+// (#9). El resto de acciones (incl. borrados a papelera, reversibles) siguen
+// siendo instantáneas; solo lo irreversible (vaciar la papelera) se confirma.
+const registrarConfirmacion = async (
+  usuarioId: string,
+  tool: string,
+  descripcion: string,
+): Promise<string> => {
+  await guardarPendiente(
+    usuarioId,
+    "confirmacion",
+    { tool, descripcion, ts: Date.now() } satisfies PayloadConfirmacion,
+    TTL_ACLARACION_MS,
+  );
+  return `⚠️ Vas a **${descripcion}**. Esto **no se puede deshacer**.\n\nResponde **"sí"** para confirmar o **"no"** para cancelar.`;
+};
+
+// Detecta una respuesta afirmativa a una confirmación ("sí", "vale", "hazlo"...).
+const ES_AFIRMACION =
+  /^(?:s[ií]|claro|vale|ok(?:ay)?|adelante|hazl[oa]|confirm(?:o|ar|ado)|dale|de\s+acuerdo|eso(?:\s+es)?|exacto|correcto|por\s+supuesto|sip)\b/;
+
 // Encabezado de la pregunta de aclaración. Si las opciones son SUGERENCIAS por
 // parecido (el nombre pedido no existía tal cual), pregunta "¿Querías decir...?";
 // si son varias coincidencias reales del nombre dado, "¿cuál quieres?".
@@ -719,9 +747,18 @@ const ejecutarTool = async (
         return { ok: true, nombre: res.archivo!.nombre, resumen: "Hecho." };
       }
       case "vaciar_papelera": {
-        const r = await vaciarPapelera(usuarioId);
-        acciones.push(`Papelera vaciada (${r.borrados} archivo/s)`);
-        return { ok: true, borrados: r.borrados, resumen: "Hecho." };
+        // Backstop de confirmación (#9): si el MODELO llama a esta tool directa,
+        // no la ejecutamos; registramos la confirmación y devolvemos la pregunta
+        // (vía `resumen`, que el bucle devuelve tal cual). El "sí" lo completa el
+        // consumer de confirmación llamando al servicio directamente.
+        const lista = await listarPapelera(usuarioId);
+        if (lista.length === 0) return { resumen: "La papelera ya está vacía." };
+        const pregunta = await registrarConfirmacion(
+          usuarioId,
+          "vaciar_papelera",
+          `vaciar la papelera (borrar definitivamente ${lista.length} archivo/s)`,
+        );
+        return { resumen: pregunta };
       }
       // --- Operaciones de carpeta ---
       case "mover_carpeta": {
@@ -1522,6 +1559,31 @@ export const chatear = async (
     }
   }
 
+  // Pre-flight: si hay una operación masiva IRREVERSIBLE pendiente de confirmar
+  // (#9, p. ej. vaciar la papelera), este mensaje es la respuesta. "Sí" la
+  // ejecuta; una negación la cancela con aviso; cualquier otra orden también la
+  // cancela (ya se descartó al hacer `tomar`) y sigue su curso normal.
+  const pendienteConfirmacion = await tomarPendiente<PayloadConfirmacion>(usuarioId, "confirmacion");
+  if (pendienteConfirmacion && Date.now() - pendienteConfirmacion.ts < TTL_ACLARACION_MS) {
+    const msgConf = quitarTildes(msgLower).trim();
+    if (ES_AFIRMACION.test(msgConf)) {
+      if (pendienteConfirmacion.tool === "vaciar_papelera") {
+        const r = await vaciarPapelera(usuarioId);
+        acciones.push(`Papelera vaciada (${r.borrados} archivo/s)`);
+        return {
+          respuesta: `Hecho. He vaciado la papelera: ${r.borrados} archivo/s borrados definitivamente.`,
+          acciones,
+        };
+      }
+      return { respuesta: "Hecho.", acciones };
+    }
+    // No es un "sí": cancelamos. Si fue una negación explícita lo decimos; si
+    // fue otra orden, dejamos que siga el flujo normal (ya está descartada).
+    if (/^(?:no|nope|nah|cancela(?:r|lo)?|olvidalo|dejalo|mejor\s+no|para\s+nada)\b/.test(msgConf)) {
+      return { respuesta: "Cancelado, no he tocado nada.", acciones };
+    }
+  }
+
   // Pre-flight: COMANDOS COMPUESTOS ("ábreme X y Y", "crea X y copia Y y borra Z").
   // Los pre-flights de abajo resuelven UNA sola acción y hacen return en cuanto
   // casan, así que un mensaje con varias órdenes encadenadas solo ejecutaba la
@@ -1797,6 +1859,30 @@ export const chatear = async (
     const r = await restaurarTodo(usuarioId);
     acciones.push(`Restaurados ${r.restaurados} archivo/s de la papelera.`);
     return { respuesta: "Hecho.", acciones };
+  }
+
+  // Pre-flight: "vacía la papelera" / "borra (toda) la papelera" / "borra todo
+  // de la papelera" es la ÚNICA operación masiva IRREVERSIBLE (borrado
+  // definitivo, sin recuperación). A diferencia de "borra todo" (que manda a la
+  // papelera, reversible), aquí pedimos confirmación explícita antes de
+  // ejecutar (#9) — ya hubo una pérdida real de datos con el lío restaurar/
+  // vaciar. Se excluye "borra X de la papelera" (un archivo concreto), que lo
+  // resuelve el pre-flight específico de más abajo.
+  const esVaciarPapelera =
+    /\bpapelera\b/.test(msgSinTildes) &&
+    !contieneFactura(msgSinTildes) &&
+    (/\bvacia(?:r|la|las|lo|los|me|rla|rlas)?\b/.test(msgSinTildes) ||
+      new RegExp(`\\b${VERBO_BORRAR}\\b\\s+(?:todo|toda|todos|todas)\\b`).test(msgSinTildes) ||
+      new RegExp(`\\b${VERBO_BORRAR}\\b\\s+(?:la\\s+|toda\\s+la\\s+)?papelera\\b`).test(msgSinTildes));
+  if (esVaciarPapelera) {
+    const lista = await listarPapelera(usuarioId);
+    if (lista.length === 0) return { respuesta: "La papelera ya está vacía.", acciones };
+    const pregunta = await registrarConfirmacion(
+      usuarioId,
+      "vaciar_papelera",
+      `vaciar la papelera (borrar definitivamente ${lista.length} archivo/s)`,
+    );
+    return { respuesta: pregunta, acciones };
   }
 
   // Pre-flight: "facturas de/en la papelera" es más específico que el listado

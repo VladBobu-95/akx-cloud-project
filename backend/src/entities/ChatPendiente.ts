@@ -14,8 +14,10 @@ export class ChatPendiente {
   @PrimaryColumn({ type: "uuid" })
   usuarioId!: string;
 
+  // "confirmacion" = operación masiva IRREVERSIBLE (p. ej. vaciar la papelera)
+  // pendiente de un "sí" explícito antes de ejecutarse (#9).
   @Column({ type: "varchar" })
-  tipo!: "aclaracion" | "valor";
+  tipo!: "aclaracion" | "valor" | "confirmacion";
 
   @Column({ type: "jsonb" })
   payload!: Record<string, unknown>;

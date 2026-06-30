@@ -7,7 +7,7 @@ import { ChatPendiente } from "../entities/ChatPendiente";
 // (sea del tipo que sea), igual que la semántica original (registrar aclaración
 // borraba el valor pendiente y viceversa).
 
-export type TipoPendiente = "aclaracion" | "valor";
+export type TipoPendiente = "aclaracion" | "valor" | "confirmacion";
 
 const repo = () => AppDataSource.getRepository(ChatPendiente);
 
