@@ -23,16 +23,9 @@ import {
   eliminarCarpetaConContenido,
   moverCarpetaConContenido,
 } from "../services/carpetas.service";
-import { indexarArchivo, actualizarDescripcionManual, buscarSemantica } from "../services/rag.service";
-import {
-  autoEscanearArchivo,
-  marcarPendiente,
-  marcarEnProceso,
-  limpiarEstadoSiNoEsFactura,
-  encolarOcr,
-  encolarExtraccion,
-  PRIORIDAD_BAJA,
-} from "../services/facturas.service";
+import { actualizarDescripcionManual, buscarSemantica } from "../services/rag.service";
+import { marcarPendiente } from "../services/facturas.service";
+import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
 
 // GET /api/archivos/carpetas
@@ -139,48 +132,26 @@ export const ctrlSubir = async (
     const carpeta = (req.body.carpeta as string) || "/";
     const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id);
     await marcarPendiente(archivo);
+    await marcarIndexadoPendiente(archivo.id);
     res.status(201).json(archivo);
 
-    // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO: no esperamos
-    // a que terminen para responder (el OCR/embeddings pueden tardar). Encolado
-    // (uno detrás de otro, no en paralelo): si se suben varios archivos a la vez,
-    // cada uno lanzaba su propio OCR/IA de visión en paralelo y todos competían
-    // por la misma GPU (más lento en total, riesgo de agotar memoria).
+    // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO mediante la
+    // COLA DURABLE (tareas.service.ts): encolamos una tarea "indexar" y el worker
+    // la procesa releyendo los bytes desde MinIO. Si la API se reinicia a mitad,
+    // la tarea se reanuda (antes, con la cola en memoria, se perdía con todo y
+    // los bytes del closure). El worker, al terminar de indexar, encadena la
+    // tarea "autoescanear" si el archivo es candidato a factura.
     //
-    // Dos fases en colas separadas (`encolarOcr`/`encolarExtraccion`, ver
-    // facturas.service.ts): deepseek-ocr (OCR de imágenes) y qwen (extracción de
-    // datos de factura) no caben juntos en la VRAM de una GPU de 12GB, así que
-    // agrupar TODO el OCR pendiente antes de pasar a TODA la extracción pendiente
-    // evita un cambio de modelo por archivo. Los PDFs no necesitan OCR: van
-    // directos a la fase de extracción con prioridad alta, así que una factura
-    // PDF nunca espera a que termine un lote de imágenes en cola (solo a la que
-    // esté en marcha en ese instante).
-    const buffer = req.file.buffer;
-    const usuarioId = req.usuario!.id;
-    const tareaExtraccion = () =>
-      autoEscanearArchivo(usuarioId, archivo)
-        .catch((err) => console.error(`Error auto-escaneando "${archivo.nombre}":`, err))
-        // Si no es candidato a factura, escanearFactura ni se ha llegado a
-        // llamar: sin esto el spinner se quedaría encendido para siempre.
-        .then(() => limpiarEstadoSiNoEsFactura(archivo));
-
-    if (/^image\//.test(archivo.mimeType)) {
-      void encolarOcr(async () => {
-        await marcarEnProceso(archivo);
-        await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
-          console.error(`Error indexando "${archivo.nombre}":`, err),
-        );
-        void encolarExtraccion(tareaExtraccion, PRIORIDAD_BAJA);
-      });
-    } else {
-      void encolarExtraccion(async () => {
-        await marcarEnProceso(archivo);
-        await indexarArchivo(archivo, buffer, usuarioId).catch((err) =>
-          console.error(`Error indexando "${archivo.nombre}":`, err),
-        );
-        await tareaExtraccion();
-      });
-    }
+    // La prioridad reproduce el agrupado por fases que evita que Ollama cambie de
+    // modelo por archivo: el OCR de imágenes (deepseek) va con prioridad inferior
+    // al texto barato/escaneo de PDFs, y el escaneo derivado de imágenes (qwen)
+    // queda para el final.
+    await encolarTarea({
+      tipo: "indexar",
+      archivoId: archivo.id,
+      usuarioId: req.usuario!.id,
+      prioridad: /^image\//.test(archivo.mimeType) ? P_OCR : P_TEXTO,
+    });
   } catch (error) {
     next(error);
   }

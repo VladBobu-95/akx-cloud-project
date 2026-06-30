@@ -19,6 +19,10 @@ export interface Archivo {
   eliminadoEn?: string | null;
   subidoEn: string;
   estadoEscaneo?: 'pendiente' | 'escaneando' | 'escaneada' | 'no_factura' | 'error' | null;
+  // Estado del indexado RAG (extracción de texto + embeddings), independiente
+  // del escaneo de factura. Lo gestiona la cola durable del backend.
+  estadoIndexado?: 'pendiente' | 'indexando' | 'indexado' | 'error' | null;
+  indexadoEn?: string | null;
 }
 
 export interface AuthResponse {

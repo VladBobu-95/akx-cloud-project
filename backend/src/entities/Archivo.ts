@@ -57,6 +57,19 @@ export class Archivo {
   @Column({ type: "varchar", nullable: true })
   estadoEscaneo?: "pendiente" | "escaneando" | "escaneada" | "no_factura" | "error" | null;
 
+  // Estado del indexado RAG (extracción de texto + embeddings), separado de
+  // `estadoEscaneo` (que es específico de facturas). Lo gestiona el worker
+  // durable (tareas.service.ts): "indexando" mientras se procesa, "indexado"
+  // cuando hay texto/embeddings, "error" si la extracción falló tras agotar
+  // reintentos. null = aún sin indexar / no aplica. Permite mostrar en el
+  // explorador "procesando…" o "no se pudo leer el contenido" en vez de que un
+  // archivo recién subido simplemente no aparezca en las búsquedas sin motivo.
+  @Column({ type: "varchar", nullable: true })
+  estadoIndexado?: "pendiente" | "indexando" | "indexado" | "error" | null;
+
+  @Column({ type: "timestamptz", nullable: true })
+  indexadoEn?: Date | null;
+
   // DeleteDateColumn: TypeORM rellena esta columna con la fecha actual al hacer softRemove().
   // Si tiene valor → archivo en la papelera. Si es null → archivo activo.
   // Las queries normales (find, findOne) ignoran automáticamente los registros con esta columna rellena.

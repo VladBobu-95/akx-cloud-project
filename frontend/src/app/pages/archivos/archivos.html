@@ -162,8 +162,15 @@
                   <td class="col-tamano">{{ a.tamanoBytes | fileSize }}</td>
                   <td class="muted col-subido">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
                   <td class="col-estado">
-                    @if (a.estadoEscaneo === 'pendiente' || a.estadoEscaneo === 'escaneando') {
-                      <span class="estado-prog" title="Procesando…"><span class="spinner"></span> Escaneando</span>
+                    @if (
+                      a.estadoEscaneo === 'pendiente' ||
+                      a.estadoEscaneo === 'escaneando' ||
+                      a.estadoIndexado === 'pendiente' ||
+                      a.estadoIndexado === 'indexando'
+                    ) {
+                      <span class="estado-prog" title="Procesando…"><span class="spinner"></span> Procesando</span>
+                    } @else if (a.estadoIndexado === 'error') {
+                      <span class="estado-error" title="No se pudo leer el contenido">✕</span>
                     } @else if (a.estadoEscaneo === 'escaneada' || a.estadoEscaneo === 'no_factura') {
                       <span class="estado-ok" title="Procesado">✓</span>
                     } @else if (a.estadoEscaneo === 'error') {

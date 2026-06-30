@@ -87,7 +87,13 @@ export class ArchivosPage {
   // se actualice sin recargar la página a mano. Se para sola en cuanto no
   // queda nada pendiente/escaneando.
   private hayEscaneoEnCurso = computed(() =>
-    this.todos().some((a) => a.estadoEscaneo === 'pendiente' || a.estadoEscaneo === 'escaneando'),
+    this.todos().some(
+      (a) =>
+        a.estadoEscaneo === 'pendiente' ||
+        a.estadoEscaneo === 'escaneando' ||
+        a.estadoIndexado === 'pendiente' ||
+        a.estadoIndexado === 'indexando',
+    ),
   );
 
   // Conjunto de todas las rutas de carpeta conocidas: las de los archivos (con

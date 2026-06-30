@@ -3,6 +3,7 @@ import { env } from "./config/env";
 import { AppDataSource } from "./config/database";
 import { inicializarBucket } from "./config/minio";
 import { verificarModelosOllama } from "./config/ollama";
+import { iniciarWorker } from "./services/tareas.service";
 
 const main = async (): Promise<void> => {
   await AppDataSource.initialize();
@@ -12,6 +13,9 @@ const main = async (): Promise<void> => {
   console.log("MinIO listo");
 
   await verificarModelosOllama();
+
+  // Worker de la cola durable (indexado RAG + auto-escaneo de facturas).
+  await iniciarWorker();
 
   app.listen(env.PORT, () => {
     console.log(`API escuchando en http://localhost:${env.PORT}`);

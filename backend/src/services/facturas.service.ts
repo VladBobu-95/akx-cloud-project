@@ -8,6 +8,10 @@ import { AppError } from "../utils/errors";
 import { crearArchivoTexto, borrarPermanente, combinarContenido } from "./archivos.service";
 import { actualizarDescripcionManual } from "./rag.service";
 import { pareceFacturaConImportes } from "./extraccion.service";
+// Cola durable: encolarEscaneoManual encola aquí en vez de en la cola en memoria.
+// (Import circular tareas<->facturas: ambos se usan solo dentro de funciones, no
+// a nivel de módulo, así que se resuelve en runtime sin problema.)
+import { encolarTarea, P_ALTA } from "./tareas.service";
 
 // Exportada para que carpetas.service.ts pueda bloquear mover/renombrar esta
 // ruta exacta (ver moverCarpetaConContenido): resumen-ventas.md y los
@@ -482,79 +486,12 @@ const reemplazarResumenDeArchivoSerie = (
 ): Promise<void> =>
   enSerie(usuarioId, () => reemplazarResumenDeArchivo(usuarioId, archivoId, nuevoNombre, contenido));
 
-// Prioridad dentro de cada cola: 0 = alta (PDFs y demás, rápidos: pdf-parse/
-// texto plano, sin IA de visión), 1 = baja (imágenes, o trabajo derivado de
-// ellas). Dentro de `colaExtraccion`, una factura PDF nueva (alta) siempre se
-// atiende antes que una imagen ya OCR'eada (baja) que llegó primero.
-export const PRIORIDAD_ALTA = 0;
-export const PRIORIDAD_BAJA = 1;
-
-interface TareaCola {
-  prioridad: number;
-  ejecutar: () => Promise<void>;
-}
-
-// Dos colas en vez de una: `colaOcr` (imágenes, necesitan deepseek-ocr) y
-// `colaExtraccion` (extracción de datos de factura con qwen — PDFs directos,
-// o imágenes ya OCR'eadas). El motivo: deepseek-ocr (~9.4GB de VRAM medidos
-// en una 4070) y qwen2.5-coder:14b no caben juntos en la GPU, así que cada
-// vez que el pipeline de UN archivo pasa de OCR a extracción, Ollama tiene que
-// descargar un modelo para cargar el otro. Procesando por fases en vez de por
-// archivo (todo el OCR pendiente con deepseek-ocr cargado, luego toda la
-// extracción pendiente con qwen cargado) ese cambio de modelo pasa de "uno
-// por imagen" a "uno por lote".
-const colaOcr: TareaCola[] = [];
-const colaExtraccion: TareaCola[] = [];
-let procesandoColas = false;
-
-// Array.prototype.sort es estable desde ES2019: dentro de la misma prioridad
-// se mantiene el orden de llegada (FIFO).
-const sacarSiguiente = (cola: TareaCola[]): TareaCola | undefined => {
-  if (cola.length === 0) return undefined;
-  cola.sort((a, b) => a.prioridad - b.prioridad);
-  return cola.shift();
-};
-
-// Antes de cada paso de OCR, si ha llegado una factura nueva (prioridad alta)
-// a `colaExtraccion`, se atiende primero — así una factura nunca espera a que
-// termine un lote entero de imágenes, solo a que termine la que esté en
-// marcha en ese instante (no hay interrupción de una request ya en marcha
-// con Ollama: se descartó por demasiado costosa/arriesgada, ver conversación).
-const procesarColas = async (): Promise<void> => {
-  if (procesandoColas) return;
-  procesandoColas = true;
-  while (colaOcr.length > 0 || colaExtraccion.length > 0) {
-    const urgente = colaExtraccion.some((t) => t.prioridad === PRIORIDAD_ALTA)
-      ? sacarSiguiente(colaExtraccion)
-      : undefined;
-    const siguiente = urgente ?? sacarSiguiente(colaOcr) ?? sacarSiguiente(colaExtraccion);
-    if (!siguiente) break;
-    await siguiente.ejecutar();
-  }
-  procesandoColas = false;
-};
-
-const encolarEnCola = <T>(
-  cola: TareaCola[],
-  prioridad: number,
-  tarea: () => Promise<T>,
-): Promise<T> =>
-  new Promise<T>((resolve, reject) => {
-    cola.push({ prioridad, ejecutar: () => tarea().then(resolve, reject) });
-    void procesarColas();
-  });
-
-// Encola una tarea de OCR/indexado de una imagen (fase 1: deepseek-ocr).
-export const encolarOcr = <T>(tarea: () => Promise<T>): Promise<T> =>
-  encolarEnCola(colaOcr, PRIORIDAD_BAJA, tarea);
-
-// Encola una tarea de extracción de datos de factura (fase 2: qwen). Alta
-// prioridad por defecto (PDFs); pasar PRIORIDAD_BAJA para las que vienen de
-// una imagen ya OCR'eada.
-export const encolarExtraccion = <T>(
-  tarea: () => Promise<T>,
-  prioridad: number = PRIORIDAD_ALTA,
-): Promise<T> => encolarEnCola(colaExtraccion, prioridad, tarea);
+// NOTA: la antigua cola en memoria (colaOcr/colaExtraccion/procesarColas) se
+// sustituyó por la COLA DURABLE en Postgres (tareas.service.ts), que sobrevive
+// a reinicios, reintenta con backoff y limita la concurrencia hacia Ollama. El
+// agrupado por fases (evitar que Ollama cambie de modelo por archivo: OCR de
+// imágenes con deepseek vs. extracción con qwen, que no caben juntos en la GPU)
+// se conserva allí mediante las prioridades P_TEXTO/P_OCR/P_IMG_SCAN.
 
 // --- API pública del servicio ---
 
@@ -782,15 +719,17 @@ export const encolarEscaneoManual = async (
     throw new AppError(403, "No tienes permiso sobre este archivo");
   }
   await marcarPendiente(archivo);
-  void encolarExtraccion(() =>
-    escanearFactura(usuarioId, archivoId, { pista })
-      .then(() => undefined)
-      // El estado (no_factura/error) ya lo deja escanearFactura en su catch;
-      // aquí solo logueamos porque no hay nadie esperando la promesa.
-      .catch((err) =>
-        console.error(`[facturas] Escaneo manual de "${archivo.nombre}" falló:`, err),
-      ),
-  );
+  // El texto ya se extrajo al subir; escanear NO relanza OCR. Encolamos una
+  // tarea durable de extracción (prioridad alta: la pide el usuario) que el
+  // worker procesa. El estado final lo deja escanearFactura y lo refleja el
+  // polling de la columna "Estado".
+  await encolarTarea({
+    tipo: "autoescanear",
+    archivoId,
+    usuarioId,
+    prioridad: P_ALTA,
+    pista,
+  });
 };
 
 // Auto-escaneo al subir: si el archivo parece una factura, intenta escanearlo en

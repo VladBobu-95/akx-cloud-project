@@ -42,6 +42,18 @@ const envSchema = z.object({
   // solo VLM).
   OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
   OLLAMA_CAPTION_MODEL: z.string().default("granite3.2-vision"),
+  // Worker de la cola durable (tareas.service.ts):
+  //  - WORKER_CONCURRENCIA: cuántas tareas se procesan a la vez. 1 por defecto,
+  //    como las colas en memoria anteriores: el trabajo pesado va a Ollama/GPU y
+  //    paralelizarlo la satura (más lento en total, riesgo de quedarse sin VRAM).
+  //  - WORKER_POLL_MS: cada cuánto sondea la tabla cuando no hay nada que hacer.
+  //  - WORKER_MAX_INTENTOS: reintentos antes de marcar la tarea como "error".
+  WORKER_CONCURRENCIA: z.coerce.number().int().min(1).default(1),
+  // Sondeo de respaldo: con despertar inmediato al encolar, este intervalo solo
+  // cubre reintentos (backoff) y trabajo de otra instancia, así que puede ser
+  // amplio sin penalizar la latencia normal (y mantiene los logs de dev limpios).
+  WORKER_POLL_MS: z.coerce.number().int().min(200).default(3000),
+  WORKER_MAX_INTENTOS: z.coerce.number().int().min(1).default(3),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente

@@ -49,6 +49,8 @@ import {
   type FiltroFacturas,
 } from "./facturas.service";
 import { SYSTEM_PROMPT, TOOLS } from "./chat.tools";
+// Estado conversacional pendiente del chat, persistido en BD (#2).
+import { guardarPendiente, tomarPendiente } from "./chatPendientes.service";
 
 // Helpers de rutas .
 const padreRuta = (r: string): string => {
@@ -335,19 +337,19 @@ type OpcionAclaracion = { id: string; nombre: string; carpeta: string } | string
 // (ej. escanea la factura en vez de completar el renombrado que se había
 // pedido). Se descarta a los 5 minutos para no aplicar un estado obsoleto a
 // una conversación ya distinta.
-const pendientesAclaracion = new Map<
-  string,
-  {
-    tool: string;
-    args: Record<string, unknown>;
-    clave: "nombre" | "ruta";
-    opciones: OpcionAclaracion[];
-    ts: number;
-  }
->();
+// Forma del payload de una aclaración pendiente (se guarda en chat_pendientes).
+interface PayloadAclaracion {
+  tool: string;
+  args: Record<string, unknown>;
+  clave: "nombre" | "ruta";
+  opciones: OpcionAclaracion[];
+  ts: number;
+}
 const TTL_ACLARACION_MS = 5 * 60 * 1000;
 
-const registrarAclaracion = (
+// Persistido en BD (#2): antes era un Map en memoria. Async porque escribe en
+// chat_pendientes; los pre-flights ya están en contexto async.
+const registrarAclaracion = async (
   usuarioId: string,
   tool: string,
   args: Record<string, unknown>,
@@ -355,8 +357,13 @@ const registrarAclaracion = (
   opciones: OpcionAclaracion[],
   sugerencia = false,
 ) => {
-  pendientesValor.delete(usuarioId);
-  pendientesAclaracion.set(usuarioId, { tool, args, clave, opciones, ts: Date.now() });
+  // Guardar una aclaración reemplaza cualquier pendiente previo (incl. un valor).
+  await guardarPendiente(
+    usuarioId,
+    "aclaracion",
+    { tool, args, clave, opciones, ts: Date.now() } satisfies PayloadAclaracion,
+    TTL_ACLARACION_MS,
+  );
   return { necesita_aclaracion: true, opciones, sugerencia };
 };
 
@@ -368,20 +375,30 @@ const registrarAclaracion = (
 // literal "undefined". Aquí se pregunta y se recuerda qué completar para que
 // el SIGUIENTE mensaje (texto libre, no una opción de una lista) se use tal
 // cual como el valor que faltaba.
-const pendientesValor = new Map<
-  string,
-  { tool: string; args: Record<string, unknown>; clave: string; pregunta: string; ts: number }
->();
+// Forma del payload de un valor pendiente (se guarda en chat_pendientes).
+interface PayloadValor {
+  tool: string;
+  args: Record<string, unknown>;
+  clave: string;
+  pregunta: string;
+  ts: number;
+}
 
-const registrarFaltaValor = (
+const registrarFaltaValor = async (
   usuarioId: string,
   tool: string,
   args: Record<string, unknown>,
   clave: string,
   pregunta: string,
 ) => {
-  pendientesAclaracion.delete(usuarioId);
-  pendientesValor.set(usuarioId, { tool, args, clave, pregunta, ts: Date.now() });
+  // Guardar un valor pendiente reemplaza cualquier pendiente previo (incl. una
+  // aclaración).
+  await guardarPendiente(
+    usuarioId,
+    "valor",
+    { tool, args, clave, pregunta, ts: Date.now() } satisfies PayloadValor,
+    TTL_ACLARACION_MS,
+  );
   return { necesita_valor: true, pregunta };
 };
 
@@ -1380,9 +1397,8 @@ export const chatear = async (
   // faltaba (ej. "¿qué nombre quieres ponerle a X?"), este mensaje ES esa
   // respuesta: se usa tal cual (texto libre, no una opción de una lista) como
   // el valor que faltaba y se completa la acción original.
-  const pendienteValor = pendientesValor.get(usuarioId);
+  const pendienteValor = await tomarPendiente<PayloadValor>(usuarioId, "valor");
   if (pendienteValor) {
-    pendientesValor.delete(usuarioId);
     const esNegacionValor =
       /^(?:no|nope|nah)(?:\s+(?:gracias|por\s+ahora|era\s+es[ao]|es\s+es[ao]|quiero|asi))?[.,!¡]*$|^ninguna?(?:\s+de\s+(?:esas|estas|ellas))?[.,!¡]*$|^(?:cancela(?:r|lo)?|olvidalo|dejalo|mejor\s+no|para\s+nada)[.,!¡]*$/.test(
         quitarTildes(msgLower),
@@ -1420,9 +1436,8 @@ export const chatear = async (
   // (tool + argumentos de entonces) en vez de tratarlo como un mensaje nuevo
   // sin contexto. Si no coincide con ninguna opción, se descarta para no
   // aplicar un estado obsoleto a una petición distinta.
-  const pendiente = pendientesAclaracion.get(usuarioId);
+  const pendiente = await tomarPendiente<PayloadAclaracion>(usuarioId, "aclaracion");
   if (pendiente) {
-    pendientesAclaracion.delete(usuarioId);
     if (Date.now() - pendiente.ts < TTL_ACLARACION_MS) {
       // Si la elección viene de un clic en la tabla (manda el `id` exacto de
       // la opción), se resuelve por id y NO por texto: dos opciones pueden
@@ -1709,7 +1724,7 @@ export const chatear = async (
               // Nombre con errata: se ofrecen sugerencias y se corta aquí (la
               // aclaración queda registrada para completarla cuando el usuario
               // elija). Lo ya hecho en segmentos anteriores se conserva en `acciones`.
-              registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
+              await registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
               const previo = lecturas.length ? `${lecturas.join("\n\n---\n\n")}\n\n---\n\n` : "";
               return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "leer_archivo", {
                 previo,
@@ -1855,7 +1870,7 @@ export const chatear = async (
       if (res.error) return { respuesta: res.error, acciones };
       if (res.opciones) {
         const tool = tieneIntencionRestaurar ? "restaurar_archivo" : "borrar_permanente";
-        registrarAclaracion(usuarioId, tool, {}, "nombre", res.opciones);
+        await registrarAclaracion(usuarioId, tool, {}, "nombre", res.opciones);
         return respuestaAclaracion(res.opciones, undefined, acciones, tool);
       }
       if (tieneIntencionRestaurar) {
@@ -1906,7 +1921,7 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, matchNombreFactura[0]);
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "obtener_factura", {}, "nombre", res.opciones, res.sugerencia);
+      await registrarAclaracion(usuarioId, "obtener_factura", {}, "nombre", res.opciones, res.sugerencia);
       return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "obtener_factura");
     }
     if (res.archivo!.estadoEscaneo === "pendiente" || res.archivo!.estadoEscaneo === "escaneando") {
@@ -2355,7 +2370,7 @@ export const chatear = async (
   const mostrarContenidoArchivo = async (nombre: string) => {
     const res = await resolverArchivo(usuarioId, nombre);
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
+      await registrarAclaracion(usuarioId, "leer_archivo", {}, "nombre", res.opciones, res.sugerencia);
       return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "leer_archivo");
     }
     if (!res.archivo) return null;
@@ -2483,7 +2498,7 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchNombreArchivoABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", res.opciones, res.sugerencia);
+      await registrarAclaracion(usuarioId, "eliminar_archivo", {}, "nombre", res.opciones, res.sugerencia);
       return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "eliminar_archivo");
     }
     await eliminarArchivo(res.archivo!.id, usuarioId);
@@ -2502,7 +2517,7 @@ export const chatear = async (
     const res = await resolverCarpeta(usuarioId, grupoOriginal(msgLower, matchNombreCarpetaABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "eliminar_carpeta", {}, "ruta", res.opciones, res.sugerencia);
+      await registrarAclaracion(usuarioId, "eliminar_carpeta", {}, "ruta", res.opciones, res.sugerencia);
       return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "eliminar_carpeta");
     }
     const r = await eliminarCarpetaConContenido(usuarioId, res.ruta!);
@@ -2547,7 +2562,7 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchCopiar, 1).trim());
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(
+      await registrarAclaracion(
         usuarioId,
         "copiar_archivo",
         destinoCrudo ? { carpeta: destinoCrudo } : {},
@@ -2592,7 +2607,7 @@ export const chatear = async (
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchMover, 1).trim());
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
-      registrarAclaracion(
+      await registrarAclaracion(
         usuarioId,
         "mover_archivo",
         destinoCrudo ? { carpeta: destinoCrudo } : {},
@@ -2603,7 +2618,7 @@ export const chatear = async (
       return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "mover_archivo");
     }
     if (!destinoCrudo) {
-      const { pregunta } = registrarFaltaValor(
+      const { pregunta } = await registrarFaltaValor(
         usuarioId,
         "mover_archivo",
         { nombre: res.archivo!.nombre },
@@ -2649,7 +2664,7 @@ export const chatear = async (
     if (res.error) return { respuesta: res.error, acciones };
     const nuevoNombre = grupoOriginal(msgLower, matchRenombrar, 2).trim();
     if (res.opciones) {
-      registrarAclaracion(usuarioId, "renombrar_archivo", { nuevo_nombre: nuevoNombre }, "nombre", res.opciones, res.sugerencia);
+      await registrarAclaracion(usuarioId, "renombrar_archivo", { nuevo_nombre: nuevoNombre }, "nombre", res.opciones, res.sugerencia);
       return respuestaAclaracion(res.opciones, res.sugerencia, acciones, "renombrar_archivo");
     }
     const r = await actualizarArchivo(res.archivo!.id, usuarioId, { nombre: nuevoNombre });
