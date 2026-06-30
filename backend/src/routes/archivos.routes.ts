@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { verificarToken } from "../middlewares/auth.middleware";
 import { validarUUID } from "../middlewares/validarUUID.middleware";
+import { limitadorSubida, limiteBacklogUsuario } from "../middlewares/limites.middleware";
 import {
   ctrlSubir,
   ctrlListar,
@@ -65,7 +66,14 @@ const upload = multer({
 // Todas las rutas requieren token valido (verificarToken)
 // Las rutas con :id ademas validan que el ID sea un UUID (validarUUID)
 
-router.post("/subir", verificarToken, upload.single("archivo"), ctrlSubir);
+router.post(
+  "/subir",
+  verificarToken,
+  limitadorSubida,
+  limiteBacklogUsuario,
+  upload.single("archivo"),
+  ctrlSubir,
+);
 router.get("/", verificarToken, ctrlListar);
 router.get("/buscar", verificarToken, ctrlBuscarSemantica);
 router.get("/papelera", verificarToken, ctrlPapelera);

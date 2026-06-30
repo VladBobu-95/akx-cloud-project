@@ -54,6 +54,10 @@ const envSchema = z.object({
   // amplio sin penalizar la latencia normal (y mantiene los logs de dev limpios).
   WORKER_POLL_MS: z.coerce.number().int().min(200).default(3000),
   WORKER_MAX_INTENTOS: z.coerce.number().int().min(1).default(3),
+  // Tope de tareas pendientes/en proceso por usuario (#8): evita que uno solo
+  // encole miles de archivos y monopolice el worker. Alto para no estorbar
+  // subidas masivas normales.
+  MAX_BACKLOG_USUARIO: z.coerce.number().int().min(1).default(200),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente
