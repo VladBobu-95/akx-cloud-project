@@ -157,8 +157,10 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 
 ## Schema de BD
 - **usuarios**: `id`, `email` unique, `nombre`, `avatar` (base64, null), `passwordHash`, `rol` (`user`|`admin`, default `user`; el registro ignora `rol` del cliente), `creadoEn`.
-- **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256`, `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `eliminadoEn` (soft delete), `propietario` CASCADE.
+- **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256` (dedup al subir: idéntico contenido vivo → se reutiliza, no se reprocesa), `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `estadoIndexado`/`indexadoEn` (estado del indexado RAG), `eliminadoEn` (soft delete), `propietario` CASCADE.
 - **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
+- **tareas** (cola durable): `id`, `tipo` (`indexar`|`autoescanear`), `archivoId`/`usuarioId` CASCADE, `estado` (`pendiente`|`en_proceso`|`ok`|`error`), `prioridad`, `intentos`/`maxIntentos`, `disponibleEn` (backoff), `pista`, `error`. La procesa el worker (`tareas.service.ts`), que relee los bytes de MinIO → sobrevive a reinicios, reintenta y limita la concurrencia hacia Ollama (sustituye a las colas en memoria).
+- **chat_pendientes**: `usuarioId` PK, `tipo` (`aclaracion`|`valor`|`confirmacion`), `payload` jsonb, `expiraEn`. Estado conversacional del chat fuera de memoria (aclaraciones, valores que faltan, y confirmación de operaciones masivas irreversibles como vaciar la papelera).
 - **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `cliente`, `moneda` (código ISO 4217, default `EUR`; la IA la extrae de la factura), `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade. Analítica y resúmenes (totales, ventas_top, clientes_top, resumen-ventas.md) **agrupan por moneda** — nunca se suman divisas distintas.
 - **lineas_factura**: `descripcion`, `cantidad`, `precioUnit`, `total`.
 - **fragmentos** (RAG): `archivoId`, `propietarioId`, `indice`, `texto`, `embedding vector(1024)`.
