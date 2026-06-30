@@ -1392,6 +1392,10 @@ export const chatear = async (
       .replace(/\b(en|de|del)\b\s*$/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+
+      if (/^facturas?$/i.test(limpio)) {
+    return null; 
+  }
     return limpio || null;
   };
 
