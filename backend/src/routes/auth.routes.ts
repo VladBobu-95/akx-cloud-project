@@ -1,7 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import {
-  ctrlRegistrar,
   ctrlLogin,
   ctrlPerfil,
   ctrlActualizarPerfil,
@@ -26,19 +25,10 @@ const limitadorLogin = rateLimit({
   skip: soloEnProduccion,
 });
 
-// Rate limiter para registro: maximo 5 cuentas nuevas por hora por IP.
-// Evita que alguien cree cientos de cuentas automaticamente.
-const limitadorRegistro = rateLimit({
-  windowMs: 60 * 60 * 1000, // ventana de 1 hora
-  max: 5,
-  message: { error: "Demasiados registros desde esta IP. Espera 1 hora." },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: soloEnProduccion,
-});
+// No hay auto-registro público: las cuentas las crea el superadmin (admins de
+// empresa, vía /api/plataforma) o el admin (miembros, vía /api/equipo).
 
 // Rutas publicas (no requieren token)
-router.post("/registro", limitadorRegistro, ctrlRegistrar);
 router.post("/login", limitadorLogin, ctrlLogin);
 
 // Ruta protegida: el middleware verificarToken se ejecuta antes que ctrlPerfil

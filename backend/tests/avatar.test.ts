@@ -1,6 +1,7 @@
 import request from "supertest";
 import { app } from "../src/app";
 import { describe, it, expect, beforeAll } from "@jest/globals";
+import { tokenUsuario } from "./helpers";
 
 // Validación del avatar (#10): debe ser una imagen real (data-URL + magic bytes)
 // y no superar el tope de tamaño decodificado. Antes se aceptaba cualquier
@@ -16,10 +17,7 @@ describe("Validación de avatar (#10)", () => {
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
   beforeAll(async () => {
-    const reg = await request(app)
-      .post("/api/auth/registro")
-      .send({ email: `avatar_${Date.now()}@test.com`, password: "password123", nombre: "Avatar" });
-    token = reg.body.token;
+    token = await tokenUsuario(`avatar_${Date.now()}@test.com`);
   });
 
   it("PNG válido -> 200", async () => {

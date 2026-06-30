@@ -5,9 +5,16 @@
     </a>
 
     <nav class="nav-links">
-      <a routerLink="/inicio" routerLinkActive="active">Inicio</a>
-      <a routerLink="/archivos" routerLinkActive="active">Mis archivos</a>
-      <a routerLink="/papelera" routerLinkActive="active">Papelera</a>
+      @if (auth.esSuperadmin()) {
+        <a routerLink="/plataforma" routerLinkActive="active">Plataforma</a>
+      } @else {
+        <a routerLink="/inicio" routerLinkActive="active">Inicio</a>
+        <a routerLink="/archivos" routerLinkActive="active">Mis archivos</a>
+        <a routerLink="/papelera" routerLinkActive="active">Papelera</a>
+        @if (auth.esAdmin()) {
+          <a routerLink="/equipo" routerLinkActive="active">Equipo</a>
+        }
+      }
     </nav>
 
     <span class="spacer"></span>

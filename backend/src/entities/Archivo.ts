@@ -81,6 +81,13 @@ export class Archivo {
   })
   propietario!: Usuario;
 
+  // Si tiene valor, el archivo vive en una CARPETA COMPARTIDA (acceso por
+  // empresa+roles, no por propietario). Si es null, es un archivo personal
+  // gobernado por `propietario`. `propietario` se mantiene como autor/auditoría
+  // de quién lo subió. Ver compartido.service.ts.
+  @Column({ type: "uuid", nullable: true })
+  carpetaCompartidaId?: string | null;
+
   @CreateDateColumn()
   subidoEn!: Date;
 }

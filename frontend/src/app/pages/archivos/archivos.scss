@@ -2,6 +2,29 @@
         /* Ocupa todo el alto disponible para poder soltar "en cualquier sitio". */
         min-height: calc(100vh - 120px);
       }
+      /* Toggle Personales / Compartido */
+      .ambito-toggle {
+        display: inline-flex;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px;
+        margin-bottom: 14px;
+      }
+      .ambito-toggle button {
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-weight: 600;
+        color: var(--muted);
+        padding: 8px 20px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .ambito-toggle button.active {
+        background: var(--green-soft);
+        color: var(--green-dark);
+      }
       /* Etiqueta que sigue al ratón durante el arrastre. */
       .ghost {
         position: fixed;

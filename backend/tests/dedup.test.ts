@@ -1,6 +1,7 @@
 import request from "supertest";
 import { app } from "../src/app";
 import { describe, it, expect, beforeAll } from "@jest/globals";
+import { tokenUsuario } from "./helpers";
 
 // Deduplicación por hash (#4): subir el mismo contenido dos veces no debe crear
 // una segunda copia ni reprocesar; debe devolver el archivo existente con
@@ -17,12 +18,7 @@ describe("Dedup por hash", () => {
       .set(auth(t))
       .attach("archivo", Buffer.from(contenido), { filename, contentType: "text/plain" });
 
-  const registrar = async (email: string): Promise<string> => {
-    const res = await request(app)
-      .post("/api/auth/registro")
-      .send({ email, password: "password123", nombre: "Dedup Test" });
-    return res.body.token as string;
-  };
+  const registrar = (email: string): Promise<string> => tokenUsuario(email);
 
   beforeAll(async () => {
     token = await registrar(`dedup_${Date.now()}@test.com`);

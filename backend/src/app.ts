@@ -10,6 +10,9 @@ import authRoutes from "./routes/auth.routes";
 import archivosRoutes from "./routes/archivos.routes";
 import chatRoutes from "./routes/chat.routes";
 import facturasRoutes from "./routes/facturas.routes";
+import plataformaRoutes from "./routes/plataforma.routes";
+import equipoRoutes from "./routes/equipo.routes";
+import compartidoRoutes from "./routes/compartido.routes";
 
 export const app = express();
 
@@ -48,6 +51,9 @@ app.use("/api/auth", authRoutes);
 app.use("/api/archivos", archivosRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/facturas", facturasRoutes);
+app.use("/api/plataforma", plataformaRoutes);
+app.use("/api/equipo", equipoRoutes);
+app.use("/api/compartido", compartidoRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });

@@ -120,7 +120,10 @@ const ejecutarIndexar = async (t: Tarea): Promise<void> => {
 
   // Tras indexar, si es candidato a factura encadenamos el escaneo (fase 2);
   // si no, limpiamos el estado para que el spinner no se quede encendido.
-  if (esArchivoFactura(archivo)) {
+  // Los archivos en carpetas COMPARTIDAS no se auto-escanean: una factura
+  // compartida no debe atribuirse al usuario que la subió (la analítica de
+  // facturas es personal). El texto/indexado RAG sí se hace para la búsqueda.
+  if (!archivo.carpetaCompartidaId && esArchivoFactura(archivo)) {
     await encolarTarea({
       tipo: "autoescanear",
       archivoId: archivo.id,

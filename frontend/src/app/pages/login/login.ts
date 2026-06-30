@@ -14,28 +14,21 @@ export class Login {
   private auth = inject(AuthService);
   private router = inject(Router);
 
-  protected modo = signal<'login' | 'registro'>('login');
   protected cargando = signal(false);
   protected error = signal<string | null>(null);
   protected verPassword = signal(false);
   protected email = '';
   protected password = '';
-  protected nombre = '';
 
   enviar() {
     if (!this.email || !this.password) return;
-    if (this.modo() === 'registro' && !this.nombre) return;
     this.error.set(null);
     this.cargando.set(true);
 
-    const obs =
-      this.modo() === 'login'
-        ? this.auth.login(this.email, this.password)
-        : this.auth.registrar(this.email, this.password, this.nombre);
-
-    obs.subscribe({
+    this.auth.login(this.email, this.password).subscribe({
       next: () => {
-        this.router.navigate(['/inicio']);
+        // El superadmin no tiene archivos/chat: va directo a su panel.
+        this.router.navigate([this.auth.esSuperadmin() ? '/plataforma' : '/inicio']);
       },
       error: (err) => {
         this.cargando.set(false);

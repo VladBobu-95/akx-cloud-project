@@ -9,6 +9,7 @@ import { Archivo, ResultadoBusqueda } from '../../core/models';
 import { FileSizePipe } from '../../shared/file-size.pipe';
 import { mensajeError } from '../../shared/errores';
 import { normalizarRuta, unir, padre, nombreHoja } from './rutas.util';
+import { CompartidoComponent } from './compartido';
 
 // Payload de lo que se está arrastrando: un archivo (por id) o una carpeta (por ruta).
 interface Arrastre {
@@ -19,13 +20,16 @@ interface Arrastre {
 
 @Component({
   selector: 'app-archivos',
-  imports: [FormsModule, DatePipe, FileSizePipe],
+  imports: [FormsModule, DatePipe, FileSizePipe, CompartidoComponent],
   templateUrl: './archivos.html',
   styleUrl: './archivos.scss',
 })
 export class ArchivosPage {
   private svc = inject(ArchivosService);
   private toast = inject(ToastService);
+
+  // Personales (explorador de siempre) vs Compartido (carpetas por rol).
+  protected ambito = signal<'personal' | 'compartido'>('personal');
 
   protected todos = signal<Archivo[]>([]);
   protected cargando = signal(false);

@@ -1,14 +1,10 @@
 import request from "supertest";
 import { app } from "../src/app";
 import { describe, it, expect, beforeAll } from "@jest/globals";
+import { tokenUsuario } from "./helpers";
 
-// Registra un usuario y devuelve su token
-const registrar = async (email: string): Promise<string> => {
-  const res = await request(app)
-    .post("/api/auth/registro")
-    .send({ email, password: "password123", nombre: "Archivos Test" });
-  return res.body.token as string;
-};
+// Crea un usuario (con su empresa) y devuelve su token. Ya no hay registro público.
+const registrar = (email: string): Promise<string> => tokenUsuario(email);
 
 describe("Archivos", () => {
   let token: string; // dueño

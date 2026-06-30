@@ -4,39 +4,9 @@
           <span class="logo-mark">▲</span> AKX <span class="green">Cloud</span>
         </div>
 
-        <div class="tabs">
-          <button
-            [class.active]="modo() === 'login'"
-            (click)="modo.set('login'); error.set(null)"
-            type="button"
-          >
-            Iniciar sesión
-          </button>
-          <button
-            [class.active]="modo() === 'registro'"
-            (click)="modo.set('registro'); error.set(null)"
-            type="button"
-          >
-            Crear cuenta
-          </button>
-        </div>
+        <h1 class="auth-title">Iniciar sesión</h1>
 
         <form (ngSubmit)="enviar()">
-          @if (modo() === 'registro') {
-            <div class="field">
-              <label for="nombre">Nombre de usuario</label>
-              <input
-                id="nombre"
-                class="input"
-                type="text"
-                name="nombre"
-                [(ngModel)]="nombre"
-                placeholder="Tu nombre"
-                required
-                autocomplete="username"
-              />
-            </div>
-          }
           <div class="field">
             <label for="email">Email</label>
             <input
@@ -59,7 +29,7 @@
                 [type]="verPassword() ? 'text' : 'password'"
                 name="password"
                 [(ngModel)]="password"
-                placeholder="Mínimo 8 caracteres"
+                placeholder="Tu contraseña"
                 required
                 autocomplete="current-password"
               />
@@ -87,9 +57,9 @@
           <button
             class="btn btn-primary full"
             type="submit"
-            [disabled]="cargando() || !email || !password || (modo() === 'registro' && !nombre)"
+            [disabled]="cargando() || !email || !password"
           >
-            {{ cargando() ? 'Procesando…' : modo() === 'login' ? 'Entrar' : 'Crear cuenta' }}
+            {{ cargando() ? 'Procesando…' : 'Entrar' }}
           </button>
         </form>
       </div>

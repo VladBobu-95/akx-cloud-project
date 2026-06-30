@@ -30,6 +30,7 @@ import {
   carpetaExiste,
 } from "./carpetas.service";
 import { buscarSemantica } from "./rag.service";
+import { capacidadesDe } from "./equipo.service";
 import {
   obtenerFactura,
   ventasTop,
@@ -466,6 +467,22 @@ const mensajeAclaracion = (opciones: OpcionAclaracion[], sugerencia?: boolean): 
 // opciones de una misma pregunta.
 const TOOLS_LECTURA = new Set(["leer_archivo", "obtener_factura"]);
 
+// RBAC del chat: qué capacidad (vocabulario fijo de config/capacidades.ts) requiere
+// cada herramienta. Las que no aparecen no requieren ninguna (siempre disponibles:
+// p. ej. estadísticas, listar/crear/mover/eliminar archivos personales — gestión
+// básica de los propios archivos). El gating real lo aplica `ejecutarTool` (y se
+// filtra además la lista que ve el modelo). admin/superadmin tienen todas.
+const TOOL_CAPACIDAD: Record<string, string> = {
+  buscar_semantica: "busqueda",
+  leer_archivo: "busqueda",
+  escanear_factura: "facturas",
+  escanear_todas_facturas: "facturas",
+  obtener_factura: "facturas",
+  ventas_top: "facturas",
+  totales_facturas: "facturas",
+  clientes_top: "facturas",
+};
+
 // Una fila de la tabla clicable de aclaración: `etiqueta` es lo que se muestra,
 // `valor` es lo que se manda como mensaje al pulsarla (para que la burbuja del
 // chat lea bien). `id` (solo si la opción es un archivo, no una carpeta) es lo
@@ -588,8 +605,15 @@ const ejecutarTool = async (
   args: Record<string, unknown>,
   usuarioId: string,
   acciones: string[],
+  capacidades: Set<string>,
 ): Promise<unknown> => {
   try {
+    // RBAC: si la herramienta requiere una capacidad que el rol del usuario no
+    // tiene, no se ejecuta (frontera de seguridad en CÓDIGO, no en el prompt).
+    const capReq = TOOL_CAPACIDAD[nombre];
+    if (capReq && !capacidades.has(capReq)) {
+      return { error: `Esto no está disponible para tu rol (requiere la capacidad "${capReq}").` };
+    }
     switch (nombre) {
       case "buscar_archivos": {
         const texto = typeof args.texto === "string" ? args.texto : "";
@@ -1157,6 +1181,7 @@ const OLLAMA_TIMEOUT_MS = 45_000;
 const llamarOllama = async (
   messages: OllamaMessage[],
   sinHerramientas = false,
+  tools: typeof TOOLS = TOOLS,
 ): Promise<OllamaMessage> => {
   let res: Response;
   const controller = new AbortController();
@@ -1168,7 +1193,7 @@ const llamarOllama = async (
       body: JSON.stringify({
         model: env.OLLAMA_MODEL,
         messages,
-        ...(sinHerramientas ? {} : { tools: TOOLS }),
+        ...(sinHerramientas ? {} : { tools }),
         stream: false,
         keep_alive: "30m",
         options: { temperature: 0 },
@@ -1272,6 +1297,17 @@ export const chatear = async (
   ];
 
   const acciones: string[] = [];
+
+  // RBAC del chat: capacidades del rol del usuario (admin/superadmin = todas).
+  // Se usa para (a) gatear el ejecutor, (b) filtrar las tools que ve el modelo y
+  // (c) cortar los pre-flights de facturas. Enforzado en CÓDIGO, no en el prompt.
+  const capacidades = await capacidadesDe(usuarioId);
+  const puedeFacturas = capacidades.has("facturas");
+  const toolsPermitidas = TOOLS.filter((t) => {
+    const cap = TOOL_CAPACIDAD[t.function.name];
+    return !cap || capacidades.has(cap);
+  });
+
   // Si una tool resuelve uno o varios archivos concretos (ej. obtener_factura,
   // buscar_archivos), se guardan aquí para que el front pueda ofrecer botones
   // "Abrir archivo" (abrir una pestaña nueva desde el chat sin botón propio
@@ -1415,6 +1451,7 @@ export const chatear = async (
         argsFinal,
         usuarioId,
         acciones,
+        capacidades,
       )) as Record<string, unknown>;
       if (resultado.necesita_valor === true) {
         return { respuesta: resultado.pregunta as string, acciones };
@@ -1487,6 +1524,7 @@ export const chatear = async (
           argsFinal,
           usuarioId,
           acciones,
+          capacidades,
         )) as Record<string, unknown>;
         if (resultado.necesita_valor === true) {
           return { respuesta: resultado.pregunta as string, acciones };
@@ -1777,7 +1815,7 @@ export const chatear = async (
               lecturas.push(`**${archivo.nombre}**: ${err instanceof AppError ? err.message : "no pude leer el contenido."}`);
             }
           } else {
-            const r = (await ejecutarTool(a.tool, a.args, usuarioId, acciones)) as Record<string, unknown>;
+            const r = (await ejecutarTool(a.tool, a.args, usuarioId, acciones, capacidades)) as Record<string, unknown>;
             if (r.necesita_valor === true) {
               // Falta un dato libre (ej. el nuevo nombre): se pregunta y se corta
               // aquí igual que con la aclaración por varias coincidencias. Lo ya
@@ -1847,6 +1885,7 @@ export const chatear = async (
   // comprueba ANTES del listado general para que tenga prioridad cuando se
   // menciona "factura(s)".
   const esListarFacturasPapelera =
+    puedeFacturas &&
     contieneFactura(msgSinTildes) &&
     /papelera/.test(msgSinTildes) &&
     !/borra|elimina|restaura|recupera|vacia/.test(msgSinTildes);
@@ -2028,6 +2067,7 @@ export const chatear = async (
       args,
       usuarioId,
       acciones,
+      capacidades,
     )) as Record<string, unknown>;
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
@@ -2059,6 +2099,7 @@ export const chatear = async (
         args,
         usuarioId,
         acciones,
+        capacidades,
       )) as Record<string, unknown>;
       if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
     }
@@ -2095,7 +2136,7 @@ export const chatear = async (
     }
     // "lo más vendido en dólares" — ranking acotado a esa divisa.
     if (monedaDetectada) args.moneda = monedaDetectada;
-    const resultado = (await ejecutarTool("ventas_top", args, usuarioId, acciones)) as Record<
+    const resultado = (await ejecutarTool("ventas_top", args, usuarioId, acciones, capacidades)) as Record<
       string,
       unknown
     >;
@@ -2123,6 +2164,7 @@ export const chatear = async (
       { tipo },
       usuarioId,
       acciones,
+      capacidades,
     )) as Record<string, unknown>;
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
@@ -2141,6 +2183,7 @@ export const chatear = async (
   // si además pide total/facturado/vendido/ranking, que ya tienen su propio
   // pre-flight.
   const esListarFacturasPeriodo =
+    puedeFacturas &&
     contieneFactura(msgSinTildes) &&
     !pideTotales &&
     !esRankingVentas &&
@@ -2212,7 +2255,7 @@ export const chatear = async (
   const matchFacturasDeCarpeta = msgSinTildes.match(
     /\bfacturas?\b.*?(?:dentro\s+de\s+(?:la\s+carpeta\s+)?|de\s+la\s+carpeta\s+|en\s+la\s+carpeta\s+)([\wÀ-ÿ/-]+)/,
   );
-  if (matchFacturasDeCarpeta && !pideTotales && !esRankingVentas) {
+  if (puedeFacturas && matchFacturasDeCarpeta && !pideTotales && !esRankingVentas) {
     const nombreCarpeta = grupoOriginal(msgLower, matchFacturasDeCarpeta).trim();
     const res = await resolverCarpeta(usuarioId, nombreCarpeta);
     if (res.error) return { respuesta: res.error, acciones };
@@ -2279,6 +2322,7 @@ export const chatear = async (
   // literalmente "factura") se leía como "cliente = factura a factura222" y
   // devolvía un listado vacío en vez de renombrar nada.
   if (
+    puedeFacturas &&
     contieneFactura(msgSinTildes) &&
     !esResumenArchivoConcreto &&
     !pideTotales &&
@@ -2383,6 +2427,7 @@ export const chatear = async (
   // factura concreta (ej. "resumen de factura_03"), que es un caso distinto
   // ya cubierto por obtener_factura.
   const esResumenGeneral =
+    puedeFacturas &&
     /\bresumen(es)?\b/.test(msgSinTildes) &&
     /\b(de\s+todo|de\s+ventas|general)\b/.test(msgSinTildes) &&
     !/\bfacturas?[\d_-]/.test(msgSinTildes);
@@ -2498,7 +2543,7 @@ export const chatear = async (
         : borradoMasivo === "carpetas"
           ? "borrar_todas_carpetas"
           : "borrar_todos_archivos";
-    const resultado = await ejecutarTool(tool, {}, usuarioId, acciones);
+    const resultado = await ejecutarTool(tool, {}, usuarioId, acciones, capacidades);
     const r = resultado as Record<string, unknown>;
     if (r.ok) {
       return { respuesta: "Hecho.", acciones };
@@ -2943,7 +2988,7 @@ export const chatear = async (
         archivos: archivosParaAbrir.length ? archivosParaAbrir : undefined,
       };
     }
-    const respuesta = await llamarOllama(messages);
+    const respuesta = await llamarOllama(messages, false, toolsPermitidas);
     messages.push(respuesta);
 
     // Corrige nombres de tool inventados pero reconocibles (ej. "copiar_factura"
@@ -2985,7 +3030,7 @@ export const chatear = async (
         huboRepetida = true;
         resultado = llamadasVistas.get(firma);
       } else {
-        resultado = await ejecutarTool(tc.function.name, args, usuarioId, acciones);
+        resultado = await ejecutarTool(tc.function.name, args, usuarioId, acciones, capacidades);
         llamadasVistas.set(firma, resultado);
       }
       messages.push({ role: "tool", content: JSON.stringify(resultado) });

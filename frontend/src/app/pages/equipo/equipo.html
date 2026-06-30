@@ -1,0 +1,312 @@
+    <div class="head row">
+      <div>
+        <h1>Equipo</h1>
+        <p class="muted">Gestiona los usuarios y los roles de tu empresa</p>
+      </div>
+    </div>
+
+    <!-- Toggle Miembros / Roles -->
+    <div class="toggle">
+      <button [class.active]="vista() === 'miembros'" (click)="vista.set('miembros')">Miembros</button>
+      <button [class.active]="vista() === 'roles'" (click)="vista.set('roles')">Roles</button>
+      <button [class.active]="vista() === 'compartido'" (click)="vista.set('compartido')">Compartido</button>
+    </div>
+
+    @if (cargando()) {
+      <div class="card empty">Cargando…</div>
+    } @else {
+      <!-- ===================== MIEMBROS ===================== -->
+      @if (vista() === 'miembros') {
+        <div class="row barra">
+          <span class="muted">{{ miembros().length }} miembro(s)</span>
+          <span class="spacer"></span>
+          <button class="btn btn-primary" (click)="abrirCrearMiembro()">+ Agregar miembro</button>
+        </div>
+
+        <div class="card list">
+          @if (miembros().length === 0) {
+            <div class="empty"><div class="icon">👥</div> Aún no hay miembros.</div>
+          } @else {
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Email</th>
+                  <th>Cuenta</th>
+                  <th>Roles</th>
+                  <th class="acciones-col">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (m of miembros(); track m.id) {
+                  <tr>
+                    <td class="nombre">{{ m.nombre || '—' }}</td>
+                    <td>{{ m.email }}</td>
+                    <td>
+                      <span class="badge" [class.badge-admin]="m.rol === 'admin'">{{ m.rol }}</span>
+                    </td>
+                    <td>
+                      @if (m.roles.length) {
+                        @for (r of m.roles; track r.id) {
+                          <span class="badge badge-rol">{{ r.nombre }}</span>
+                        }
+                      } @else {
+                        <span class="muted">—</span>
+                      }
+                    </td>
+                    <td>
+                      <div class="acciones">
+                        <button class="btn btn-outline btn-sm" (click)="verArchivos(m)">Ver archivos</button>
+                        <button class="btn btn-outline btn-sm" (click)="abrirEditarMiembro(m)">Editar</button>
+                        <button class="btn btn-danger btn-sm" (click)="eliminarMiembro(m)">Eliminar</button>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+      }
+
+      <!-- ===================== ROLES ===================== -->
+      @if (vista() === 'roles') {
+        <div class="row barra">
+          <span class="muted">{{ roles().length }} rol(es)</span>
+          <span class="spacer"></span>
+          <button class="btn btn-primary" (click)="abrirCrearRol()">+ Nuevo rol</button>
+        </div>
+
+        <div class="card list">
+          @if (roles().length === 0) {
+            <div class="empty"><div class="icon">🏷️</div> Aún no hay roles. Crea los que necesites (contabilidad, mantenimiento…).</div>
+          } @else {
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Rol</th>
+                  <th>Capacidades</th>
+                  <th class="acciones-col">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (r of roles(); track r.id) {
+                  <tr>
+                    <td class="nombre">{{ r.nombre }}</td>
+                    <td class="muted">{{ resumenCaps(r) }}</td>
+                    <td>
+                      <div class="acciones">
+                        <button class="btn btn-outline btn-sm" (click)="abrirEditarRol(r)">Editar</button>
+                        <button class="btn btn-danger btn-sm" (click)="eliminarRol(r)">Eliminar</button>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+      }
+
+      <!-- ===================== CARPETAS COMPARTIDAS ===================== -->
+      @if (vista() === 'compartido') {
+        <div class="row barra">
+          <span class="muted">{{ compartidas().length }} carpeta(s) compartida(s)</span>
+          <span class="spacer"></span>
+          <button class="btn btn-primary" (click)="abrirCrearCompartida()">+ Nueva carpeta compartida</button>
+        </div>
+
+        <div class="card list">
+          @if (compartidas().length === 0) {
+            <div class="empty"><div class="icon">📂</div> Aún no hay carpetas compartidas. Crea una y dale acceso a los roles.</div>
+          } @else {
+            <table class="table">
+              <thead>
+                <tr><th>Carpeta</th><th>Roles con acceso</th><th class="acciones-col">Acciones</th></tr>
+              </thead>
+              <tbody>
+                @for (c of compartidas(); track c.id) {
+                  <tr>
+                    <td class="nombre">{{ c.nombre }}</td>
+                    <td class="muted">{{ resumenRolesCompartida(c) }}</td>
+                    <td>
+                      <div class="acciones">
+                        <button class="btn btn-outline btn-sm" (click)="abrirEditarCompartida(c)">Editar</button>
+                        <button class="btn btn-danger btn-sm" (click)="eliminarCompartida(c)">Eliminar</button>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+      }
+    }
+
+    <!-- ===================== MODAL CARPETA COMPARTIDA ===================== -->
+    @if (cMostrar()) {
+      <div class="modal-backdrop" (click)="cMostrar.set(false)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>{{ cEditId() ? 'Editar carpeta compartida' : 'Nueva carpeta compartida' }}</h2>
+          <form (ngSubmit)="guardarCompartida()">
+            <div class="field">
+              <label for="cNombre">Nombre</label>
+              <input id="cNombre" class="input" name="cNombre" [(ngModel)]="cNombre" placeholder="Contabilidad" required />
+            </div>
+            <p class="seccion">Roles con acceso</p>
+            @if (roles().length === 0) {
+              <p class="muted">No hay roles aún. Créalos en la pestaña «Roles».</p>
+            } @else {
+              <div class="chips">
+                @for (r of roles(); track r.id) {
+                  <label class="chip" [class.on]="cRolesSel().has(r.id)">
+                    <input type="checkbox" [checked]="cRolesSel().has(r.id)" (change)="toggleRolCompartida(r.id)" />
+                    {{ r.nombre }}
+                  </label>
+                }
+              </div>
+            }
+            <div class="row" style="justify-content: flex-end; margin-top: 16px;">
+              <button type="button" class="btn btn-ghost" (click)="cMostrar.set(false)">Cancelar</button>
+              <button type="submit" class="btn btn-primary" [disabled]="guardando() || !cNombre">
+                {{ guardando() ? 'Guardando…' : 'Guardar' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    }
+
+    <!-- ===================== MODAL MIEMBRO ===================== -->
+    @if (mMostrar()) {
+      <div class="modal-backdrop" (click)="mMostrar.set(false)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>{{ mEditId() ? 'Editar miembro' : 'Agregar miembro' }}</h2>
+          <form (ngSubmit)="guardarMiembro()">
+            <div class="field">
+              <label for="mNombre">Nombre</label>
+              <input id="mNombre" class="input" name="mNombre" [(ngModel)]="mNombre" required />
+            </div>
+            <div class="field">
+              <label for="mEmail">Email</label>
+              <input id="mEmail" class="input" type="email" name="mEmail" [(ngModel)]="mEmail" required autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="mPassword">Contraseña {{ mEditId() ? '(dejar en blanco para no cambiarla)' : '' }}</label>
+              <input id="mPassword" class="input" type="password" name="mPassword" [(ngModel)]="mPassword"
+                     [placeholder]="mEditId() ? '••••••' : 'Mínimo 8 caracteres'" autocomplete="new-password" />
+            </div>
+            <div class="field">
+              <label for="mRolCuenta">Tipo de cuenta</label>
+              <select id="mRolCuenta" class="input" name="mRolCuenta" [(ngModel)]="mRolCuenta">
+                <option value="miembro">Miembro</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </div>
+
+            <p class="seccion">Roles funcionales</p>
+            @if (roles().length === 0) {
+              <p class="muted">No hay roles aún. Créalos en la pestaña «Roles».</p>
+            } @else {
+              <div class="chips">
+                @for (r of roles(); track r.id) {
+                  <label class="chip" [class.on]="mRolesSel().has(r.id)">
+                    <input type="checkbox" [checked]="mRolesSel().has(r.id)" (change)="toggleRolMiembro(r.id)" />
+                    {{ r.nombre }}
+                  </label>
+                }
+              </div>
+            }
+
+            <div class="row" style="justify-content: flex-end; margin-top: 16px;">
+              <button type="button" class="btn btn-ghost" (click)="mMostrar.set(false)">Cancelar</button>
+              <button type="submit" class="btn btn-primary"
+                      [disabled]="guardando() || !mNombre || !mEmail || (!mEditId() && !mPassword)">
+                {{ guardando() ? 'Guardando…' : 'Guardar' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    }
+
+    <!-- ===================== MODAL ROL ===================== -->
+    @if (rMostrar()) {
+      <div class="modal-backdrop" (click)="rMostrar.set(false)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>{{ rEditId() ? 'Editar rol' : 'Nuevo rol' }}</h2>
+          <form (ngSubmit)="guardarRol()">
+            <div class="field">
+              <label for="rNombre">Nombre del rol</label>
+              <input id="rNombre" class="input" name="rNombre" [(ngModel)]="rNombre" placeholder="contabilidad" required />
+            </div>
+
+            <p class="seccion">Capacidades</p>
+            <div class="caps">
+              @for (c of capacidades(); track c) {
+                <label class="cap" [class.on]="rCapsSel().has(c)">
+                  <input type="checkbox" [checked]="rCapsSel().has(c)" (change)="toggleCapRol(c)" />
+                  {{ nombreCapacidad(c) }}
+                </label>
+              }
+            </div>
+
+            <div class="row" style="justify-content: flex-end; margin-top: 16px;">
+              <button type="button" class="btn btn-ghost" (click)="rMostrar.set(false)">Cancelar</button>
+              <button type="submit" class="btn btn-primary" [disabled]="guardando() || !rNombre">
+                {{ guardando() ? 'Guardando…' : 'Guardar' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    }
+
+    <!-- ===================== ARCHIVOS DE MIEMBRO ===================== -->
+    @if (miembroVer(); as m) {
+      <div class="modal-backdrop" (click)="cerrarArchivos()">
+        <div class="card modal modal-ancho" (click)="$event.stopPropagation()">
+          <div class="row">
+            <h2>Archivos de {{ m.nombre || m.email }}</h2>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost btn-sm" (click)="cerrarArchivos()">✕</button>
+          </div>
+          @if (cargandoArchivos()) {
+            <div class="empty">Cargando…</div>
+          } @else if (archivosMiembro().length === 0) {
+            <div class="empty"><div class="icon">📂</div> Este miembro no tiene archivos.</div>
+          } @else {
+            <table class="table">
+              <thead>
+                <tr><th>Nombre</th><th>Carpeta</th><th>Tamaño</th><th>Subido</th></tr>
+              </thead>
+              <tbody>
+                @for (a of archivosMiembro(); track a.id) {
+                  <tr>
+                    <td class="nombre">{{ a.nombre }}</td>
+                    <td><span class="badge badge-muted">{{ a.carpeta }}</span></td>
+                    <td>{{ a.tamanoBytes | fileSize }}</td>
+                    <td class="muted">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+      </div>
+    }
+
+    <!-- ===================== CONFIRMACIÓN ===================== -->
+    @if (confirmacion(); as c) {
+      <div class="modal-backdrop" (click)="confirmacion.set(null)">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>{{ c.titulo }}</h2>
+          <p class="muted" style="margin-bottom: 16px;">{{ c.mensaje }}</p>
+          <div class="row" style="justify-content: flex-end;">
+            <button class="btn btn-ghost" (click)="confirmacion.set(null)">Cancelar</button>
+            <button class="btn btn-danger" (click)="ejecutarConfirmacion()">Eliminar</button>
+          </div>
+        </div>
+      </div>
+    }

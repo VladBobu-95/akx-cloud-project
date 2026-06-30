@@ -5,10 +5,14 @@ import { inicializarBucket } from "./config/minio";
 import { verificarModelosOllama } from "./config/ollama";
 import { iniciarWorker } from "./services/tareas.service";
 import { iniciarMantenimiento } from "./services/reconciliacion.service";
+import { sembrarSuperadmin } from "./services/seed.service";
 
 const main = async (): Promise<void> => {
   await AppDataSource.initialize();
   console.log("Base de datos conectada");
+
+  // Bootstrap multi-tenant: asegura que exista el superadmin de la plataforma.
+  await sembrarSuperadmin();
 
   await inicializarBucket();
   console.log("MinIO listo");

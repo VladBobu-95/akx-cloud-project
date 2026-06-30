@@ -1,5 +1,7 @@
 import { Routes } from '@angular/router';
 import { authGuard } from './core/auth.guard';
+import { superadminGuard } from './core/superadmin.guard';
+import { adminGuard } from './core/admin.guard';
 
 export const routes: Routes = [
   {
@@ -29,6 +31,17 @@ export const routes: Routes = [
       {
         path: 'perfil',
         loadComponent: () => import('./pages/perfil/perfil').then((m) => m.PerfilPage),
+      },
+      {
+        path: 'plataforma',
+        loadComponent: () =>
+          import('./pages/plataforma/plataforma').then((m) => m.PlataformaPage),
+        canActivate: [superadminGuard],
+      },
+      {
+        path: 'equipo',
+        loadComponent: () => import('./pages/equipo/equipo').then((m) => m.EquipoPage),
+        canActivate: [adminGuard],
       },
       { path: '', redirectTo: 'inicio', pathMatch: 'full' },
     ],

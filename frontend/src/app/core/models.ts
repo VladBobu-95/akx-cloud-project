@@ -3,7 +3,46 @@ export interface Usuario {
   email: string;
   nombre?: string;
   avatar?: string | null;
-  rol: string;
+  rol: 'superadmin' | 'admin' | 'miembro';
+  empresaId?: string | null;
+  creadoEn?: string;
+}
+
+// Empresa (tenant). La gestiona el superadmin desde el panel de plataforma.
+export interface Empresa {
+  id: string;
+  nombre: string;
+  estado: 'activa' | 'suspendida';
+  creadoEn?: string;
+  usuariosCount?: number;
+}
+
+// Rol funcional configurable por el admin (contabilidad, mantenimiento...).
+export interface Rol {
+  id: string;
+  nombre: string;
+  capacidades: string[];
+  empresaId?: string;
+  creadoEn?: string;
+}
+
+// Carpeta compartida. En la vista de admin incluye los roles con acceso; en la
+// lista de accesibles del miembro llega solo {id, nombre}.
+export interface CarpetaCompartida {
+  id: string;
+  nombre: string;
+  empresaId?: string;
+  roles?: { id: string; nombre: string }[];
+  creadoEn?: string;
+}
+
+// Miembro del equipo (usuario de la empresa) tal como lo devuelve /api/equipo.
+export interface Miembro {
+  id: string;
+  email: string;
+  nombre?: string;
+  rol: 'admin' | 'miembro';
+  roles: { id: string; nombre: string; capacidades: string[] }[];
   creadoEn?: string;
 }
 

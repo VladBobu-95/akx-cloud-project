@@ -47,7 +47,7 @@ beforeAll(async () => {
   await inicializarBucket();
   // Estado limpio en cada arranque de suite
   await AppDataSource.query(
-    'TRUNCATE "archivos", "usuarios" RESTART IDENTITY CASCADE',
+    'TRUNCATE "archivos", "usuarios", "empresas" RESTART IDENTITY CASCADE',
   );
 });
 

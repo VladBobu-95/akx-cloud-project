@@ -1,6 +1,7 @@
 import request from "supertest";
 import { app } from "../src/app";
 import { describe, it, expect, beforeAll } from "@jest/globals";
+import { tokenUsuario } from "./helpers";
 
 // Confirmación de operaciones masivas irreversibles en el chat (#9). Solo
 // vaciar la papelera (borrado DEFINITIVO) la requiere; el resto sigue instantáneo.
@@ -32,10 +33,7 @@ describe("Confirmación vaciar papelera (#9)", () => {
   };
 
   beforeAll(async () => {
-    const reg = await request(app)
-      .post("/api/auth/registro")
-      .send({ email: `conf_${Date.now()}@test.com`, password: "password123", nombre: "Conf" });
-    token = reg.body.token;
+    token = await tokenUsuario(`conf_${Date.now()}@test.com`);
   });
 
   it("'vaciar papelera' pide confirmación y NO borra todavía", async () => {

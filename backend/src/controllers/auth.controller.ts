@@ -1,8 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import {
-  registrar,
   login,
-  schemaRegistro,
   schemaLogin,
   actualizarPerfil,
   schemaActualizarPerfil,
@@ -10,21 +8,6 @@ import {
 
 // Los controladores ya no necesitan try/catch propio.
 // Si algo falla, next(error) se lo pasa al errorHandler global de index.ts.
-
-// POST /api/auth/registro
-export const ctrlRegistrar = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> => {
-  try {
-    const datos = schemaRegistro.parse(req.body);
-    const resultado = await registrar(datos);
-    res.status(201).json(resultado);
-  } catch (error) {
-    next(error); // errorHandler global se encarga del resto
-  }
-};
 
 // POST /api/auth/login
 export const ctrlLogin = async (

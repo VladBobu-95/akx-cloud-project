@@ -77,6 +77,7 @@ const reindexarFragmentos = async (
   archivoId: string,
   usuarioId: string,
   texto: string,
+  carpetaCompartidaId: string | null = null,
 ): Promise<number> => {
   await AppDataSource.query(`DELETE FROM "fragmentos" WHERE "archivoId" = $1`, [archivoId]);
 
@@ -85,10 +86,13 @@ const reindexarFragmentos = async (
 
   const vectores = await embeddings(trozos, "documento");
   for (let i = 0; i < trozos.length; i++) {
+    // En archivos compartidos guardamos `carpetaCompartidaId` para que la
+    // búsqueda semántica los encuentre a cualquier usuario con acceso al rol
+    // (no solo al que los subió). En personales va NULL.
     await AppDataSource.query(
-      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "indice", "texto", "embedding")
-       VALUES ($1, $2, $3, $4, $5::vector)`,
-      [archivoId, usuarioId, i, trozos[i], vecLiteral(vectores[i])],
+      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
+       VALUES ($1, $2, $3, $4, $5, $6::vector)`,
+      [archivoId, usuarioId, carpetaCompartidaId, i, trozos[i], vecLiteral(vectores[i])],
     );
   }
   return trozos.length;
@@ -102,7 +106,7 @@ const reindexarFragmentos = async (
 const reindexarConCombinado = async (archivoId: string, usuarioId: string): Promise<number> => {
   const archivo = await archivoRepo().findOneBy({ id: archivoId });
   const combinado = combinarContenido(archivo?.textoExtraido, archivo?.descripcionManual);
-  return reindexarFragmentos(archivoId, usuarioId, combinado);
+  return reindexarFragmentos(archivoId, usuarioId, combinado, archivo?.carpetaCompartidaId ?? null);
 };
 
 // Actualiza el texto extraído automáticamente (OCR/PDF/DOCX) y reindexa con el
@@ -151,6 +155,7 @@ export const buscarSemantica = async (
   usuarioId: string,
   consulta: string,
   k = 5,
+  compartidasAccesibles: string[] = [],
 ): Promise<ResultadoSemantico[]> => {
   const texto = (consulta ?? "").trim();
   if (!texto) return [];
@@ -178,11 +183,13 @@ export const buscarSemantica = async (
             f."texto" AS "fragmento", (f."embedding" <=> $2::vector) AS "dist"
      FROM "fragmentos" f
      JOIN "archivos" a ON a."id" = f."archivoId"
-     WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NULL
+     WHERE ( (f."propietarioId" = $1 AND f."carpetaCompartidaId" IS NULL)
+             OR f."carpetaCompartidaId" = ANY($6::uuid[]) )
+       AND a."eliminadoEn" IS NULL
        AND ( (f."embedding" <=> $2::vector) <= $3 OR unaccent(f."texto") ILIKE unaccent($4) )
      ORDER BY "dist" ASC
      LIMIT $5`,
-    [usuarioId, vecLiteral(vec), maxDist, kw, k * 4],
+    [usuarioId, vecLiteral(vec), maxDist, kw, k * 4, compartidasAccesibles],
   );
 
   const vistos = new Set<string>();

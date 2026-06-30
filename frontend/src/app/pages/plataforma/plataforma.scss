@@ -1,0 +1,53 @@
+      .head {
+        margin-bottom: 18px;
+      }
+      .list {
+        padding: 6px 8px;
+      }
+      .nombre {
+        font-weight: 600;
+      }
+      .acciones {
+        display: flex;
+        gap: 6px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+      .acciones-col {
+        text-align: right;
+      }
+      .table tbody tr.suspendida td {
+        opacity: 0.6;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+      .badge-ok {
+        background: var(--green-soft);
+        color: var(--green-dark);
+      }
+      .badge-off {
+        background: #fde8e8;
+        color: var(--danger);
+      }
+      .seccion {
+        margin: 14px 0 6px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .field {
+        margin-bottom: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .field label {
+        font-size: 0.9rem;
+        color: var(--muted);
+      }

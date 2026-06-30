@@ -4,6 +4,7 @@ import { AppDataSource } from "../src/config/database";
 import { Tarea } from "../src/entities/Tarea";
 import { env } from "../src/config/env";
 import { describe, it, expect, beforeAll } from "@jest/globals";
+import { crearUsuario } from "./helpers";
 
 // Cap de backlog por usuario (#8): si un usuario ya tiene demasiadas tareas
 // pendientes/en proceso en la cola durable, subir/escanear devuelve 429. (El
@@ -21,11 +22,9 @@ describe("Límite de backlog por usuario (#8)", () => {
       .attach("archivo", Buffer.from(contenido), { filename: "x.txt", contentType: "text/plain" });
 
   beforeAll(async () => {
-    const reg = await request(app)
-      .post("/api/auth/registro")
-      .send({ email: `backlog_${Date.now()}@test.com`, password: "password123", nombre: "Backlog" });
-    token = reg.body.token;
-    userId = reg.body.usuario.id;
+    const u = await crearUsuario(`backlog_${Date.now()}@test.com`);
+    token = u.token;
+    userId = u.id;
   });
 
   it("una subida normal pasa cuando no hay backlog", async () => {

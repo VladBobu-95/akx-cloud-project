@@ -25,10 +25,15 @@ export class AuthService {
       .pipe(tap((r) => this.guardarSesion(r)));
   }
 
-  registrar(email: string, password: string, nombre: string) {
-    return this.http
-      .post<AuthResponse>(`${this.base}/registro`, { email, password, nombre })
-      .pipe(tap((r) => this.guardarSesion(r)));
+  // No hay auto-registro: las cuentas las crean el superadmin (admins de empresa)
+  // o el admin (miembros del equipo).
+
+  esAdmin(): boolean {
+    return this.usuario()?.rol === 'admin';
+  }
+
+  esSuperadmin(): boolean {
+    return this.usuario()?.rol === 'superadmin';
   }
 
   // Actualiza el perfil (nombre, avatar, contraseña) y refresca el usuario local.

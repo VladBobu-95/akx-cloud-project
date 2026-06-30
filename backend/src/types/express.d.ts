@@ -8,7 +8,8 @@ declare global {
       usuario?: {
         id: string;    // UUID del usuario en la BD
         email: string;
-        rol: string;   // "user" | "admin"
+        rol: string;   // "superadmin" | "admin" | "miembro"
+        empresaId: string | null; // tenant; null solo para superadmin
       };
     }
   }

@@ -11,6 +11,7 @@ import {
   purgarPapeleraAntigua,
 } from "../src/services/reconciliacion.service";
 import { describe, it, expect, beforeAll } from "@jest/globals";
+import { tokenUsuario } from "./helpers";
 
 // Reconciliación MinIO↔Postgres + retención de papelera (#5).
 describe("Reconciliación y retención (#5)", () => {
@@ -36,10 +37,7 @@ describe("Reconciliación y retención (#5)", () => {
   };
 
   beforeAll(async () => {
-    const reg = await request(app)
-      .post("/api/auth/registro")
-      .send({ email: `recon_${Date.now()}@test.com`, password: "password123", nombre: "Recon" });
-    token = reg.body.token;
+    token = await tokenUsuario(`recon_${Date.now()}@test.com`);
   });
 
   it("borra objetos huérfanos (sin fila) y conserva los que sí tienen fila", async () => {

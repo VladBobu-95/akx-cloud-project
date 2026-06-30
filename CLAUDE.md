@@ -74,6 +74,7 @@ desplegar al final: `docker compose build api web && docker compose up -d api we
 DB_USER, DB_PASSWORD, DB_NAME, DB_PORT_HOST=5433
 MINIO_USER, MINIO_PASSWORD, MINIO_BUCKET=archivos, MINIO_PORT_HOST=9000, MINIO_CONSOLE_HOST=9001
 API_PORT_HOST=3000, JWT_SECRET=<min 32 chars>, CORS_ORIGIN=*   # en prod: dominio del front
+SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD                          # seed del superadmin (multi-tenant; ver abajo)
 OLLAMA_URL=http://host.docker.internal:11434                   # local override → http://ollama:11434
 OLLAMA_MODEL=qwen2.5-coder:14b                                 # chat (7b/3b en máquinas pequeñas)
 OLLAMA_EMBED_MODEL=bge-m3
@@ -82,6 +83,17 @@ OLLAMA_OCR_MODEL=deepseek-ocr                                  # 2ª pasada (sol
 ```
 `env.ts` valida con Zod y **falla al arrancar** si falta algo. Cambiar de modelo: editar
 `.env` + `docker compose up -d api` (recarga .env, sin rebuild).
+
+## Multi-tenant (SaaS)
+App vendible a **varias empresas** sobre una sola instancia. Niveles de cuenta en
+`Usuario.rol`: `superadmin` (dueño de la plataforma, sin empresa, gestiona empresas) ·
+`admin` (administra SU empresa) · `miembro` (empleado). Cada usuario pertenece a una
+`Empresa` (tenant) salvo el superadmin. **No hay auto-registro**: el superadmin crea
+empresas + su primer admin (`/api/plataforma`), y el admin crea miembros (`/api/equipo`,
+Fase 2). El superadmin se **siembra al arrancar** desde `SUPERADMIN_EMAIL/PASSWORD` si no
+existe ninguno (`seed.service.ts`). El JWT lleva `empresaId`; empresa `suspendida` bloquea
+login y cada petición (`auth.middleware.ts`). Roles funcionales configurables + carpetas
+compartidas: Fases 2-3 (ver `~/.claude/plans/`).
 
 ## Docker Compose
 ```bash
@@ -98,12 +110,15 @@ docker compose logs -f api
 ```
 config/      database.ts (TypeORM+pgvector), env.ts (Zod), minio.ts
 controllers/ entrada HTTP, delegan en services
-entities/    Archivo, Carpeta, Factura, LineaFactura, Usuario
-middlewares/ auth (JWT→req.usuario), errorHandler (AppError→JSON)
+entities/    Empresa, Rol, Archivo, Carpeta, Factura, LineaFactura, Usuario
+middlewares/ auth (JWT→req.usuario; verificarToken/soloAdmin/soloSuperadmin), errorHandler (AppError→JSON)
 migrations/  TypeORM, se ejecutan al arrancar
 services/
   archivos.service.ts    CRUD, papelera, carpetas zip, leerTextoArchivo (RAG)
-  auth.service.ts        registro/login JWT
+  auth.service.ts        login JWT (sin registro público)
+  plataforma.service.ts  superadmin: alta/edición/borrado de empresas + su admin
+  equipo.service.ts      admin: miembros CRUD, roles configurables, capacidadesDe, archivos de un miembro
+  seed.service.ts        siembra el superadmin al arrancar (multi-tenant)
   carpetas.service.ts    mover/copiar/vaciar/borrar con contenido
   chat.service.ts        chatbot IA (ver abajo + NOTAS.md)
   extraccion.service.ts  texto de PDF/DOCX/txt + cascada OCR de imágenes
@@ -119,9 +134,26 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 ### `/api/auth`
 | Método | Ruta | Body |
 |---|---|---|
-| POST | `/registro` | `{email, password, nombre}` (máx 5/h por IP en prod) |
-| POST | `/login` | `{email, password}` → `{usuario, token}` (máx 10/15min en prod) |
+| POST | `/login` | `{email, password}` → `{usuario, token}` (máx 10/15min en prod). **No hay `/registro`** |
 | GET/PATCH | `/perfil` 🔒 | PATCH `{nombre?, avatar?, password?}` — avatar = data URL base64 (`""` quita) |
+
+### `/api/plataforma` 🔒 superadmin
+| Método | Ruta | Notas |
+|---|---|---|
+| GET | `/empresas` | lista de empresas + `usuariosCount` |
+| POST | `/empresas` | `{nombre, admin:{email,password,nombre}}` → crea empresa + su primer admin (transacción) |
+| PATCH | `/empresas/:id` | `{nombre?, estado?}` — `estado` = `activa`\|`suspendida` |
+| DELETE | `/empresas/:id` | borra empresa (CASCADE a usuarios y su contenido en BD) |
+
+### `/api/equipo` 🔒 admin (scoped a su empresa)
+| Método | Ruta | Notas |
+|---|---|---|
+| GET | `/capacidades` | vocabulario fijo de capacidades (para los toggles) |
+| GET/POST | `/usuarios` | listar miembros / crear `{nombre,email,password,rol,rolesIds[]}` (`rol`=`miembro`\|`admin`) |
+| PATCH/DELETE | `/usuarios/:id` | editar (incl. `password?`, `rolesIds?`) / eliminar (no a uno mismo) |
+| GET | `/usuarios/:id/archivos` | archivos del miembro (paginado) → `{archivos,total,paginas}` |
+| GET/POST | `/roles` | listar / crear `{nombre, capacidades[]}` |
+| PATCH/DELETE | `/roles/:id` | editar `{nombre?, capacidades?}` / eliminar |
 
 ### `/api/archivos`
 | Método | Ruta | Notas |
@@ -156,7 +188,9 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 ---
 
 ## Schema de BD
-- **usuarios**: `id`, `email` unique, `nombre`, `avatar` (base64, null), `passwordHash`, `rol` (`user`|`admin`, default `user`; el registro ignora `rol` del cliente), `creadoEn`.
+- **empresas** (tenant): `id`, `nombre`, `estado` (`activa`|`suspendida`, default `activa`), `creadoEn`. `OneToMany` usuarios.
+- **roles** (funcionales, por empresa): `id`, `nombre`, `capacidades` (`text[]` del vocabulario fijo `config/capacidades.ts`), `empresaId` (FK CASCADE), `creadoEn`. Único `(empresaId, nombre)`. N:N con usuarios vía **usuario_roles** (`usuarioId`,`rolId`, ambos CASCADE).
+- **usuarios**: `id`, `email` unique, `nombre`, `avatar` (base64, null), `passwordHash`, `rol` (`superadmin`|`admin`|`miembro`, default `miembro`), `empresaId` (FK CASCADE, null solo para superadmin), `roles` (N:N), `creadoEn`.
 - **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256` (dedup al subir: idéntico contenido vivo → se reutiliza, no se reprocesa), `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `estadoIndexado`/`indexadoEn` (estado del indexado RAG), `eliminadoEn` (soft delete), `propietario` CASCADE.
 - **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
 - **tareas** (cola durable): `id`, `tipo` (`indexar`|`autoescanear`), `archivoId`/`usuarioId` CASCADE, `estado` (`pendiente`|`en_proceso`|`ok`|`error`), `prioridad`, `intentos`/`maxIntentos`, `disponibleEn` (backoff), `pista`, `error`. La procesa el worker (`tareas.service.ts`), que relee los bytes de MinIO → sobrevive a reinicios, reintenta y limita la concurrencia hacia Ollama (sustituye a las colas en memoria).

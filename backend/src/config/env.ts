@@ -19,6 +19,20 @@ const envSchema = z.object({
   MINIO_PASSWORD: z.string(),
   MINIO_BUCKET: z.string().default("archivos"),
   JWT_SECRET: z.string().min(16),
+  // Superadmin de la plataforma (multi-tenant). Al arrancar, si no existe ningún
+  // usuario con rol "superadmin" y AMBAS variables están definidas, se siembra uno
+  // (sin empresa). Es la única cuenta que se crea sin pasar por otra (no hay
+  // auto-registro público). En despliegues ya sembrados pueden quedar vacías.
+  // Tratamos "" como ausente: en Docker una variable no definida en .env llega
+  // como cadena vacía, que si no fallaría la validación de email/longitud.
+  SUPERADMIN_EMAIL: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().email().optional(),
+  ),
+  SUPERADMIN_PASSWORD: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().min(8).optional(),
+  ),
   // Orígenes permitidos por CORS. "*" = cualquiera (cómodo en dev; aceptable con
   // auth por Bearer token, sin cookies). En producción conviene fijar el dominio
   // del front (uno o varios separados por coma) para reducir superficie.
