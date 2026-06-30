@@ -127,7 +127,7 @@ const MONEDAS: { iso: string; re: RegExp }[] = [
   { iso: "CLP", re: /\bpesos?\s+chilenos?\b|\bclp\b/ },
   { iso: "MXN", re: /\bpesos?\s+mexicanos?\b|\bpesos\b|\bmxn\b/ },
   { iso: "BRL", re: /\breales\b|\breal\s+brasilen[oa]s?\b|\bbrl\b/ },
-  { iso: "USD", re: /\bdolares?\b|\busd\b|us\$|\$/ },
+  { iso: "USD", re: /dólares?|dolares?|\busd\b|us\$|\$/i },
 ];
 // Devuelve el código ISO de la divisa mencionada en el texto, o undefined.
 const detectarMoneda = (texto: string): string | undefined =>
@@ -1392,10 +1392,6 @@ export const chatear = async (
       .replace(/\b(en|de|del)\b\s*$/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-
-      if (/^facturas?$/i.test(limpio)) {
-    return null; 
-  }
     return limpio || null;
   };
 
