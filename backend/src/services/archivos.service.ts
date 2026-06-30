@@ -1,5 +1,6 @@
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import { Readable } from "stream";
+import { IsNull } from "typeorm";
 import { AppDataSource } from "../config/database";
 import { Archivo } from "../entities/Archivo";
 import { Usuario } from "../entities/Usuario";
@@ -71,10 +72,30 @@ const repo = () => AppDataSource.getRepository(Archivo);
 // --- SUBIR ARCHIVO ---
 // Recibe el archivo en memoria (buffer de multer), lo sube a MinIO
 // y guarda la metadata en Postgres.
+// SHA-256 del contenido, para deduplicar (#4): subir dos veces el MISMO archivo
+// guardaba dos copias y pagaba el OCR/embeddings dos veces.
+export const calcularHashSha256 = (buffer: Buffer): string =>
+  createHash("sha256").update(buffer).digest("hex");
+
+// Busca un archivo VIVO (no en papelera) del mismo usuario con idéntico hash.
+// Si existe, la subida es un duplicado: se reutiliza en vez de reprocesar.
+export const buscarArchivoPorHash = async (
+  usuarioId: string,
+  hash: string,
+): Promise<Archivo | null> =>
+  repo().findOne({
+    where: {
+      propietario: { id: usuarioId },
+      hashSha256: hash,
+      eliminadoEn: IsNull(),
+    },
+  });
+
 export const subirArchivo = async (
   file: Express.Multer.File, // Objeto que multer adjunta al request
   carpeta: string, // Carpeta virtual, ej: "/facturas/2026"
   usuarioId: string,
+  hashSha256?: string, // SHA-256 ya calculado (dedup); si no, se calcula aquí
 ): Promise<Archivo> => {
   // Normalizamos la carpeta: quitamos barras al inicio y al final
   const carpetaLimpia = carpeta.replace(/^\/|\/$/g, "") || "raiz";
@@ -102,6 +123,7 @@ export const subirArchivo = async (
     mimeType: file.mimetype,
     tamanoBytes: String(file.size),
     claveMinio: clave,
+    hashSha256: hashSha256 ?? calcularHashSha256(file.buffer),
     propietario: { id: usuarioId } as Usuario,
   });
 

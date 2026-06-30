@@ -23,6 +23,9 @@ export interface Archivo {
   // del escaneo de factura. Lo gestiona la cola durable del backend.
   estadoIndexado?: 'pendiente' | 'indexando' | 'indexado' | 'error' | null;
   indexadoEn?: string | null;
+  // Transitorio (solo en la respuesta de subir): true si el contenido ya existía
+  // y se reutilizó en vez de volver a subirse/procesarse (dedup por hash).
+  duplicado?: boolean;
 }
 
 export interface AuthResponse {

@@ -335,10 +335,21 @@ export class ArchivosPage {
     forkJoin(subidas).subscribe((resultados) => {
       const ok = resultados.filter((r) => r.ok).length;
       const fallidos = resultados.length - ok;
+      // Duplicados (dedup por hash): subidos "ok" pero reutilizados, no nuevos.
+      const dups = resultados.filter((r) => r.ok && r.archivo?.duplicado).length;
+      const nuevos = ok - dups;
       this.subiendo.set(false);
       this.subidaRestantes.set(0);
       if (fallidos === 0) {
-        this.toast.exito(ok === 1 ? 'Archivo subido' : `${ok} archivos subidos`);
+        if (dups > 0 && nuevos === 0) {
+          this.toast.exito(
+            dups === 1 ? 'Ese archivo ya lo tenías (no se ha duplicado)' : `${dups} ya los tenías (no se duplicaron)`,
+          );
+        } else if (dups > 0) {
+          this.toast.exito(`${nuevos} subido(s); ${dups} ya existían`);
+        } else {
+          this.toast.exito(nuevos === 1 ? 'Archivo subido' : `${nuevos} archivos subidos`);
+        }
       } else {
         this.toast.error(`${ok} subido(s), ${fallidos} fallaron`);
       }

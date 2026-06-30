@@ -16,6 +16,8 @@ import {
   prepararDescargaCarpeta,
   actualizarArchivo,
   schemaActualizarArchivo,
+  calcularHashSha256,
+  buscarArchivoPorHash,
 } from "../services/archivos.service";
 import {
   listarCarpetas,
@@ -130,7 +132,19 @@ export const ctrlSubir = async (
       throw new AppError(400, "No se ha proporcionado ningún archivo");
     }
     const carpeta = (req.body.carpeta as string) || "/";
-    const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id);
+
+    // Deduplicación por hash (#4): si el usuario ya tiene un archivo VIVO con el
+    // mismo contenido, no lo volvemos a subir a MinIO ni a reprocesar (OCR/
+    // embeddings). Devolvemos el existente con `duplicado: true` para que el
+    // front avise. Evita además duplicar facturas en la analítica.
+    const hash = calcularHashSha256(req.file.buffer);
+    const existente = await buscarArchivoPorHash(req.usuario!.id, hash);
+    if (existente) {
+      res.status(200).json({ ...existente, duplicado: true });
+      return;
+    }
+
+    const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id, hash);
     await marcarPendiente(archivo);
     await marcarIndexadoPendiente(archivo.id);
     res.status(201).json(archivo);
