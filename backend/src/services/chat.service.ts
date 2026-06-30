@@ -120,14 +120,14 @@ const MONEDAS: { iso: string; re: RegExp }[] = [
   { iso: "JPY", re: /\byen(es)?\b|\bjpy\b|¥/ },
   { iso: "CHF", re: /\bfrancos?\s+suizos?\b|\bfrancos?\b|\bchf\b/ },
   { iso: "CNY", re: /\byuan(es)?\b|\bcny\b|\brenminbi\b/ },
-  { iso: "CAD", re: /\bdolares\s+canadienses\b|\bdolar\s+canadiense\b|\bcad\b/ },
-  { iso: "AUD", re: /\bdolares\s+australianos\b|\bdolar\s+australiense\b|\baud\b/ },
+  { iso: "CAD", re: /\bdolares\s+canadienses?\b|\bdolar\s+canadienses?\b|\bcad\b/ },
+  { iso: "AUD", re: /\bdolares\s+australianos?\b|\bdolar\s+australianos?\b|\baud\b/ },
   { iso: "ARS", re: /\bpesos?\s+argentinos?\b|\bars\b/ },
   { iso: "COP", re: /\bpesos?\s+colombianos?\b|\bcop\b/ },
   { iso: "CLP", re: /\bpesos?\s+chilenos?\b|\bclp\b/ },
   { iso: "MXN", re: /\bpesos?\s+mexicanos?\b|\bpesos\b|\bmxn\b/ },
   { iso: "BRL", re: /\breales\b|\breal\s+brasilen[oa]s?\b|\bbrl\b/ },
-  { iso: "USD", re: /\bdolares?\b|\bdolar\b|\busd\b|us\$|\$/ },
+  { iso: "USD", re: /\bdolares\b|\bdolar\b|\busd\b|us\$|\$/ },
 ];
 // Devuelve el código ISO de la divisa mencionada en el texto, o undefined.
 const detectarMoneda = (texto: string): string | undefined =>
