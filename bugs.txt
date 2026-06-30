@@ -1,4 +1,5 @@
 
+-resumen todo no funciona
 - despues de escribir un mensaje en chat que quede sleccionado el chat para escribir otro
 - si se escanea mediante chat el resumen.md no actualiza creo
 - "de todo" escanea todo

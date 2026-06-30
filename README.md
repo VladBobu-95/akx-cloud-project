@@ -60,16 +60,26 @@ En dev/prod el esquema se gestiona con migraciones (`migrationsRun: true`), no c
 `InitialSchema` (crea `usuarios` y `archivos`) → `AddPerfilUsuario` → `CrearCarpetas` →
 `AgregarRagFragmentos` (extensión `vector` + tabla `fragmentos`) →
 `MigrarEmbeddingMultilingue` (dimensión del vector a 1024 para bge-m3) →
-`AgregarFacturas` (tablas `facturas` y `lineas_factura`).
+`AgregarFacturas` (tablas `facturas` y `lineas_factura`) → `HabilitarUnaccent` →
+`AgregarEstadoEscaneo` → `AgregarDescripcionManual` →
+`AgregarTareasYEstadoIndexado` (tabla `tareas` de la cola durable + columnas
+`estadoIndexado`/`indexadoEn` en `archivos`) →
+`AgregarChatPendientes` (tabla `chat_pendientes`) →
+`IndiceHashArchivos` (índice para la deduplicación por hash).
 
 ### Autenticación
 Registro/login devuelven un JWT (7 días). Las contraseñas se guardan hasheadas con
 bcrypt. El middleware `auth` protege las rutas y deja el `usuarioId` disponible para
 que cada servicio filtre **solo los datos de ese usuario**. Rate limiting (solo en
-producción): login máx. 10 intentos/15min por IP, registro máx. 5/hora por IP. El
-perfil (`GET`/`PATCH /api/auth/perfil`) permite cambiar nombre, avatar (data URL
-base64) y contraseña (mín. 8 caracteres) en la misma petición. Existe un campo `rol`
-(`"user"`/`"admin"`) y un middleware `soloAdmin`, pero todavía no hay rutas que lo usen.
+producción): login máx. 10 intentos/15min por IP, registro máx. 5/hora por IP. Además,
+los endpoints que consumen GPU/disco (chat, escanear y subir) tienen rate-limit **por
+usuario** y un **cap de backlog** (rechazan con 429 si el usuario ya tiene demasiadas
+tareas en cola), para que uno solo no sature la GPU (`middlewares/limites.middleware.ts`).
+El perfil (`GET`/`PATCH /api/auth/perfil`) permite cambiar nombre, avatar y contraseña
+(mín. 8 caracteres) en la misma petición. El **avatar** es un data-URL base64 que se
+**valida** (formato, mime PNG/JPEG/WEBP por magic bytes y tope de 2 MB decodificados),
+no se acepta cualquier cosa. Existe un campo `rol` (`"user"`/`"admin"`) y un middleware
+`soloAdmin`, pero todavía no hay rutas que lo usen.
 
 ### Archivos (metadata + MinIO)
 La subida es **transaccional**: se sube el binario a MinIO y se guarda la metadata en
@@ -79,7 +89,10 @@ canaliza al cliente; así funciona aunque MinIO solo sea accesible en la red int
 Docker). Copiar duplica el binario (`copyObject`); mover/renombrar solo cambia la
 metadata. El listado es **paginado** (totales en cabeceras `X-Total-*`). El borrado es
 **soft-delete** (papelera, recuperable); el permanente elimina binario + fila. También
-se pueden **descargar carpetas enteras como `.zip`** (generado al vuelo).
+se pueden **descargar carpetas enteras como `.zip`** (generado al vuelo). La subida
+**deduplica por hash** (SHA-256 del contenido): si ya tienes un archivo vivo idéntico,
+no se vuelve a subir ni a reprocesar (OCR/embeddings) — se reutiliza el existente y se
+avisa, evitando además duplicar facturas en la analítica.
 
 ### Carpetas
 Rutas virtuales tipo `/facturas/2026` (solo metadata, sin carpetas reales). Operaciones
@@ -166,6 +179,15 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
 - **Filtros de cliente/emisor/producto en facturas insensibles a tildes** (extensión
   `unaccent` de Postgres): "Tecnologias" (sin tilde, lo más común al escribir rápido)
   encuentra igual "Tecnologías".
+- **Confirmación de operaciones masivas irreversibles**: vaciar la papelera (borrado
+  DEFINITIVO) pide un "sí" explícito antes de ejecutarse; el resto (incl. "borra todo",
+  que va a la papelera y se puede deshacer) sigue siendo instantáneo. La intención
+  pendiente se guarda en la BD (`chat_pendientes`), igual que las aclaraciones y los
+  datos que faltan, así que **sobreviven a un reinicio** (antes vivían en memoria).
+- **Capa de detección testeable** (`services/chat.deteccion.ts`): los regex que detectan
+  las intenciones más peligrosas (borrados masivos, papelera) se extrajeron a funciones
+  puras con **tests unitarios de frases** (sin BD/Ollama), para que tocar una frase no
+  rompa otra sin avisar.
 - Herramientas: buscar/crear/mover/renombrar/copiar/eliminar archivos y carpetas, papelera
   (listar/restaurar/borrar/vaciar), `leer_archivo`, `estadisticas`, `buscar_semantica`,
   borrados masivos (`borrar_todo`, `borrar_todas_carpetas`, `borrar_todos_archivos`), y
@@ -227,7 +249,8 @@ con ejemplos reales de frases que entiende:
   - "restaura factura_01" / "recupera factura_01"
   - "restaura todos los ficheros" / "recupera toda la papelera" (recupera TODO de golpe)
   - "borra factura_01 de la papelera" (borrado definitivo, no restaura)
-  - "vacía la papelera" (borrado definitivo de TODO, no confundir con "restaura todo")
+  - "vacía la papelera" (borrado definitivo de TODO; **pide confirmación** —responde
+    "sí"— antes de borrar, no confundir con "restaura todo")
 - **Búsqueda e info** — por significado del contenido (no solo por nombre), y uso de la cuenta:
   - "¿qué documento habla de impuestos?" / "¿dónde dice algo sobre el proyecto X?"
   - "resume lo que tengo sobre Y"
@@ -257,6 +280,7 @@ con ejemplos reales de frases que entiende:
   - "cuánto he facturado en marzo de Acme en euros"	Totales periodo + cliente + divisa
   - "cuánto he facturado" (en total)	Totales de todo, agrupados por moneda
   - "lo más vendido en dólares"	Ranking de productos filtrado por divisa
+  - cuantos led panel he vendido 
 - **Imágenes** — ver qué contienen, buscarlas por contenido, o tratarlas como factura:
   - "qué dice foto.jpg" / "muéstrame foto.jpg" (la descripción que se generó al
     subirla: el OCR automático si tenía texto real, o la escrita a mano si no lo tenía)
@@ -282,7 +306,9 @@ lo muestra bien).
 Permite buscar por el **significado del contenido**, no solo por el nombre del archivo:
 
 1. **Al subir** un archivo se extrae su texto (`pdf-parse` para PDF, `mammoth` para
-   Word, decodificación directa para texto plano) **en segundo plano** (no bloquea la subida).
+   Word, decodificación directa para texto plano) **en segundo plano**, a través de la
+   **cola durable** (ver más abajo): no bloquea la subida y, si la API se reinicia a
+   mitad, el indexado se reanuda en vez de perderse.
 2. El texto se **trocea** en fragmentos (~1000 caracteres con solape) y cada fragmento se
    convierte en un **embedding** (vector) con `bge-m3` (multilingüe). Se guardan en la
    tabla `fragmentos` (`embedding vector(1024)`, índice HNSW por coseno).
@@ -295,18 +321,49 @@ Permite buscar por el **significado del contenido**, no solo por el nombre del a
    la UI** (`GET /api/archivos/buscar?q=`). Solo se indexan las subidas nuevas; al borrar
    un archivo, sus fragmentos se eliminan en cascada (FK `ON DELETE CASCADE`).
 
+### Procesado en segundo plano: cola durable (`services/tareas.service.ts`)
+El trabajo pesado de una subida (extraer texto, generar embeddings, auto-escanear
+facturas) usa la GPU/Ollama y es lento, así que **no** se hace dentro de la petición.
+En vez de lanzarlo "al aire" en memoria (se perdía si la API se reiniciaba), se apunta
+una **tarea en la tabla `tareas`** y un **worker** la procesa:
+
+- El worker sondea la tabla (con despertar inmediato al encolar) y coge las tareas de
+  una en una (`WORKER_CONCURRENCIA`, 1 por defecto) para **no saturar la GPU**.
+- Para cada tarea **relee el binario desde MinIO** (no depende de un buffer en memoria),
+  así es **idempotente y sobrevive a reinicios**: al arrancar, las tareas que quedaron
+  `en_proceso` por un corte se reencolan.
+- **Reintenta con backoff** si Ollama falla; tras agotar `WORKER_MAX_INTENTOS` marca la
+  tarea (y el archivo) como `error`, visible en la columna "Estado" del explorador.
+- El estado del indexado se refleja en `archivos.estadoIndexado` (`pendiente`/`indexando`/
+  `indexado`/`error`). El escaneo manual desde el chat o el explorador también encola
+  aquí. Sustituye a las antiguas colas en memoria, conservando el orden por fases que
+  evita que Ollama cambie de modelo por archivo (prioridades).
+
+### Mantenimiento periódico (`services/reconciliacion.service.ts`)
+La subida (MinIO→Postgres) y el borrado (MinIO→Postgres) no son atómicos: un corte entre
+los dos pasos puede dejar un binario **huérfano** (objeto en MinIO sin fila) o una fila
+**colgada** (apunta a un objeto que ya no existe). Un job periódico
+(`MANTENIMIENTO_INTERVAL_HORAS`) borra los huérfanos claros (con margen de antigüedad
+para no tocar subidas en vuelo) y avisa de las filas colgadas. Incluye una **retención
+de papelera** opt-in (`RETENCION_PAPELERA_DIAS`, 0 = desactivada): purga definitivamente
+lo que lleve más de N días en la papelera, que de otro modo no se vacía sola nunca.
+
 ## Estructura
 
 ```
 backend/src/
   config/       env (Zod), database (TypeORM), minio (bucket)
-  entities/     Usuario, Archivo, Carpeta, Factura, LineaFactura
+  entities/     Usuario, Archivo, Carpeta, Factura, LineaFactura, Tarea (cola durable), ChatPendiente
   migrations/   InitialSchema → AddPerfilUsuario → CrearCarpetas → AgregarRagFragmentos →
-                 MigrarEmbeddingMultilingue → AgregarFacturas
-  middlewares/  auth (JWT), validarUUID, errorHandler
+                 MigrarEmbeddingMultilingue → AgregarFacturas → HabilitarUnaccent →
+                 AgregarEstadoEscaneo → AgregarDescripcionManual →
+                 AgregarTareasYEstadoIndexado → AgregarChatPendientes → IndiceHashArchivos
+  middlewares/  auth (JWT), validarUUID, errorHandler, limites (rate-limit + backlog)
   routes/       auth, archivos (+carpetas, +buscar), chat, facturas
   controllers/  auth, archivos, chat, facturas
-  services/     auth, archivos, carpetas, chat, extraccion (texto), rag (embeddings/búsqueda), facturas
+  services/     auth, archivos, carpetas, chat, chat.deteccion (intenciones puras),
+                 chatPendientes, extraccion (texto), rag (embeddings/búsqueda), facturas,
+                 tareas (worker de la cola durable), reconciliacion (mantenimiento)
 docker-compose.yml          db + minio + api + web (frontend nginx)
 docker-compose.override.yml ollama + adminer (solo en local)
 ```
@@ -335,6 +392,9 @@ cd backend && npm test     # Jest + Supertest contra una BD de test aislada (clo
 ```
 
 Requiere Postgres y MinIO levantados; la BD de test se crea sola (usa `synchronize`).
+Cubren auth, archivos, deduplicación, cap de backlog, confirmación de vaciar papelera,
+validación de avatar y reconciliación/retención; la detección de intenciones del chat
+(`chat.deteccion`) se testea de forma pura (sin BD ni Ollama).
 
 ## Despliegue (servidor, acceso por IP, todo en Docker)
 
@@ -370,3 +430,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 2 — Chatbot:** Ollama + tool calling sobre archivos y carpetas
 - [x] **Fase 3 — RAG:** extracción de texto (PDF/Word/texto), embeddings (bge-m3 + pgvector), búsqueda híbrida
 - [x] **Fase 4 — Facturas:** visión en cascada de 3 pasadas (granite3.2-vision → deepseek-ocr para facturas → Tesseract.js como red de seguridad por CPU), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción de fotos a mano opcional
+- [x] **Fase 5 — Robustez:** cola de trabajos durable en Postgres + worker (reintentos, backoff, sobrevive a reinicios) que sustituye al procesado en memoria, estado de indexado en el explorador, estado del chat fuera de memoria, deduplicación por hash al subir, rate-limit + cap de backlog en los endpoints caros, confirmación para vaciar la papelera, validación del avatar, reconciliación MinIO↔Postgres + retención de papelera, y detección de intenciones del chat extraída a un módulo puro con tests
