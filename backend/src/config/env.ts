@@ -58,6 +58,13 @@ const envSchema = z.object({
   // encole miles de archivos y monopolice el worker. Alto para no estorbar
   // subidas masivas normales.
   MAX_BACKLOG_USUARIO: z.coerce.number().int().min(1).default(200),
+  // Mantenimiento periódico (reconciliacion.service.ts, #5):
+  //  - MANTENIMIENTO_INTERVAL_HORAS: cada cuánto reconciliar MinIO↔Postgres y
+  //    aplicar la retención de papelera.
+  //  - RETENCION_PAPELERA_DIAS: purga definitiva de lo que lleve más de N días
+  //    en la papelera. 0 = desactivado (la papelera no se vacía sola), opt-in.
+  MANTENIMIENTO_INTERVAL_HORAS: z.coerce.number().min(1).default(24),
+  RETENCION_PAPELERA_DIAS: z.coerce.number().int().min(0).default(0),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente
