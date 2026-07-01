@@ -189,6 +189,53 @@ const conciliarImportes = (datos: DatosFactura): void => {
   }
 };
 
+// Todas las lecturas numéricas plausibles de un token del texto ("1.234,56",
+// "50.00", "1,0000"...). Se devuelven TODAS las interpretaciones razonables (todos
+// los separadores como miles, y el último separador como decimal) para no
+// descartar un importe correcto por una ambigüedad de formato español/inglés.
+const interpretacionesNumericas = (token: string): number[] => {
+  const out = new Set<number>();
+  const soloDigitos = token.replace(/[.,]/g, ""); // todos los separadores = miles
+  if (soloDigitos) out.add(Number(soloDigitos));
+  const m = /^(.*)[.,](\d+)$/.exec(token); // último separador = decimal
+  if (m) out.add(Number(`${m[1].replace(/[.,]/g, "")}.${m[2]}`));
+  const plano = Number(token);
+  if (Number.isFinite(plano)) out.add(plano);
+  return [...out].filter((n) => Number.isFinite(n));
+};
+
+// Valores numéricos que APARECEN de verdad en el texto del documento. Sirve para
+// verificar que los importes que devuelve la IA existen y no se los ha inventado.
+const numerosDelTexto = (texto: string): number[] => {
+  const tokens = texto.match(/\d[\d.,]*\d|\d/g) ?? [];
+  return tokens.flatMap(interpretacionesNumericas);
+};
+
+// Descarta (pone a 0) los importes que la IA devolvió pero que NO están en el texto
+// del documento: son inventados. Caso real: una factura de devolución con los
+// importes en blanco (solo el símbolo "€" sin número) — el modelo, al pedírsele que
+// rellene todos los campos, se saca de la nada base/IVA/total. Al vaciarlos aquí,
+// ANTES de la guarda de escanearFactura, la factura sin importes legibles se trata
+// como "no_factura" en vez de guardarse con cifras falsas. Deliberadamente permisivo
+// (ver interpretacionesNumericas): solo borra lo que no coincide con NINGUNA lectura
+// del texto, para no tocar un importe correcto por un tema de formato. Lo que la
+// aritmética pueda derivar (subtotal+iva=total…) lo recompone después
+// conciliarImportes a partir de lo que sí es real.
+const verificarImportesReales = (datos: DatosFactura, contenido: string): void => {
+  const presentes = numerosDelTexto(contenido);
+  const enTexto = (v?: number): boolean => {
+    const n = num(v);
+    return n > 0 && presentes.some((p) => Math.abs(p - n) <= 0.01);
+  };
+  for (const l of datos.lineas ?? []) {
+    if (!enTexto(l.precioUnit)) l.precioUnit = 0;
+    if (!enTexto(l.total)) l.total = 0;
+  }
+  if (!enTexto(datos.subtotal)) datos.subtotal = 0;
+  if (!enTexto(datos.iva)) datos.iva = 0;
+  if (!enTexto(datos.total)) datos.total = 0;
+};
+
 // Símbolos/nombres de moneda más comunes → código ISO 4217. La IA ya devuelve
 // normalmente el código (se lo pedimos en el prompt), pero blindamos por si
 // devuelve el símbolo ("$") o el nombre ("dólares"), o nada.
@@ -528,6 +575,13 @@ export const escanearFactura = async (
       ? await extraerDatosFactura(contenido)
       : { lineas: [] };
     datos.archivoNombre = archivo.nombre;
+
+    // Anti-invención: vacía los importes que la IA devolvió pero que no están en
+    // el texto del documento (los inventa cuando la factura los trae en blanco,
+    // p. ej. una devolución con solo el símbolo "€" sin número). Va ANTES de la
+    // guarda de abajo, para que una factura sin importes legibles caiga como
+    // "no_factura" en lugar de guardarse con cifras falsas.
+    verificarImportesReales(datos, contenido);
 
     // ¿Parece una factura real? Exige TANTO un importe real (no solo líneas con
     // descripción: el modelo puede inventarse precios para algo que no es una

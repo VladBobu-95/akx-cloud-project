@@ -1,4 +1,6 @@
 
+ocultar carpeta facturas con todo lo que tiene dentro incluso cuando hago querrys por chat
+- falta buscador compartido y boton volver
 - no lee bien facturas por x 
 - la primera factura la lee mal
 - sufijo en compartido para el chatbot
