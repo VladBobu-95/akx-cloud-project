@@ -146,7 +146,7 @@
 
     <!-- ===================== MODAL CARPETA COMPARTIDA ===================== -->
     @if (cMostrar()) {
-      <div class="modal-backdrop" (click)="cMostrar.set(false)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>{{ cEditId() ? 'Editar carpeta compartida' : 'Nueva carpeta compartida' }}</h2>
           <form (ngSubmit)="guardarCompartida()">
@@ -180,7 +180,7 @@
 
     <!-- ===================== MODAL MIEMBRO ===================== -->
     @if (mMostrar()) {
-      <div class="modal-backdrop" (click)="mMostrar.set(false)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>{{ mEditId() ? 'Editar miembro' : 'Agregar miembro' }}</h2>
           <form (ngSubmit)="guardarMiembro()">
@@ -233,7 +233,7 @@
 
     <!-- ===================== MODAL ROL ===================== -->
     @if (rMostrar()) {
-      <div class="modal-backdrop" (click)="rMostrar.set(false)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>{{ rEditId() ? 'Editar rol' : 'Nuevo rol' }}</h2>
           <form (ngSubmit)="guardarRol()">
@@ -265,7 +265,7 @@
 
     <!-- ===================== ARCHIVOS DE MIEMBRO ===================== -->
     @if (miembroVer(); as m) {
-      <div class="modal-backdrop" (click)="cerrarArchivos()">
+      <div class="modal-backdrop">
         <div class="card modal modal-ancho" (click)="$event.stopPropagation()">
           <div class="row">
             <h2>Archivos de {{ m.nombre || m.email }}</h2>
@@ -299,7 +299,7 @@
 
     <!-- ===================== CONFIRMACIÓN ===================== -->
     @if (confirmacion(); as c) {
-      <div class="modal-backdrop" (click)="confirmacion.set(null)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>{{ c.titulo }}</h2>
           <p class="muted" style="margin-bottom: 16px;">{{ c.mensaje }}</p>

@@ -55,7 +55,7 @@
 
     <!-- Modal: nueva empresa + su primer admin -->
     @if (mostrarCrear()) {
-      <div class="modal-backdrop" (click)="mostrarCrear.set(false)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>Nueva empresa</h2>
           <form (ngSubmit)="crear()">
@@ -91,7 +91,7 @@
 
     <!-- Modal: renombrar empresa -->
     @if (editando(); as e) {
-      <div class="modal-backdrop" (click)="editando.set(null)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>Renombrar empresa</h2>
           <form (ngSubmit)="guardarEditar()">
@@ -112,7 +112,7 @@
 
     <!-- Modal: confirmar borrado -->
     @if (confirmacion(); as c) {
-      <div class="modal-backdrop" (click)="confirmacion.set(null)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>Borrar empresa</h2>
           <p class="muted" style="margin-bottom: 16px;">

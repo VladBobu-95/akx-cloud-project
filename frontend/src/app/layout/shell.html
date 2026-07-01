@@ -1,6 +1,6 @@
 <header class="navbar">
   <div class="container nav-inner">
-    <a class="logo" routerLink="/inicio">
+    <a class="logo" [routerLink]="auth.esSuperadmin() ? '/plataforma' : '/inicio'">
       <span class="logo-mark">▲</span> AKX <span class="logo-light">Cloud</span>
     </a>
 

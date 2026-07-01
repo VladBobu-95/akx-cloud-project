@@ -16,6 +16,9 @@
       .auth-card .input {
         padding: 14px 16px;
         font-size: 1.05rem;
+        /* Color explícito del cursor: en algunos temas/navegadores el caret salía
+           casi invisible y la "línea que parpadea" no se veía bien al escribir. */
+        caret-color: var(--green);
       }
       .auth-card .btn {
         padding: 14px;
@@ -56,6 +59,13 @@
       }
       .input-pass .input {
         padding-right: 42px;
+      }
+      /* Edge/IE añaden su PROPIO botón de "revelar contraseña" a los inputs
+         type=password: con nuestro ojo salían DOS. Lo ocultamos para dejar solo
+         el nuestro. */
+      .input-pass .input::-ms-reveal,
+      .input-pass .input::-ms-clear {
+        display: none;
       }
       .ojo {
         position: absolute;

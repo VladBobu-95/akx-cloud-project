@@ -6,6 +6,7 @@ import { env } from "./env";
 import { Empresa } from "../entities/Empresa";
 import { Rol } from "../entities/Rol";
 import { CarpetaCompartida } from "../entities/CarpetaCompartida";
+import { CarpetaCompartidaCarpeta } from "../entities/CarpetaCompartidaCarpeta";
 import { Usuario } from "../entities/Usuario";
 import { Archivo } from "../entities/Archivo";
 import { Carpeta } from "../entities/Carpeta";
@@ -40,7 +41,7 @@ export const AppDataSource = new DataSource({
   username: env.DB_USER,
   password: env.DB_PASSWORD,
   database: env.DB_NAME,
-  entities: [Empresa, Rol, CarpetaCompartida, Usuario, Archivo, Carpeta, Factura, LineaFactura, Tarea, ChatPendiente],
+  entities: [Empresa, Rol, CarpetaCompartida, CarpetaCompartidaCarpeta, Usuario, Archivo, Carpeta, Factura, LineaFactura, Tarea, ChatPendiente],
   migrations: [path.join(__dirname, "../migrations/*.{ts,js}")],
   migrationsTableName: "migrations",
   // Solo los tests autogeneran el esquema (synchronize). En dev/prod el esquema

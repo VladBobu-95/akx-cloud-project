@@ -4,6 +4,7 @@ import { z } from "zod";
 import { In } from "typeorm";
 import { AppDataSource } from "../config/database";
 import { CarpetaCompartida } from "../entities/CarpetaCompartida";
+import { CarpetaCompartidaCarpeta } from "../entities/CarpetaCompartidaCarpeta";
 import { Rol } from "../entities/Rol";
 import { Usuario } from "../entities/Usuario";
 import { Archivo } from "../entities/Archivo";
@@ -17,6 +18,7 @@ import { calcularHashSha256 } from "./archivos.service";
 // sube uno lo ven todos los del rol). Acceso por empresa+roles, NO por propietario.
 
 const ccRepo = () => AppDataSource.getRepository(CarpetaCompartida);
+const ccCarpetaRepo = () => AppDataSource.getRepository(CarpetaCompartidaCarpeta);
 const rolRepo = () => AppDataSource.getRepository(Rol);
 const usuarioRepo = () => AppDataSource.getRepository(Usuario);
 const archivoRepo = () => AppDataSource.getRepository(Archivo);
@@ -250,4 +252,233 @@ export const eliminarCompartido = async (archivoId: string, usuarioId: string): 
   // Los fragmentos RAG del archivo se borran solos por el FK ON DELETE CASCADE
   // (FK_fragmentos_archivo), igual que en el borrado permanente personal.
   await archivoRepo().delete(archivo.id);
+};
+
+// ===================== EXPLORADOR COMPLETO (paridad con "Mis archivos") =====================
+// Estas funciones dan a las carpetas compartidas las mismas operaciones que el
+// explorador personal: árbol de subcarpetas persistidas (incluidas las vacías),
+// mover/renombrar/copiar archivos y carpetas, y descarga en .zip. El acceso lo
+// sigue gobernando la carpeta compartida (empresa+roles), no un propietario.
+
+// Todos los archivos de una carpeta compartida (para construir el árbol en cliente,
+// igual que listarTodos de personal).
+export const listarTodosCompartidos = async (
+  usuarioId: string,
+  carpetaCompartidaId: string,
+): Promise<Archivo[]> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  return archivoRepo().find({
+    where: { carpetaCompartidaId },
+    order: { subidoEn: "DESC" },
+  });
+};
+
+// Subcarpetas EXPLÍCITAS persistidas (incluidas las vacías) de una carpeta compartida.
+export const listarSubcarpetasCompartidas = async (
+  usuarioId: string,
+  carpetaCompartidaId: string,
+): Promise<{ ruta: string; creada: string }[]> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  const filas = await ccCarpetaRepo().find({
+    where: { carpetaCompartidaId },
+    order: { ruta: "ASC" },
+  });
+  return filas.map((c) => ({ ruta: c.ruta, creada: c.creadaEn.toISOString() }));
+};
+
+// Crea una subcarpeta (idempotente). Devuelve la ruta canónica.
+export const crearSubcarpetaCompartida = async (
+  usuarioId: string,
+  carpetaCompartidaId: string,
+  ruta: string,
+): Promise<string> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  const r = normalizarCarpeta(ruta);
+  if (r === "/") throw new AppError(400, "No se puede crear la carpeta raíz");
+  const existe = await ccCarpetaRepo().findOneBy({ carpetaCompartidaId, ruta: r });
+  if (!existe) {
+    try {
+      await ccCarpetaRepo().save(ccCarpetaRepo().create({ carpetaCompartidaId, ruta: r }));
+    } catch (err: unknown) {
+      // 23505 = unique_violation por creación concurrente; idempotente, se ignora.
+      const code =
+        (err as { code?: string; driverError?: { code?: string } })?.code ??
+        (err as { driverError?: { code?: string } })?.driverError?.code;
+      if (code !== "23505") throw err;
+    }
+  }
+  return r;
+};
+
+// Borra la metadata de una subcarpeta y sus descendientes (NO borra archivos: el
+// llamador los borra aparte, igual que el explorador personal).
+export const eliminarSubcarpetaCompartida = async (
+  usuarioId: string,
+  carpetaCompartidaId: string,
+  ruta: string,
+): Promise<void> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  const r = normalizarCarpeta(ruta);
+  await ccCarpetaRepo()
+    .createQueryBuilder()
+    .delete()
+    .from(CarpetaCompartidaCarpeta)
+    .where("carpetaCompartidaId = :cc", { cc: carpetaCompartidaId })
+    .andWhere("(ruta = :r OR ruta LIKE :p)", { r, p: `${r}/%` })
+    .execute();
+};
+
+// Mueve/renombra una subcarpeta CON su contenido: re-prefija la ruta de todos los
+// archivos del subárbol y de la metadata de subcarpetas.
+export const reubicarSubcarpetaCompartida = async (
+  usuarioId: string,
+  carpetaCompartidaId: string,
+  origen: string,
+  destino: string,
+): Promise<void> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  const o = normalizarCarpeta(origen);
+  const d = normalizarCarpeta(destino);
+  if (d === o || d.startsWith(`${o}/`)) {
+    throw new AppError(400, "No puedes mover una carpeta dentro de sí misma");
+  }
+
+  const archivos = await archivoRepo()
+    .createQueryBuilder("a")
+    .where("a.carpetaCompartidaId = :cc", { cc: carpetaCompartidaId })
+    .andWhere("(a.carpeta = :o OR a.carpeta LIKE :p)", { o, p: `${o}/%` })
+    .getMany();
+  for (const a of archivos) a.carpeta = d + a.carpeta.slice(o.length);
+  if (archivos.length) await archivoRepo().save(archivos);
+
+  const metas = await ccCarpetaRepo()
+    .createQueryBuilder("c")
+    .where("c.carpetaCompartidaId = :cc", { cc: carpetaCompartidaId })
+    .andWhere("(c.ruta = :o OR c.ruta LIKE :p)", { o, p: `${o}/%` })
+    .getMany();
+  for (const c of metas) c.ruta = d + c.ruta.slice(o.length);
+  if (metas.length) await ccCarpetaRepo().save(metas);
+
+  // Garantiza que la carpeta destino exista como metadata (aunque quede vacía).
+  await crearSubcarpetaCompartida(usuarioId, carpetaCompartidaId, d);
+};
+
+// Renombra/mueve un archivo compartido DENTRO de su misma carpeta compartida.
+export const actualizarArchivoCompartido = async (
+  archivoId: string,
+  usuarioId: string,
+  datos: { nombre?: string; carpeta?: string },
+): Promise<Archivo> => {
+  const archivo = await cargarCompartidoConAcceso(archivoId, usuarioId);
+  if (datos.nombre !== undefined) archivo.nombre = datos.nombre;
+  if (datos.carpeta !== undefined) archivo.carpeta = normalizarCarpeta(datos.carpeta);
+  return archivoRepo().save(archivo);
+};
+
+// Copia un archivo compartido (binario incluido) dentro de la misma carpeta
+// compartida. Duplica también sus fragmentos RAG (reutilizando embeddings).
+export const copiarArchivoCompartido = async (
+  archivoId: string,
+  usuarioId: string,
+  datos: { carpeta?: string; nombre?: string },
+): Promise<Archivo> => {
+  const original = await cargarCompartidoConAcceso(archivoId, usuarioId);
+  const carpetaCompartidaId = original.carpetaCompartidaId!;
+
+  const carpetaFinal = normalizarCarpeta(datos.carpeta ?? original.carpeta);
+  const carpetaLimpia = carpetaFinal === "/" ? "raiz" : carpetaFinal.slice(1);
+  const nuevaClave = `compartido/${carpetaCompartidaId}/${carpetaLimpia}/${randomUUID()}`;
+
+  // Nombre de la copia: "<original> (copia)", "(copia 2)"... si ya existe en el destino.
+  let nombreFinal = datos.nombre;
+  if (!nombreFinal) {
+    const punto = original.nombre.lastIndexOf(".");
+    const base = punto > 0 ? original.nombre.slice(0, punto) : original.nombre;
+    const ext = punto > 0 ? original.nombre.slice(punto) : "";
+    let intento = 1;
+    let candidato = `${base} (copia)${ext}`;
+    while (
+      await archivoRepo().findOne({
+        where: { nombre: candidato, carpeta: carpetaFinal, carpetaCompartidaId },
+      })
+    ) {
+      intento++;
+      candidato = `${base} (copia ${intento})${ext}`;
+    }
+    nombreFinal = candidato;
+  }
+
+  await minioClient.copyObject(
+    env.MINIO_BUCKET,
+    nuevaClave,
+    `/${env.MINIO_BUCKET}/${original.claveMinio}`,
+  );
+
+  const copia = archivoRepo().create({
+    nombre: nombreFinal,
+    carpeta: carpetaFinal,
+    mimeType: original.mimeType,
+    tamanoBytes: original.tamanoBytes,
+    claveMinio: nuevaClave,
+    hashSha256: original.hashSha256,
+    textoExtraido: original.textoExtraido,
+    propietario: { id: usuarioId } as Usuario, // autor/auditoría
+    carpetaCompartidaId,
+  });
+
+  try {
+    const guardado = await archivoRepo().save(copia);
+    // Duplicamos los fragmentos RAG (incl. carpetaCompartidaId) para que la copia
+    // también aparezca en la búsqueda; reutiliza los embeddings ya calculados.
+    try {
+      await AppDataSource.query(
+        `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
+         SELECT $1, "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding"
+         FROM "fragmentos" WHERE "archivoId" = $2`,
+        [guardado.id, original.id],
+      );
+    } catch (errFrag) {
+      console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
+    }
+    return guardado;
+  } catch (err) {
+    await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
+    throw err;
+  }
+};
+
+// Prepara el .zip de una subcarpeta compartida (o de toda la carpeta si ruta = "/"),
+// conservando las subcarpetas. El controlador construye el zip con los streams.
+export const prepararDescargaCarpetaCompartida = async (
+  usuarioId: string,
+  carpetaCompartidaId: string,
+  ruta: string,
+): Promise<{ nombreZip: string; entradas: { name: string; stream: Readable }[] }> => {
+  const carpeta = await verificarAcceso(usuarioId, carpetaCompartidaId);
+  const rutaNorm = normalizarCarpeta(ruta);
+  const limpia = rutaNorm === "/" ? "" : rutaNorm.slice(1);
+
+  const query = archivoRepo()
+    .createQueryBuilder("a")
+    .where("a.carpetaCompartidaId = :cc", { cc: carpetaCompartidaId });
+  if (rutaNorm !== "/") {
+    query.andWhere("(a.carpeta = :r OR a.carpeta LIKE :p)", { r: rutaNorm, p: `${rutaNorm}/%` });
+  }
+  const archivos = await query.getMany();
+
+  const entradas = await Promise.all(
+    archivos.map(async (a) => {
+      const carpetaArchivo = a.carpeta.replace(/^\/+|\/+$/g, "");
+      let rel = carpetaArchivo;
+      if (limpia && (rel === limpia || rel.startsWith(`${limpia}/`))) {
+        rel = rel.slice(limpia.length).replace(/^\/+/, "");
+      }
+      const name = rel ? `${rel}/${a.nombre}` : a.nombre;
+      const stream = await minioClient.getObject(env.MINIO_BUCKET, a.claveMinio);
+      return { name, stream };
+    }),
+  );
+
+  const base = rutaNorm === "/" ? carpeta.nombre : (rutaNorm.split("/").pop() ?? carpeta.nombre);
+  return { nombreZip: `${base}.zip`, entradas };
 };

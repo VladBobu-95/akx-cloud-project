@@ -98,7 +98,7 @@
 
     <!-- Modal de confirmación -->
     @if (confirmacion(); as c) {
-      <div class="modal-backdrop" (click)="confirmacion.set(null)">
+      <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
           <h2>{{ c.titulo }}</h2>
           <p class="muted" style="margin-bottom: 16px;">{{ c.mensaje }}</p>

@@ -1,17 +1,52 @@
 import { Component, inject, signal } from '@angular/core';
-import { DatePipe } from '@angular/common';
+import { Observable, of, throwError } from 'rxjs';
 import { CompartidoService } from '../../core/compartido.service';
 import { ToastService } from '../../core/toast.service';
-import { Archivo } from '../../core/models';
-import { FileSizePipe } from '../../shared/file-size.pipe';
+import { ResultadoBusqueda } from '../../core/models';
 import { mensajeError } from '../../shared/errores';
+import { ExploradorComponent } from './explorador';
+import { FuenteArchivos, OpcionesExplorador } from './fuente';
+
+// Adaptador: envuelve CompartidoService (fijado a una carpeta compartida) con la
+// MISMA interfaz que ArchivosService, para que ExploradorComponent trate las
+// carpetas compartidas exactamente igual que "Mis archivos".
+class FuenteCompartida implements FuenteArchivos {
+  constructor(private svc: CompartidoService, private ccId: string) {}
+  listarTodos() { return this.svc.listarTodos(this.ccId); }
+  listarCarpetas() { return this.svc.listarCarpetas(this.ccId); }
+  crearCarpetaApi(ruta: string) { return this.svc.crearCarpeta(this.ccId, ruta); }
+  reubicarCarpetaApi(origen: string, destino: string) {
+    return this.svc.reubicarCarpeta(this.ccId, origen, destino);
+  }
+  eliminarCarpetaApi(ruta: string) { return this.svc.eliminarCarpeta(this.ccId, ruta); }
+  subir(file: File, carpeta?: string) { return this.svc.subir(this.ccId, file, carpeta); }
+  descargar(id: string) { return this.svc.descargar(id); }
+  descargarCarpeta(ruta: string) { return this.svc.descargarCarpeta(this.ccId, ruta); }
+  actualizar(id: string, datos: { nombre?: string; carpeta?: string }) {
+    return this.svc.actualizarArchivo(id, datos);
+  }
+  copiar(id: string, datos: { carpeta?: string; nombre?: string }) {
+    return this.svc.copiarArchivo(id, datos);
+  }
+  eliminar(id: string) { return this.svc.eliminarArchivo(id); }
+  // No aplican a compartido (soportaIA=false, soportaBusqueda=false); no se llaman.
+  describirArchivo(): Observable<never> {
+    return throwError(() => new Error('No disponible en carpetas compartidas'));
+  }
+  escanearFactura(): Observable<never> {
+    return throwError(() => new Error('No disponible en carpetas compartidas'));
+  }
+  buscarSemantica(): Observable<ResultadoBusqueda[]> {
+    return of([]);
+  }
+}
 
 // Vista de carpetas COMPARTIDAS por rol (se muestra en "Mis archivos" con el
-// toggle Compartido). Almacenamiento único: lo que sube uno lo ven todos los del
-// rol. Navegación carpeta a carpeta dentro de cada espacio compartido.
+// toggle Compartido). Primero se elige un espacio compartido y, dentro, se usa el
+// mismo explorador que los archivos personales (almacenamiento único por rol).
 @Component({
   selector: 'app-compartido',
-  imports: [DatePipe, FileSizePipe],
+  imports: [ExploradorComponent],
   template: `
     @if (carpeta() === null) {
       @if (carpetas().length === 0) {
@@ -32,49 +67,16 @@ import { mensajeError } from '../../shared/errores';
     } @else {
       <div class="row barra">
         <button class="btn btn-ghost btn-sm" (click)="volver()">← Compartido</button>
-        <span class="ruta">{{ carpeta()!.nombre }}{{ rutaActual() === '/' ? '' : rutaActual() }}</span>
+        <span class="ruta">{{ carpeta()!.nombre }}</span>
         <span class="spacer"></span>
-        <label class="btn btn-primary btn-sm">
-          {{ subiendo() ? 'Subiendo…' : '+ Subir' }}
-          <input type="file" multiple hidden (change)="onSubir($event)" [disabled]="subiendo()" />
-        </label>
+        <span class="muted">{{ total() }} archivo(s)</span>
       </div>
 
-      @if (cargando()) {
-        <div class="card empty">Cargando…</div>
-      } @else {
-        <div class="card list">
-          @if (rutaActual() !== '/') {
-            <button class="fila nav" (click)="subirNivel()">📁 ..</button>
-          }
-          @for (sc of subcarpetas(); track sc) {
-            <button class="fila nav" (click)="entrarSub(sc)">📁 {{ hoja(sc) }}</button>
-          }
-          @if (archivos().length === 0 && subcarpetas().length === 0 && rutaActual() === '/') {
-            <div class="empty">Esta carpeta compartida está vacía. Sube el primer archivo.</div>
-          }
-          @if (archivos().length > 0) {
-            <table class="table">
-              <thead><tr><th>Nombre</th><th>Tamaño</th><th>Subido</th><th class="der">Acciones</th></tr></thead>
-              <tbody>
-                @for (a of archivos(); track a.id) {
-                  <tr>
-                    <td class="nombre">{{ a.nombre }}</td>
-                    <td>{{ a.tamanoBytes | fileSize }}</td>
-                    <td class="muted">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
-                    <td>
-                      <div class="acciones">
-                        <button class="btn btn-outline btn-sm" (click)="descargar(a)">Descargar</button>
-                        <button class="btn btn-danger btn-sm" (click)="borrar(a)">Borrar</button>
-                      </div>
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          }
-        </div>
-      }
+      <app-explorador
+        [datos]="fuente()!"
+        [opciones]="opciones()!"
+        (totalCambio)="total.set($event)"
+      />
     }
   `,
   styles: [`
@@ -87,18 +89,9 @@ import { mensajeError } from '../../shared/errores';
     .folder-card:hover { border-color: var(--green); background: var(--green-soft); }
     .folder-card .ico { font-size: 2rem; }
     .folder-card .nom { font-weight: 600; text-align: center; word-break: break-word; }
-    .barra { align-items: center; gap: 10px; margin-bottom: 10px; }
-    .ruta { font-weight: 600; color: var(--muted); }
-    .list { padding: 6px 8px; }
-    .fila.nav {
-      display: block; width: 100%; text-align: left; background: none; border: none;
-      font: inherit; padding: 8px 10px; cursor: pointer; border-radius: 8px;
-    }
-    .fila.nav:hover { background: var(--green-soft); }
-    .nombre { font-weight: 600; }
-    .acciones { display: flex; gap: 6px; justify-content: flex-end; }
-    .der { text-align: right; }
-    label.btn input { display: none; }
+    .barra { align-items: center; gap: 10px; margin-bottom: 12px; }
+    .barra .ruta { font-weight: 700; font-size: 1.05rem; }
+    .barra .spacer { flex: 1; }
   `],
 })
 export class CompartidoComponent {
@@ -107,11 +100,11 @@ export class CompartidoComponent {
 
   protected carpetas = signal<{ id: string; nombre: string }[]>([]);
   protected carpeta = signal<{ id: string; nombre: string } | null>(null);
-  protected rutaActual = signal('/');
-  protected archivos = signal<Archivo[]>([]);
-  protected subcarpetas = signal<string[]>([]);
-  protected cargando = signal(false);
-  protected subiendo = signal(false);
+  protected total = signal(0);
+
+  // Origen de datos y opciones del explorador para la carpeta seleccionada.
+  protected fuente = signal<FuenteArchivos | null>(null);
+  protected opciones = signal<OpcionesExplorador | null>(null);
 
   constructor() {
     this.cargarCarpetas();
@@ -125,98 +118,20 @@ export class CompartidoComponent {
   }
 
   abrir(c: { id: string; nombre: string }) {
+    this.total.set(0);
+    this.fuente.set(new FuenteCompartida(this.svc, c.id));
+    this.opciones.set({
+      etiquetaRaiz: c.nombre,
+      soportaBusqueda: false, // la búsqueda semántica del chat es personal
+      soportaIA: false, // los compartidos se indexan solos; no se escanean a analítica
+      aPapelera: false, // los compartidos se borran definitivamente (afecta a todos)
+    });
     this.carpeta.set(c);
-    this.rutaActual.set('/');
-    this.cargarArchivos();
   }
 
   volver() {
     this.carpeta.set(null);
-    this.archivos.set([]);
-    this.subcarpetas.set([]);
-  }
-
-  cargarArchivos() {
-    const c = this.carpeta();
-    if (!c) return;
-    this.cargando.set(true);
-    this.svc.listarArchivos(c.id, this.rutaActual()).subscribe({
-      next: (r) => {
-        this.archivos.set(r.archivos);
-        this.subcarpetas.set(r.subcarpetas);
-        this.cargando.set(false);
-      },
-      error: (err) => {
-        this.cargando.set(false);
-        this.toast.error(mensajeError(err));
-      },
-    });
-  }
-
-  hoja(ruta: string): string {
-    return ruta.split('/').filter(Boolean).pop() ?? ruta;
-  }
-
-  entrarSub(ruta: string) {
-    this.rutaActual.set(ruta);
-    this.cargarArchivos();
-  }
-
-  subirNivel() {
-    const partes = this.rutaActual().split('/').filter(Boolean);
-    partes.pop();
-    this.rutaActual.set(partes.length ? `/${partes.join('/')}` : '/');
-    this.cargarArchivos();
-  }
-
-  onSubir(ev: Event) {
-    const input = ev.target as HTMLInputElement;
-    const files = Array.from(input.files ?? []);
-    const c = this.carpeta();
-    if (!files.length || !c) return;
-    this.subiendo.set(true);
-    let pendientes = files.length;
-    for (const f of files) {
-      this.svc.subir(c.id, f, this.rutaActual()).subscribe({
-        next: () => {
-          if (--pendientes === 0) this.finSubida(input);
-        },
-        error: (err) => {
-          this.toast.error(mensajeError(err));
-          if (--pendientes === 0) this.finSubida(input);
-        },
-      });
-    }
-  }
-
-  private finSubida(input: HTMLInputElement) {
-    this.subiendo.set(false);
-    input.value = '';
-    this.toast.exito('Subida completada');
-    this.cargarArchivos();
-  }
-
-  descargar(a: Archivo) {
-    this.svc.descargar(a.id).subscribe({
-      next: (blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = a.nombre;
-        link.click();
-        URL.revokeObjectURL(url);
-      },
-      error: (err) => this.toast.error(mensajeError(err)),
-    });
-  }
-
-  borrar(a: Archivo) {
-    this.svc.eliminarArchivo(a.id).subscribe({
-      next: () => {
-        this.toast.exito('Archivo borrado');
-        this.cargarArchivos();
-      },
-      error: (err) => this.toast.error(mensajeError(err)),
-    });
+    this.fuente.set(null);
+    this.opciones.set(null);
   }
 }

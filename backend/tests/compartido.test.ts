@@ -182,3 +182,121 @@ describe("Carpetas compartidas (Fase 3)", () => {
     expect(res.status).toBe(400);
   });
 });
+
+// Explorador completo dentro de una carpeta compartida (paridad con "Mis
+// archivos"): subcarpetas persistidas, mover/renombrar/copiar y listado global.
+describe("Carpetas compartidas — explorador completo", () => {
+  const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
+  let adminToken: string;
+  let carpetaId: string;
+
+  beforeAll(async () => {
+    adminToken = (await crearUsuario(`ce_admin_${Date.now()}@test.com`, { rol: "admin" })).token;
+    carpetaId = (
+      await request(app)
+        .post("/api/compartido/admin")
+        .set(auth(adminToken))
+        .send({ nombre: `Espacio ${Date.now()}`, rolesIds: [] })
+    ).body.id;
+  });
+
+  it("crea una subcarpeta y la lista", async () => {
+    const crear = await request(app)
+      .post(`/api/compartido/${carpetaId}/carpetas`)
+      .set(auth(adminToken))
+      .send({ ruta: "/2026" });
+    expect(crear.status).toBe(201);
+
+    const lista = await request(app).get(`/api/compartido/${carpetaId}/carpetas`).set(auth(adminToken));
+    expect(lista.body.find((c: { ruta: string }) => c.ruta === "/2026")).toBeTruthy();
+  });
+
+  let archivoId: string;
+
+  it("sube un archivo a una subcarpeta y /todos lo trae con su ruta", async () => {
+    const subida = await request(app)
+      .post(`/api/compartido/${carpetaId}/subir`)
+      .set(auth(adminToken))
+      .field("carpeta", "/2026")
+      .attach("archivo", Buffer.from(`x ${Date.now()}`), { filename: "f.txt", contentType: "text/plain" });
+    expect(subida.status).toBe(201);
+    archivoId = subida.body.id;
+
+    const todos = await request(app).get(`/api/compartido/${carpetaId}/todos`).set(auth(adminToken));
+    const a = todos.body.find((x: { id: string; carpeta: string }) => x.id === archivoId);
+    expect(a?.carpeta).toBe("/2026");
+  });
+
+  it("renombra/mueve un archivo dentro de la carpeta compartida", async () => {
+    const res = await request(app)
+      .patch(`/api/compartido/archivo/${archivoId}`)
+      .set(auth(adminToken))
+      .send({ nombre: "renombrado.txt", carpeta: "/2027" });
+    expect(res.status).toBe(200);
+    expect(res.body.nombre).toBe("renombrado.txt");
+    expect(res.body.carpeta).toBe("/2027");
+  });
+
+  it("copia un archivo (nuevo id + nombre '(copia)')", async () => {
+    const res = await request(app)
+      .post(`/api/compartido/archivo/${archivoId}/copiar`)
+      .set(auth(adminToken))
+      .send({});
+    expect(res.status).toBe(201);
+    expect(res.body.id).not.toBe(archivoId);
+    expect(res.body.nombre).toContain("(copia)");
+    expect(res.body.carpetaCompartidaId).toBe(carpetaId);
+  });
+
+  it("mueve una subcarpeta con su contenido", async () => {
+    await request(app)
+      .post(`/api/compartido/${carpetaId}/carpetas`)
+      .set(auth(adminToken))
+      .send({ ruta: "/a" });
+    const sub = await request(app)
+      .post(`/api/compartido/${carpetaId}/subir`)
+      .set(auth(adminToken))
+      .field("carpeta", "/a")
+      .attach("archivo", Buffer.from(`y ${Date.now()}`), { filename: "g.txt", contentType: "text/plain" });
+    const gid = sub.body.id;
+
+    const mover = await request(app)
+      .patch(`/api/compartido/${carpetaId}/carpetas`)
+      .set(auth(adminToken))
+      .send({ origen: "/a", destino: "/b" });
+    expect(mover.status).toBe(200);
+
+    const todos = await request(app).get(`/api/compartido/${carpetaId}/todos`).set(auth(adminToken));
+    expect(todos.body.find((x: { id: string; carpeta: string }) => x.id === gid)?.carpeta).toBe("/b");
+
+    const carpetas = await request(app).get(`/api/compartido/${carpetaId}/carpetas`).set(auth(adminToken));
+    expect(carpetas.body.find((c: { ruta: string }) => c.ruta === "/b")).toBeTruthy();
+    expect(carpetas.body.find((c: { ruta: string }) => c.ruta === "/a")).toBeFalsy();
+  });
+
+  it("borra la metadata de una subcarpeta", async () => {
+    const res = await request(app)
+      .delete(`/api/compartido/${carpetaId}/carpetas`)
+      .query({ ruta: "/2027" })
+      .set(auth(adminToken));
+    expect(res.status).toBe(204);
+
+    const carpetas = await request(app).get(`/api/compartido/${carpetaId}/carpetas`).set(auth(adminToken));
+    expect(carpetas.body.find((c: { ruta: string }) => c.ruta === "/2027")).toBeFalsy();
+  });
+
+  it("un usuario sin acceso -> 403 en los nuevos endpoints", async () => {
+    const otro = await crearUsuario(`ce_sin_${Date.now()}@test.com`, { rol: "miembro" });
+    expect(
+      (await request(app).get(`/api/compartido/${carpetaId}/todos`).set(auth(otro.token))).status,
+    ).toBe(403);
+    expect(
+      (
+        await request(app)
+          .post(`/api/compartido/${carpetaId}/carpetas`)
+          .set(auth(otro.token))
+          .send({ ruta: "/z" })
+      ).status,
+    ).toBe(403);
+  });
+});

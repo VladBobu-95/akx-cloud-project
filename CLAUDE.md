@@ -157,15 +157,21 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 | PATCH/DELETE | `/roles/:id` | editar `{nombre?, capacidades?}` / eliminar |
 
 ### `/api/compartido` (carpetas compartidas por rol — Fase 3)
-Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; cualquier miembro con un rol asignado a la carpeta la usa. Almacenamiento **único** (lo que sube uno lo ven todos los del rol). Los archivos compartidos **no van a la papelera** (borrado directo).
+Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; cualquier miembro con un rol asignado a la carpeta la usa. Almacenamiento **único** (lo que sube uno lo ven todos los del rol). Los archivos compartidos **no van a la papelera** (borrado directo). Dentro de cada carpeta compartida el explorador es **idéntico a "Mis archivos"** (mismo `ExploradorComponent` en el front): subcarpetas persistidas, mover/renombrar/copiar, drag&drop, selección múltiple y descarga zip.
 | Método | Ruta | Notas |
 |---|---|---|
 | GET/POST | `/admin` 🔒 admin | listar carpetas de la empresa (con roles) / crear `{nombre, rolesIds[]}` (nombre único por empresa) |
-| PATCH/DELETE | `/admin/:id` 🔒 admin | editar `{nombre?, rolesIds?}` / borrar (CASCADE a sus archivos + binarios MinIO) |
+| PATCH/DELETE | `/admin/:id` 🔒 admin | editar `{nombre?, rolesIds?}` / borrar (CASCADE a sus archivos + subcarpetas + binarios MinIO) |
 | GET | `/` | carpetas compartidas accesibles → `{id,nombre}[]` (admin=todas de su empresa; miembro=las de sus roles) |
 | GET | `/:id/archivos` | query `carpeta` → `{archivos, subcarpetas[]}` (subcarpetas derivadas de las rutas) |
+| GET | `/:id/todos` | **todos** los archivos de la carpeta compartida (para el árbol en cliente, como `listarTodos` personal) |
+| GET/POST | `/:id/carpetas` | listar subcarpetas explícitas (incl. vacías) → `{ruta,creada}[]` / crear `{ruta}` |
+| PATCH/DELETE | `/:id/carpetas` | mover/renombrar `{origen,destino}` (con contenido) / borrar `?ruta=` (solo metadata; los archivos los borra el front) |
+| GET | `/:id/carpeta/descargar` | .zip de una subcarpeta — query `ruta` |
 | POST | `/:id/subir` | multipart `archivo` + `carpeta` opcional; dedup por hash (mismo contenido → `{...,duplicado:true}` 200) |
 | GET | `/archivo/:archivoId/descargar` | streaming del binario (verifica acceso por la carpeta) |
+| PATCH | `/archivo/:archivoId` | renombrar/mover dentro de la carpeta compartida `{nombre?, carpeta?}` |
+| POST | `/archivo/:archivoId/copiar` | duplica el archivo (binario + fragmentos RAG) `{carpeta?, nombre?}` |
 | DELETE | `/archivo/:archivoId` | borrado definitivo (afecta a todos los del rol) |
 
 ### `/api/archivos`
@@ -203,7 +209,8 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 ## Schema de BD
 - **empresas** (tenant): `id`, `nombre`, `estado` (`activa`|`suspendida`, default `activa`), `creadoEn`. `OneToMany` usuarios.
 - **roles** (funcionales, por empresa): `id`, `nombre`, `capacidades` (`text[]` del vocabulario fijo `config/capacidades.ts`), `empresaId` (FK CASCADE), `creadoEn`. Único `(empresaId, nombre)`. N:N con usuarios vía **usuario_roles** (`usuarioId`,`rolId`, ambos CASCADE).
-- **carpetas_compartidas** (Fase 3): `id`, `nombre`, `empresaId` (FK CASCADE), `creadoEn`. Único `(empresaId, nombre)`. N:N con roles vía **carpeta_compartida_roles** (`carpetaCompartidaId`,`rolId`). Acceso = empresa + roles (no propietario). Borrarla CASCADE a sus archivos.
+- **carpetas_compartidas** (Fase 3): `id`, `nombre`, `empresaId` (FK CASCADE), `creadoEn`. Único `(empresaId, nombre)`. N:N con roles vía **carpeta_compartida_roles** (`carpetaCompartidaId`,`rolId`). Acceso = empresa + roles (no propietario). Borrarla CASCADE a sus archivos y subcarpetas.
+- **carpeta_compartida_carpetas**: `id`, `ruta` (canónica dentro de la carpeta compartida), `carpetaCompartidaId` (FK CASCADE), `creadaEn`. Único `(carpetaCompartidaId, ruta)`. Persiste las subcarpetas explícitas (incl. vacías) del explorador compartido, equivalente a `carpetas` para el espacio personal.
 - **usuarios**: `id`, `email` unique, `nombre`, `avatar` (base64, null), `passwordHash`, `rol` (`superadmin`|`admin`|`miembro`, default `miembro`), `empresaId` (FK CASCADE, null solo para superadmin), `roles` (N:N), `creadoEn`.
 - **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256` (dedup al subir: idéntico contenido vivo → se reutiliza, no se reprocesa), `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `estadoIndexado`/`indexadoEn` (estado del indexado RAG), `carpetaCompartidaId` (nullable, FK CASCADE — si va set, el archivo vive en una carpeta compartida en vez de en las carpetas personales del `propietario`), `eliminadoEn` (soft delete), `propietario` CASCADE.
 - **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
@@ -260,7 +267,8 @@ app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), style
   - La gestión básica de archivos personales en el chat **siempre** está disponible; `facturas`/`busqueda` se gatean. Un miembro **sin ningún rol** no tiene capacidades → el chat le limita facturas/búsqueda (el admin debería darle un rol).
   - La búsqueda semántica **del chat** (`buscar_semantica`) es personal; la del **buscador REST** de Mis archivos sí incluye lo compartido accesible.
   - Facturas dentro de carpetas compartidas: se **indexan** (RAG) pero **no** se auto-escanean a la analítica (no se atribuyen a un usuario).
-  - Archivos compartidos: **no van a la papelera** (borrado directo, afecta a todos los del rol). Las subcarpetas compartidas se derivan de las rutas de los archivos (no hay carpetas compartidas vacías persistidas).
+  - Archivos compartidos: **no van a la papelera** (borrado directo, afecta a todos los del rol).
+  - El explorador de una carpeta compartida usa el **mismo `ExploradorComponent`** que "Mis archivos" (fuente = adaptador de `CompartidoService`): subcarpetas persistidas (incl. vacías, tabla `carpeta_compartida_carpetas`), mover/renombrar/copiar archivos y carpetas, drag&drop, selección múltiple, paginación y descarga zip. Se desactivan el buscador semántico (personal) y las acciones de IA (describir/escanear); los borrados son definitivos (no papelera).
 
 ## Preferencias de trabajo (Vlad)
 - **Solo pedir confirmación para decisiones de diseño**, no para llamadas de herramienta rutinarias.

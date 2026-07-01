@@ -1,4 +1,6 @@
 import { Request, Response, NextFunction } from "express";
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { ZipArchive } = require("archiver") as { ZipArchive: new (options?: { zlib?: { level?: number } }) => import("archiver").Archiver };
 import {
   listarCarpetasAdmin,
   crearCarpetaCompartida,
@@ -9,6 +11,14 @@ import {
   subirCompartido,
   descargarCompartido,
   eliminarCompartido,
+  listarTodosCompartidos,
+  listarSubcarpetasCompartidas,
+  crearSubcarpetaCompartida,
+  eliminarSubcarpetaCompartida,
+  reubicarSubcarpetaCompartida,
+  actualizarArchivoCompartido,
+  copiarArchivoCompartido,
+  prepararDescargaCarpetaCompartida,
   schemaCrearCarpetaCompartida,
   schemaActualizarCarpetaCompartida,
 } from "../services/compartido.service";
@@ -126,6 +136,121 @@ export const ctrlEliminarArchivo = async (req: Request, res: Response, next: Nex
   try {
     await eliminarCompartido(String(req.params.archivoId), req.usuario!.id);
     res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ---- Explorador completo (paridad con "Mis archivos") ----
+
+// GET /:id/todos → todos los archivos de la carpeta compartida (para el árbol).
+export const ctrlListarTodos = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    res.json(await listarTodosCompartidos(req.usuario!.id, String(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /:id/carpetas → subcarpetas explícitas persistidas.
+export const ctrlListarSubcarpetas = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    res.json(await listarSubcarpetasCompartidas(req.usuario!.id, String(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /:id/carpetas { ruta }
+export const ctrlCrearSubcarpeta = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const ruta = String(req.body?.ruta ?? "");
+    if (!ruta) throw new AppError(400, "Falta la ruta de la carpeta");
+    const creada = await crearSubcarpetaCompartida(req.usuario!.id, String(req.params.id), ruta);
+    res.status(201).json({ ruta: creada });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PATCH /:id/carpetas { origen, destino }
+export const ctrlReubicarSubcarpeta = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const origen = String(req.body?.origen ?? "");
+    const destino = String(req.body?.destino ?? "");
+    if (!origen || !destino) throw new AppError(400, "Faltan origen o destino");
+    await reubicarSubcarpetaCompartida(req.usuario!.id, String(req.params.id), origen, destino);
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// DELETE /:id/carpetas?ruta=
+export const ctrlEliminarSubcarpeta = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const ruta = typeof req.query.ruta === "string" ? req.query.ruta : "";
+    if (!ruta) throw new AppError(400, "Falta la ruta de la carpeta");
+    await eliminarSubcarpetaCompartida(req.usuario!.id, String(req.params.id), ruta);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PATCH /archivo/:archivoId { nombre?, carpeta? }
+export const ctrlActualizarArchivo = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { nombre, carpeta } = req.body ?? {};
+    const datos: { nombre?: string; carpeta?: string } = {};
+    if (nombre !== undefined) datos.nombre = String(nombre);
+    if (carpeta !== undefined) datos.carpeta = String(carpeta);
+    res.json(await actualizarArchivoCompartido(String(req.params.archivoId), req.usuario!.id, datos));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /archivo/:archivoId/copiar { carpeta?, nombre? }
+export const ctrlCopiarArchivo = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { nombre, carpeta } = req.body ?? {};
+    const datos: { nombre?: string; carpeta?: string } = {};
+    if (nombre !== undefined) datos.nombre = String(nombre);
+    if (carpeta !== undefined) datos.carpeta = String(carpeta);
+    res.status(201).json(await copiarArchivoCompartido(String(req.params.archivoId), req.usuario!.id, datos));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /:id/carpeta/descargar?ruta= → .zip de la subcarpeta (o de toda la carpeta).
+export const ctrlDescargarCarpetaZip = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const ruta = typeof req.query.ruta === "string" ? req.query.ruta : "/";
+    const { nombreZip, entradas } = await prepararDescargaCarpetaCompartida(
+      req.usuario!.id,
+      String(req.params.id),
+      ruta,
+    );
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(nombreZip)}`,
+    );
+
+    const archive = new ZipArchive({ zlib: { level: 9 } });
+    archive.on("error", next);
+    archive.pipe(res);
+
+    for (const entrada of entradas) {
+      archive.append(entrada.stream, { name: entrada.name });
+    }
+    if (entradas.length === 0) {
+      archive.append("", { name: nombreZip.replace(/\.zip$/, "") + "/" });
+    }
+    await archive.finalize();
   } catch (error) {
     next(error);
   }

@@ -2,6 +2,8 @@ import request from "supertest";
 import { app } from "../src/app";
 import { describe, it, expect, beforeAll } from "@jest/globals";
 import { crearUsuario, tokenUsuario } from "./helpers";
+import { minioClient } from "../src/config/minio";
+import { env } from "../src/config/env";
 
 // Panel de plataforma (superadmin) + multi-tenant: alta de empresas con su admin,
 // control de acceso, suspensión y aislamiento entre empresas.
@@ -96,6 +98,33 @@ describe("Plataforma / multi-tenant (Fase 1)", () => {
 
     const res = await request(app).get("/api/archivos").set(auth(token));
     expect(res.status).toBe(403);
+  });
+
+  it("borrar empresa limpia los binarios en MinIO (no deja huérfanos)", async () => {
+    const email = `del_${Date.now()}@test.com`;
+    const creada = await request(app)
+      .post("/api/plataforma/empresas")
+      .set(auth(superToken))
+      .send({ nombre: "Borrable", admin: { nombre: "X", email, password: "password123" } });
+    const empresaId = creada.body.empresa.id;
+
+    const login = await request(app).post("/api/auth/login").send({ email, password: "password123" });
+    const adminToken = login.body.token as string;
+
+    const subida = await request(app)
+      .post("/api/archivos/subir")
+      .set(auth(adminToken))
+      .attach("archivo", Buffer.from(`bin ${Date.now()}`), { filename: "b.txt", contentType: "text/plain" });
+    const clave = subida.body.claveMinio as string;
+    expect(clave).toBeTruthy();
+    // El objeto existe en MinIO antes de borrar la empresa.
+    await expect(minioClient.statObject(env.MINIO_BUCKET, clave)).resolves.toBeDefined();
+
+    const del = await request(app).delete(`/api/plataforma/empresas/${empresaId}`).set(auth(superToken));
+    expect(del.status).toBe(204);
+
+    // Tras borrar la empresa, el binario ya no está (no queda huérfano en MinIO).
+    await expect(minioClient.statObject(env.MINIO_BUCKET, clave)).rejects.toBeDefined();
   });
 
   it("aislamiento: un usuario no ve archivos de otra empresa", async () => {

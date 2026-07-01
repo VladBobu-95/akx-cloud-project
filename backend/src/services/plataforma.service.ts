@@ -3,6 +3,9 @@ import { z } from "zod";
 import { AppDataSource } from "../config/database";
 import { Empresa } from "../entities/Empresa";
 import { Usuario } from "../entities/Usuario";
+import { Archivo } from "../entities/Archivo";
+import { minioClient } from "../config/minio";
+import { env } from "../config/env";
 import { AppError } from "../utils/errors";
 
 // Gestión de empresas (tenants) por el superadmin de la plataforma. Es la vía de
@@ -88,10 +91,30 @@ export const actualizarEmpresa = async (
 };
 
 // Borra la empresa. El FK ON DELETE CASCADE arrastra usuarios y, por sus propios
-// CASCADE, sus archivos/carpetas/facturas en BD. (Los binarios huérfanos en MinIO
-// los limpia la reconciliación periódica.)
+// CASCADE, sus archivos/carpetas/facturas en BD. Los binarios en MinIO NO caen por
+// CASCADE (viven fuera de Postgres), así que hay que borrarlos a mano antes de
+// eliminar las filas; si no, quedarían huérfanos hasta la reconciliación periódica.
 export const eliminarEmpresa = async (id: string): Promise<void> => {
   const empresa = await empresaRepo().findOneBy({ id });
   if (!empresa) throw new AppError(404, "Empresa no encontrada");
+
+  // Todos los archivos de la empresa: los personales de sus usuarios y los de sus
+  // carpetas compartidas comparten `propietario` (miembro de la empresa), así que
+  // un único filtro por `empresaId` los cubre a ambos. `withDeleted` incluye los de
+  // la papelera, que siguen teniendo su binario en MinIO.
+  const archivos = await AppDataSource.getRepository(Archivo)
+    .createQueryBuilder("a")
+    .innerJoin("a.propietario", "u")
+    .where("u.empresaId = :id", { id })
+    .withDeleted()
+    .select(["a.id", "a.claveMinio"])
+    .getMany();
+
+  const claves = archivos.map((a) => a.claveMinio);
+  if (claves.length > 0) {
+    // removeObjects borra en lote y es idempotente con claves inexistentes.
+    await minioClient.removeObjects(env.MINIO_BUCKET, claves);
+  }
+
   await empresaRepo().remove(empresa);
 };
