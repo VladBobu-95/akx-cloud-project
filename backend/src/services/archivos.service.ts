@@ -88,6 +88,10 @@ export const buscarArchivoPorHash = async (
       propietario: { id: usuarioId },
       hashSha256: hash,
       eliminadoEn: IsNull(),
+      // Solo archivos PERSONALES: aunque el usuario conste como propietario de un
+      // archivo que subió a una carpeta compartida, ese no es suyo personal y no
+      // debe reutilizarse como dedup de una subida personal.
+      carpetaCompartidaId: IsNull(),
     },
   });
 
@@ -153,7 +157,10 @@ export const listarArchivos = async (
 ): Promise<{ archivos: Archivo[]; total: number; paginas: number }> => {
   const query = repo()
     .createQueryBuilder("archivo")
-    .where("archivo.propietarioId = :usuarioId", { usuarioId });
+    .where("archivo.propietarioId = :usuarioId", { usuarioId })
+    // Excluir lo que vive en una carpeta compartida: aunque el usuario conste como
+    // propietario (autor/auditoría), NO es un archivo suyo personal.
+    .andWhere("archivo.carpetaCompartidaId IS NULL");
 
   if (carpeta) {
     query.andWhere("archivo.carpeta = :carpeta", { carpeta });
@@ -189,7 +196,8 @@ export const prepararDescargaCarpeta = async (
 
   const query = repo()
     .createQueryBuilder("archivo")
-    .where("archivo.propietarioId = :usuarioId", { usuarioId });
+    .where("archivo.propietarioId = :usuarioId", { usuarioId })
+    .andWhere("archivo.carpetaCompartidaId IS NULL"); // solo archivos personales
   if (rutaNorm === "/") {
     // Toda la cuenta.
   } else {
@@ -268,6 +276,7 @@ export const buscarArchivos = async (
   return repo()
     .createQueryBuilder("archivo")
     .where("archivo.propietarioId = :usuarioId", { usuarioId })
+    .andWhere("archivo.carpetaCompartidaId IS NULL") // solo archivos personales
     .andWhere("archivo.nombre ILIKE :q", { q: `%${q}%` })
     .orderBy("archivo.subidoEn", "DESC")
     .take(limite)
@@ -361,6 +370,7 @@ export const estadisticasUsuario = async (
     .select("COUNT(*)", "num")
     .addSelect("COALESCE(SUM(archivo.tamanoBytes), 0)", "bytes")
     .where("archivo.propietarioId = :usuarioId", { usuarioId })
+    .andWhere("archivo.carpetaCompartidaId IS NULL") // solo archivos personales
     .getRawOne<{ num: string; bytes: string }>();
   return {
     numArchivos: Number(fila?.num ?? 0),
@@ -460,6 +470,7 @@ export const listarPapelera = async (usuarioId: string): Promise<Archivo[]> => {
   return repo()
     .createQueryBuilder("archivo")
     .where("archivo.propietarioId = :usuarioId", { usuarioId })
+    .andWhere("archivo.carpetaCompartidaId IS NULL") // los compartidos no van a papelera
     .andWhere("archivo.eliminadoEn IS NOT NULL")
     .withDeleted() // necesario para que incluya los soft-deleted
     .orderBy("archivo.eliminadoEn", "DESC")
@@ -543,6 +554,7 @@ export const eliminarTodosLosArchivos = async (
     .createQueryBuilder()
     .softDelete()
     .where("propietarioId = :u", { u: usuarioId })
+    .andWhere("carpetaCompartidaId IS NULL") // no mandar a papelera los compartidos
     .andWhere("eliminadoEn IS NULL")
     .execute();
   // Bulk directo por SQL (no pasa por eliminarArchivo): manda a la papelera
