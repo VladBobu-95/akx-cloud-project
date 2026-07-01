@@ -204,11 +204,32 @@ const interpretacionesNumericas = (token: string): number[] => {
   return [...out].filter((n) => Number.isFinite(n));
 };
 
-// Valores numéricos que APARECEN de verdad en el texto del documento. Sirve para
-// verificar que los importes que devuelve la IA existen y no se los ha inventado.
-const numerosDelTexto = (texto: string): number[] => {
-  const tokens = texto.match(/\d[\d.,]*\d|\d/g) ?? [];
-  return tokens.flatMap(interpretacionesNumericas);
+// Valores que aparecen en el texto EN CONTEXTO MONETARIO (un importe de verdad),
+// para verificar que los importes de la IA existen y no se los ha inventado. NO
+// vale cualquier número: un nº de RMA ("RMA: 2.025/SAT/542"), un NIF, un código
+// de cliente o una fecha NO son importes, y aceptarlos dejaba colar un importe
+// inventado que por casualidad coincide con uno de ellos (visto: total "2.025,00 €"
+// validado contra el RMA 2.025). Solo cuenta un número si:
+//  (a) trae céntimos explícitos —exactamente 2 decimales— ("141,60", "2.025,00",
+//      "50.00"): la forma normal de un importe; el `(?!\d)` descarta "2.025" (3
+//      dígitos tras el punto = miles, no céntimos) y "1,0000" (cantidad), y
+//  (b) va pegado a un símbolo/nombre de moneda ("€ 120", "120€", "120 EUR"), que
+//      cubre los importes enteros sin céntimos.
+const MONEDA_RE = "[€$£¥]|\\b(?:eur|usd|gbp|jpy|chf|euros?|d[óo]lares?|libras?|yenes?)\\b";
+const numerosMonetariosDelTexto = (texto: string): number[] => {
+  const out: number[] = [];
+  for (const m of texto.matchAll(/\d[\d.,]*[.,]\d{2}(?!\d)/g)) {
+    out.push(...interpretacionesNumericas(m[0]));
+  }
+  const conMoneda = new RegExp(
+    `(?:${MONEDA_RE})\\s*(\\d[\\d.,]*)|(\\d[\\d.,]*)\\s*(?:${MONEDA_RE})`,
+    "gi",
+  );
+  for (const m of texto.matchAll(conMoneda)) {
+    const tok = m[1] ?? m[2];
+    if (tok) out.push(...interpretacionesNumericas(tok));
+  }
+  return out;
 };
 
 // Descarta (pone a 0) los importes que la IA devolvió pero que NO están en el texto
@@ -222,7 +243,7 @@ const numerosDelTexto = (texto: string): number[] => {
 // aritmética pueda derivar (subtotal+iva=total…) lo recompone después
 // conciliarImportes a partir de lo que sí es real.
 const verificarImportesReales = (datos: DatosFactura, contenido: string): void => {
-  const presentes = numerosDelTexto(contenido);
+  const presentes = numerosMonetariosDelTexto(contenido);
   const enTexto = (v?: number): boolean => {
     const n = num(v);
     return n > 0 && presentes.some((p) => Math.abs(p - n) <= 0.01);
