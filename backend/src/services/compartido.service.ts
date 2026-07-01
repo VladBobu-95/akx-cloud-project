@@ -247,6 +247,7 @@ export const descargarCompartido = async (
 export const eliminarCompartido = async (archivoId: string, usuarioId: string): Promise<void> => {
   const archivo = await cargarCompartidoConAcceso(archivoId, usuarioId);
   await minioClient.removeObject(env.MINIO_BUCKET, archivo.claveMinio).catch(() => {});
-  await AppDataSource.query(`DELETE FROM "fragmentos" WHERE "archivoId" = $1`, [archivo.id]);
+  // Los fragmentos RAG del archivo se borran solos por el FK ON DELETE CASCADE
+  // (FK_fragmentos_archivo), igual que en el borrado permanente personal.
   await archivoRepo().delete(archivo.id);
 };

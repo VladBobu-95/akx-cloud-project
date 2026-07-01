@@ -2952,6 +2952,29 @@ export const chatear = async (
     return { respuesta: partes.join("\n\n"), acciones, tablaCarpetas, tablaArchivos };
   }
 
+  // RBAC del chat (facturas): si tras TODOS los pre-flights la petición sigue
+  // siendo claramente de facturas (analítica, listado, escaneo) y el rol del
+  // usuario no tiene la capacidad, cortamos aquí con un mensaje claro en vez de
+  // delegar en el modelo (que ya no ve esas tools y respondería de forma
+  // errática). La gestión de archivos que se llamen "factura*" (abrir/mover/
+  // copiar/renombrar/borrar un fichero concreto) ya la resolvieron sus propios
+  // pre-flights más arriba y retornaron, así que lo que llega hasta aquí con
+  // mención de facturas es intención de DATOS de factura. No usamos `pideTotales`
+  // a secas (la palabra "total" aparece en listados de archivos: "cuántos
+  // archivos tengo en total"), sino señales específicas del dominio de facturas.
+  const intentDatosFacturas =
+    contieneFactura(msgSinTildes) ||
+    /\bfacturad[oa]s?\b/.test(msgSinTildes) ||
+    esRankingVentas ||
+    esEscanearTodas;
+  if (!puedeFacturas && intentDatosFacturas) {
+    return {
+      respuesta:
+        "El acceso a las facturas no está disponible para tu rol. Pídele a un administrador de tu empresa que te asigne un rol con la capacidad de facturas.",
+      acciones,
+    };
+  }
+
   const MAX_ITER = 15;
   // Detecta si el modelo llama a la MISMA tool con los MISMOS argumentos otra
   // vez (visto con leer_archivo en respuestas difíciles de resumir: el modelo

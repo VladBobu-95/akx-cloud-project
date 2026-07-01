@@ -23,11 +23,13 @@ export const verificarModelosOllama = async (): Promise<void> => {
     return;
   }
   const instalados = data.models?.map((m) => m.name) ?? [];
+  // OLLAMA_CAPTION_MODEL (1ª pasada de visión) NO se verifica: es opcional y tiene
+  // fallback en cascada (deepseek-ocr → Tesseract), así que si falta el sistema
+  // degrada sin romper. Avisar por él solo generaba ruido en máquinas que no lo usan.
   const requeridos = {
     OLLAMA_MODEL: env.OLLAMA_MODEL,
     OLLAMA_EMBED_MODEL: env.OLLAMA_EMBED_MODEL,
     OLLAMA_OCR_MODEL: env.OLLAMA_OCR_MODEL,
-    OLLAMA_CAPTION_MODEL: env.OLLAMA_CAPTION_MODEL,
   };
   for (const [variable, modelo] of Object.entries(requeridos)) {
     const ok = instalados.some((i) => coincide(i, modelo));
