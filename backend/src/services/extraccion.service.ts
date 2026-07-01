@@ -204,13 +204,34 @@ const obtenerWorkerTesseract = (): Promise<Worker> => {
   return workerTesseract;
 };
 
+// Tras un fallo o timeout de Tesseract, tiramos el worker actual para no arrastrar
+// un worker en mal estado a la siguiente imagen (se recrea solo en la próxima llamada).
+const reiniciarWorkerTesseract = async (): Promise<void> => {
+  const actual = workerTesseract;
+  workerTesseract = null;
+  if (actual) {
+    try {
+      await (await actual).terminate();
+    } catch {
+      /* el worker ya podía estar muerto; da igual */
+    }
+  }
+};
+
 // Preprocesado clásico de Tesseract: a diferencia de los modelos de visión (que
 // reescalan la entrada a una resolución fija interna, ver aPng — el preprocesado
 // no la sortea), Tesseract sí lee la imagen a su tamaño real. Gris (sin color que
 // distraiga), más resolución si la imagen es pequeña (más píxeles por carácter
 // en texto denso) y normalizar contraste mejoran la lectura en la práctica.
 const ANCHO_MIN_TESSERACT = 2000;
-const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer> => {
+// Devuelve un PNG NUEVO generado por sharp (decodifica los píxeles y reencodea) o
+// null si sharp no consigue decodificar la imagen. CLAVE de seguridad: si sharp
+// falla NO devolvemos los bytes originales — pasarle una imagen corrupta al libpng
+// nativo de Tesseract puede abortar el proceso ENTERO de la API (el error del
+// worker se relanza en process.nextTick y ningún try/catch lo atrapa), y la cola
+// durable reintentaría la tarea en cada arranque → bucle de reinicio. Es preferible
+// saltarse el OCR de esa imagen que arriesgar la caída del servicio.
+const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer | null> => {
   try {
     const { width = 0 } = await sharp(buffer).metadata();
     let imagen = sharp(buffer).grayscale().normalize();
@@ -219,8 +240,8 @@ const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer> => {
     }
     return await imagen.png().toBuffer();
   } catch (err) {
-    console.error("[extraccion] no se pudo preprocesar la imagen para Tesseract, se usa tal cual:", err);
-    return buffer;
+    console.error("[extraccion] imagen no decodificable para Tesseract, se omite OCR:", err);
+    return null;
   }
 };
 
@@ -234,17 +255,36 @@ const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer> => {
 // resultados en vez de escoger uno — la extracción de datos de factura (IA, más
 // adelante) ya tolera texto redundante/ruidoso y se queda con los datos reales
 // que encuentre en cualquiera de los dos.
+// Corta una recognize que se cuelgue: sin esto, un worker atascado bloquearía la
+// cola indefinidamente. Al saltar el timeout reiniciamos el worker (más abajo).
+const TIMEOUT_TESSERACT_MS = 60_000;
+const conTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error("Tesseract timeout")), ms)),
+  ]);
+
+// Nunca lanza: ante cualquier fallo/timeout devuelve "" y reinicia el worker, de
+// modo que un problema de OCR jamás tumba el proceso ni contamina la siguiente
+// imagen. La imagen que llega a Tesseract es siempre un PNG reencodeado por sharp
+// (ver prepararParaTesseract); si no se pudo decodificar, se omite el OCR.
 const ocrConTesseract = async (buffer: Buffer): Promise<string> => {
-  const worker = await obtenerWorkerTesseract();
   const preparado = await prepararParaTesseract(buffer);
+  if (!preparado) return "";
+  try {
+    const worker = await obtenerWorkerTesseract();
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+    const auto = await conTimeout(worker.recognize(preparado), TIMEOUT_TESSERACT_MS);
 
-  await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-  const auto = await worker.recognize(preparado);
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+    const disperso = await conTimeout(worker.recognize(preparado), TIMEOUT_TESSERACT_MS);
 
-  await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
-  const disperso = await worker.recognize(preparado);
-
-  return `${auto.data.text ?? ""}\n\n${disperso.data.text ?? ""}`.trim();
+    return `${auto.data.text ?? ""}\n\n${disperso.data.text ?? ""}`.trim();
+  } catch (err) {
+    console.error("[extraccion] Tesseract falló, se reinicia el worker:", err);
+    await reiniciarWorkerTesseract();
+    return "";
+  }
 };
 
 // Refuerzo final por si el prompt de visionPrimeraPasada no basta: heurística
