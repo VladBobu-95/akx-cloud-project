@@ -149,6 +149,8 @@
       </div>
 
       <form class="barra" (ngSubmit)="enviar()">
+        <!-- No se desactivan mientras la IA piensa: puedes escribir y enviar otro
+             mensaje; el nuevo cancela la respuesta en curso y se atiende de inmediato. -->
         <input
           #inputChat
           class="input"
@@ -156,11 +158,9 @@
           name="entrada"
           [ngModel]="chat.borrador()"
           (ngModelChange)="chat.borrador.set($event)"
-          placeholder="Escribe tu mensaje…"
           autocomplete="off"
-          [disabled]="pensando()"
         />
-        <button class="btn btn-primary" type="submit" [disabled]="!chat.borrador().trim() || pensando()">
+        <button class="btn btn-primary" type="submit" [disabled]="!chat.borrador().trim()">
           Enviar
         </button>
       </form>

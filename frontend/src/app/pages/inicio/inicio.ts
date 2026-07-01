@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, effect, inject, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { marked } from 'marked';
 import { AuthService } from '../../core/auth.service';
@@ -19,13 +19,25 @@ export class InicioPage implements AfterViewInit {
   private archivosSvc = inject(ArchivosService);
   private toast = inject(ToastService);
 
-  // El historial y el borrador viven en el servicio (persisten al cambiar de
-  // página; el historial sobrevive también a recargar).
+  // El historial, el borrador y el estado "pensando" viven en el servicio
+  // (persisten al cambiar de página; el historial sobrevive también a recargar).
+  // Que "pensando" y la petición vivan en el servicio es lo que hace que la IA no
+  // deje de pensar al cambiar de pestaña.
   protected mensajes = this.chat.mensajes;
-  protected pensando = signal(false);
+  protected pensando = this.chat.pensando;
 
   private mensajesEl = viewChild<ElementRef<HTMLDivElement>>('mensajesContainer');
   private inputChat = viewChild<ElementRef<HTMLInputElement>>('inputChat');
+
+  constructor() {
+    // Sigue la conversación hacia abajo cuando cambia (mensaje nuevo del usuario,
+    // del bot, o al montar el componente con el historial ya cargado). Cubre
+    // también las respuestas que llegan mientras estabas en otra pestaña.
+    effect(() => {
+      this.mensajes();
+      this.scrollAbajo();
+    });
+  }
 
   // Al volver a esta página (Angular recrea el componente), la conversación ya
   // tiene mensajes guardados pero la vista arranca con scroll en 0 — sin esto
@@ -60,7 +72,9 @@ export class InicioPage implements AfterViewInit {
 
   enviar() {
     const texto = this.chat.borrador().trim();
-    if (!texto || this.pensando()) return;
+    // No bloqueamos por `pensando`: se permite mandar otro mensaje mientras la IA
+    // piensa; el servicio cancela la respuesta en curso y atiende el nuevo.
+    if (!texto) return;
     this.chat.borrador.set('');
     this.enviarTexto(texto);
   }
@@ -82,49 +96,12 @@ export class InicioPage implements AfterViewInit {
     this.enviarTexto(`resumen ${nombre}`);
   }
 
+  // Delega en el servicio, que gestiona "pensando", la cancelación de la respuesta
+  // en curso y añadir la respuesta al historial (sobrevive al cambio de pestaña).
   private enviarTexto(texto: string, idOpcion?: string) {
-    if (!texto || this.pensando()) return;
-
-    this.chat.añadir({ de: 'usuario', texto });
-    this.scrollAbajo();
-    this.pensando.set(true);
-
-    // Como contexto enviamos SOLO tus mensajes (no las respuestas del bot). Si
-    // le reenviamos sus propias respuestas narradas ("he creado la carpeta..."),
-    // el modelo aprende a fingir el éxito con texto en vez de llamar a la
-    // herramienta, y falla a partir del 2º mensaje. El estado real (qué archivos
-    // o carpetas hay) lo consulta siempre con las tools, así que no se pierde
-    // nada importante. Limitamos a los últimos turnos para no inflar el contexto.
-    const historial = this.mensajes()
-      .filter((m) => m.de === 'usuario')
-      .slice(-8)
-      .map((m) => ({ rol: m.de, contenido: m.texto }));
-
-    this.chat.enviar(historial, idOpcion).subscribe({
-      next: (r) => {
-        const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
-        this.chat.añadir({
-          de: 'bot',
-          texto: r.respuesta + extra,
-          archivos: r.archivos,
-          tablaFacturas: r.tablaFacturas,
-          tablaArchivos: r.tablaArchivos,
-          tablaCarpetas: r.tablaCarpetas,
-          tablaAclaracion: r.tablaAclaracion,
-        });
-        this.pensando.set(false);
-        this.scrollAbajo();
-
-        setTimeout(() => this.inputChat()?.nativeElement.focus(), 0)
-      },
-      error: (err) => {
-        this.chat.añadir({ de: 'bot', texto: mensajeError(err) });
-        this.pensando.set(false);
-        this.scrollAbajo();
-        
-        setTimeout(() => this.inputChat()?.nativeElement.focus(), 0);
-      },
-    });
+    if (!texto) return;
+    this.chat.enviarMensaje(texto, idOpcion);
+    setTimeout(() => this.inputChat()?.nativeElement.focus(), 0);
   }
 
   // --- Paginación de las tablas del chat ---
