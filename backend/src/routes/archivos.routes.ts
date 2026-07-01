@@ -24,41 +24,23 @@ import {
   ctrlDescribir,
 } from "../controllers/archivos.controller";
 import { AppError } from "../utils/errors";
+import { TIPOS_PERMITIDOS, MENSAJE_TIPO_NO_PERMITIDO } from "../utils/tiposArchivo";
 
 const router = Router();
-
-// Tipos de archivo permitidos
-// La clave es el mimeType real del archivo, no la extensión
-// (la extensión se puede cambiar fácilmente, el mimeType no)
-const TIPOS_PERMITIDOS = [
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
-  "text/plain",
-  "text/csv",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 50 * 1024 * 1024,
   },
-  // fileFilter se ejecuta antes de guardar el archivo
-  // Si llamas a cb(null, false) el archivo se rechaza
-  // Si llamas a cb(null, true) se acepta
+  // fileFilter se ejecuta antes de guardar el archivo. Primera barrera: rechaza
+  // por el mimeType declarado. La segunda barrera (magic bytes del CONTENIDO real,
+  // infalsificable) la aplica el controlador con validarContenidoArchivo.
   fileFilter: (_req, file, cb) => {
-    if (TIPOS_PERMITIDOS.includes(file.mimetype)) {
+    if ((TIPOS_PERMITIDOS as readonly string[]).includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(
-        new AppError(
-          400,
-          `Tipo de archivo no permitido: ${file.mimetype}. Permitidos: PDF, Word, Excel, texto, CSV, imágenes`,
-        ),
-      );
+      cb(new AppError(400, MENSAJE_TIPO_NO_PERMITIDO));
     }
   },
 });

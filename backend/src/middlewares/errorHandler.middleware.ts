@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
+import { MulterError } from "multer";
 import { AppError } from "../utils/errors";
 
 // Middleware global de errores de Express.
@@ -23,6 +24,18 @@ export const errorHandler = (
         mensaje: e.message,
       })),
     });
+    return;
+  }
+
+  // Errores de multer (subida): sobre todo el tamaño máximo. Sin esto, superar el
+  // límite de 50 MB caía al 500 genérico ("Error interno") en vez de avisar de que
+  // el archivo es demasiado grande.
+  if (error instanceof MulterError) {
+    const mensaje =
+      error.code === "LIMIT_FILE_SIZE"
+        ? "El archivo es demasiado grande (máximo 50 MB)."
+        : `Error al subir el archivo: ${error.message}`;
+    res.status(400).json({ error: mensaje });
     return;
   }
 

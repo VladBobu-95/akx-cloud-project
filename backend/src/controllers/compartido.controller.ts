@@ -24,6 +24,7 @@ import {
 } from "../services/compartido.service";
 import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
+import { validarContenidoArchivo } from "../utils/tiposArchivo";
 
 const empresaDe = (req: Request): string => req.usuario!.empresaId!;
 
@@ -85,6 +86,8 @@ export const ctrlListarArchivos = async (req: Request, res: Response, next: Next
 export const ctrlSubir = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     if (!req.file) throw new AppError(400, "No se ha proporcionado ningún archivo");
+    // 2ª barrera: valida el contenido real (magic bytes), no solo el mimeType declarado.
+    validarContenidoArchivo(req.file.buffer, req.file.mimetype);
     const carpeta = (req.body.carpeta as string) || "/";
 
     const { archivo, duplicado } = await subirCompartido(

@@ -3,7 +3,7 @@
       <div class="card upload">
         <div class="up-row">
           <label class="file-pick">
-            <input type="file" multiple (change)="seleccionar($event)" hidden />
+            <input type="file" multiple [attr.accept]="ACCEPT_ARCHIVOS" (change)="seleccionar($event)" hidden />
             <span class="btn btn-primary">{{ etiquetaSubir() }}</span>
           </label>
           <button class="btn btn-outline" (click)="abrirNuevaCarpeta()">📁 Nueva carpeta</button>

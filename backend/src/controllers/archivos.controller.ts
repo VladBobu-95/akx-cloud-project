@@ -30,6 +30,7 @@ import { idsCompartidasAccesibles } from "../services/compartido.service";
 import { marcarPendiente } from "../services/facturas.service";
 import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
+import { validarContenidoArchivo } from "../utils/tiposArchivo";
 
 // GET /api/archivos/carpetas
 export const ctrlListarCarpetas = async (
@@ -132,6 +133,10 @@ export const ctrlSubir = async (
     if (!req.file) {
       throw new AppError(400, "No se ha proporcionado ningún archivo");
     }
+    // 2ª barrera de seguridad: el mimeType declarado ya pasó el fileFilter, pero
+    // es falsificable. Aquí verificamos que el CONTENIDO real coincide (magic bytes),
+    // igual que con el avatar. Rechaza binarios disfrazados de PDF/imagen/texto.
+    validarContenidoArchivo(req.file.buffer, req.file.mimetype);
     const carpeta = (req.body.carpeta as string) || "/";
 
     // Deduplicación por hash (#4): si el usuario ya tiene un archivo VIVO con el

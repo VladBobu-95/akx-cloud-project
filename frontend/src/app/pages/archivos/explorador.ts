@@ -21,6 +21,13 @@ import { FileSizePipe } from '../../shared/file-size.pipe';
 import { mensajeError } from '../../shared/errores';
 import { normalizarRuta, unir, padre, nombreHoja } from './rutas.util';
 import { FuenteArchivos, OpcionesExplorador } from './fuente';
+import {
+  ACCEPT_ARCHIVOS,
+  esTipoPermitido,
+  MENSAJE_TIPO_NO_PERMITIDO,
+  MAX_ARCHIVO_BYTES,
+  MENSAJE_ARCHIVO_GRANDE,
+} from '../../shared/tipos-archivo';
 
 // Payload de lo que se está arrastrando: un archivo (por id) o una carpeta (por ruta).
 interface Arrastre {
@@ -338,11 +345,24 @@ export class ExploradorComponent implements OnInit {
   }
 
   // --- Subir (un solo clic: se sube a la carpeta actual) ---
+  protected readonly ACCEPT_ARCHIVOS = ACCEPT_ARCHIVOS;
   seleccionar(ev: Event) {
     const input = ev.target as HTMLInputElement;
     const files = input.files ? Array.from(input.files) : [];
-    if (files.length) this.subirVarios(files);
     input.value = ''; // permite volver a elegir los mismos archivos
+    // Primera criba en cliente: separa por formato no permitido y por tamaño, y
+    // avisa. El backend valida además el contenido real (magic bytes) y el tamaño,
+    // pero así evitamos subir algo que se va a rechazar y damos un mensaje claro.
+    const noPermitidos = files.filter((f) => !esTipoPermitido(f));
+    const grandes = files.filter((f) => esTipoPermitido(f) && f.size > MAX_ARCHIVO_BYTES);
+    const permitidos = files.filter((f) => esTipoPermitido(f) && f.size <= MAX_ARCHIVO_BYTES);
+    if (noPermitidos.length) {
+      this.toast.error(`${MENSAJE_TIPO_NO_PERMITIDO} (${noPermitidos.map((f) => f.name).join(', ')})`);
+    }
+    if (grandes.length) {
+      this.toast.error(`${MENSAJE_ARCHIVO_GRANDE} (${grandes.map((f) => f.name).join(', ')})`);
+    }
+    if (permitidos.length) this.subirVarios(permitidos);
   }
   // Sube varios archivos a la carpeta actual. Cada uno va en su propia petición
   // (el backend acepta uno por subida) y capturamos el error de cada uno para
@@ -353,8 +373,8 @@ export class ExploradorComponent implements OnInit {
     const carpeta = this.rutaActual();
     const subidas = files.map((f) =>
       this.datos.subir(f, carpeta).pipe(
-        map((archivo) => ({ ok: true as const, archivo })),
-        catchError(() => of({ ok: false as const, archivo: null })),
+        map((archivo) => ({ ok: true as const, archivo, error: null })),
+        catchError((err) => of({ ok: false as const, archivo: null, error: mensajeError(err) })),
         finalize(() => this.subidaRestantes.update((n) => n - 1)),
       ),
     );
@@ -377,7 +397,14 @@ export class ExploradorComponent implements OnInit {
           this.toast.exito(nuevos === 1 ? 'Archivo subido' : `${nuevos} archivos subidos`);
         }
       } else {
-        this.toast.error(`${ok} subido(s), ${fallidos} fallaron`);
+        // Mensaje específico del backend (p. ej. formato/contenido no permitido).
+        // Si todos fallan por la misma razón, mostramos esa; si no, un resumen.
+        const errores = [...new Set(resultados.filter((r) => !r.ok && r.error).map((r) => r.error))];
+        if (ok === 0 && errores.length === 1) {
+          this.toast.error(errores[0]!);
+        } else {
+          this.toast.error(`${ok} subido(s), ${fallidos} fallaron${errores.length === 1 ? `: ${errores[0]}` : ''}`);
+        }
       }
       this.cargar();
     });

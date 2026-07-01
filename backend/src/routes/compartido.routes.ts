@@ -22,26 +22,18 @@ import {
   ctrlDescargarCarpetaZip,
 } from "../controllers/compartido.controller";
 import { AppError } from "../utils/errors";
+import { TIPOS_PERMITIDOS, MENSAJE_TIPO_NO_PERMITIDO } from "../utils/tiposArchivo";
 
 const router = Router();
 
-// Mismos tipos/límites que la subida personal.
-const TIPOS_PERMITIDOS = [
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "text/plain",
-  "text/csv",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
+// Mismos tipos/límites que la subida personal. La 2ª barrera (magic bytes) la
+// aplica el controlador con validarContenidoArchivo.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (TIPOS_PERMITIDOS.includes(file.mimetype)) cb(null, true);
-    else cb(new AppError(400, `Tipo de archivo no permitido: ${file.mimetype}.`));
+    if ((TIPOS_PERMITIDOS as readonly string[]).includes(file.mimetype)) cb(null, true);
+    else cb(new AppError(400, MENSAJE_TIPO_NO_PERMITIDO));
   },
 });
 
