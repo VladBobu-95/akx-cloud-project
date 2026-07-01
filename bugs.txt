@@ -1,4 +1,11 @@
 
+- no lee bien facturas por x 
+- la primera factura la lee mal
+- sufijo en compartido para el chatbot
+- archivos huerfanos minio
+-quitar chat del superadmin
+- mismo layout en compartido 
+-Carpetas compartidas en dark mode
 - cambiar contraseña en superadmin
 - bloquear al escribir ( no hacer click fuera)
 - info de la cuenta empresa

@@ -55,13 +55,19 @@ class FuenteCompartida implements FuenteArchivos {
           No tienes carpetas compartidas. El administrador puede crearlas y darte acceso por rol.
         </div>
       } @else {
-        <div class="grid">
-          @for (c of carpetas(); track c.id) {
-            <button class="folder-card" (click)="abrir(c)">
-              <span class="ico">📁</span>
-              <span class="nom">{{ c.nombre }}</span>
-            </button>
-          }
+        <div class="card list">
+          <table class="table">
+            <thead>
+              <tr><th>Nombre</th></tr>
+            </thead>
+            <tbody>
+              @for (c of carpetas(); track c.id) {
+                <tr class="fila-carpeta" (click)="abrir(c)" style="cursor:pointer">
+                  <td class="nombre">📁 {{ c.nombre }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
         </div>
       }
     } @else {
@@ -80,15 +86,8 @@ class FuenteCompartida implements FuenteArchivos {
     }
   `,
   styles: [`
-    .grid { display: flex; flex-wrap: wrap; gap: 12px; }
-    .folder-card {
-      display: flex; flex-direction: column; align-items: center; gap: 8px;
-      width: 140px; padding: 18px; border: 1px solid var(--border);
-      border-radius: var(--radius); background: var(--surface); cursor: pointer;
-    }
-    .folder-card:hover { border-color: var(--green); background: var(--green-soft); }
-    .folder-card .ico { font-size: 2rem; }
-    .folder-card .nom { font-weight: 600; text-align: center; word-break: break-word; }
+    .card.list { padding: 0; overflow: hidden; }
+    .fila-carpeta:hover { background: var(--green-soft); }
     .barra { align-items: center; gap: 10px; margin-bottom: 12px; }
     .barra .ruta { font-weight: 700; font-size: 1.05rem; }
     .barra .spacer { flex: 1; }
