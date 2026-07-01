@@ -41,6 +41,42 @@
       .nombre {
         font-weight: 600;
       }
+      /* Barra "Volver" dentro de una carpeta */
+      .back-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .btn-back {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .btn-back:hover {
+        border-color: var(--green);
+        background: var(--green-soft);
+        color: var(--green-dark);
+      }
+      .back-label {
+        font-weight: 600;
+        color: var(--muted);
+      }
+      /* Nombre de carpeta: clicable para entrar */
+      .fila-carpeta .carpeta-nombre {
+        cursor: pointer;
+      }
+      .fila-carpeta .carpeta-nombre:hover {
+        color: var(--green-dark);
+      }
       .acciones {
         display: flex;
         gap: 6px;

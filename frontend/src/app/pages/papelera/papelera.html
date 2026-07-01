@@ -1,13 +1,25 @@
     <div class="head row">
       <div>
         <h1>Papelera</h1>
-        <p class="muted">{{ archivos().length }} archivo(s) eliminado(s)</p>
+        <p class="muted">{{ todos().length }} archivo(s) eliminado(s)</p>
       </div>
       <span class="spacer"></span>
-      @if (archivos().length > 0) {
+      @if (todos().length > 0) {
         <button class="btn btn-danger" (click)="vaciar()">Vaciar papelera</button>
       }
     </div>
+
+    <!-- Volver (solo dentro de una carpeta) -->
+    @if (rutaActual() !== '/') {
+      <div class="back-bar">
+        <button class="btn-back" (click)="volver()" title="Volver a la carpeta anterior">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <path d="M19 12H5M5 12l7 7M5 12l7-7" />
+          </svg>
+        </button>
+        <span class="back-label">{{ rutaActual() }}</span>
+      </div>
+    }
 
     <!-- Barra de acciones múltiples (visible cuando hay selección) -->
     @if (haySeleccion()) {
@@ -23,10 +35,15 @@
     <div class="card list">
       @if (cargando()) {
         <div class="empty">Cargando…</div>
-      } @else if (archivos().length === 0) {
+      } @else if (todos().length === 0) {
         <div class="empty">
           <div class="icon">🧹</div>
           La papelera está vacía.
+        </div>
+      } @else if (subcarpetas().length === 0 && archivosActuales().length === 0) {
+        <div class="empty">
+          <div class="icon">🗂️</div>
+          Esta carpeta está vacía.
         </div>
       } @else {
         <table class="table">
@@ -36,63 +53,73 @@
                 <input type="checkbox" [checked]="todosSeleccionados()" (change)="toggleTodo()" />
               </th>
               <th>Nombre</th>
-              <th>Carpeta</th>
               <th>Tamaño</th>
               <th>Eliminado</th>
               <th class="acciones-col">Acciones</th>
             </tr>
           </thead>
           <tbody>
-            @for (a of archivosPag(); track a.id) {
-              <tr [class.seleccionada]="estaSeleccionado(a.id)">
+            <!-- Carpetas primero -->
+            @for (c of subcarpetasPag(); track c) {
+              <tr class="fila-carpeta" [class.seleccionada]="estaSeleccionado(claveCarpeta(c))">
                 <td class="col-check">
-                  <input type="checkbox" [checked]="estaSeleccionado(a.id)" (change)="toggleSeleccion($event, a.id)" />
+                  <input type="checkbox" [checked]="estaSeleccionado(claveCarpeta(c))" (change)="toggleSeleccion($event, claveCarpeta(c))" />
+                </td>
+                <td class="nombre carpeta-nombre" (click)="entrar(c)">📁 {{ nombreHoja(c) }}</td>
+                <td>{{ tamanoCarpeta(c) | fileSize }}</td>
+                <td class="muted">{{ fechaCarpeta(c) | date: 'dd/MM/yy HH:mm' }}</td>
+                <td>
+                  <div class="acciones">
+                    <button class="btn btn-outline btn-sm" (click)="restaurarCarpeta(c)">Restaurar</button>
+                    <button class="btn btn-danger btn-sm" (click)="pedirBorrarCarpeta(c)">Borrar</button>
+                  </div>
+                </td>
+              </tr>
+            }
+            <!-- Archivos de la carpeta actual -->
+            @for (a of archivosActualesPag(); track a.id) {
+              <tr [class.seleccionada]="estaSeleccionado(claveArchivo(a.id))">
+                <td class="col-check">
+                  <input type="checkbox" [checked]="estaSeleccionado(claveArchivo(a.id))" (change)="toggleSeleccion($event, claveArchivo(a.id))" />
                 </td>
                 <td class="nombre">{{ a.nombre }}</td>
-                <td><span class="badge badge-muted">{{ a.carpeta }}</span></td>
                 <td>{{ a.tamanoBytes | fileSize }}</td>
                 <td class="muted">{{ a.eliminadoEn | date: 'dd/MM/yy HH:mm' }}</td>
                 <td>
                   <div class="acciones">
-                    <button class="btn btn-outline btn-sm" (click)="restaurar(a)">
-                      Restaurar
-                    </button>
-                    <button class="btn btn-danger btn-sm" (click)="borrar(a)">
-                      Borrar
-                    </button>
+                    <button class="btn btn-outline btn-sm" (click)="restaurar(a)">Restaurar</button>
+                    <button class="btn btn-danger btn-sm" (click)="borrar(a)">Borrar</button>
                   </div>
                 </td>
               </tr>
             }
           </tbody>
         </table>
-        @if (archivos().length > 0) {
-          <div class="paginacion">
-            <label class="pag-size">
-              Por página:
-              <select [ngModel]="tamanoPagina()" (ngModelChange)="cambiarTamano($event)">
-                @for (n of OPCIONES_TAMANO; track n) {
-                  <option [ngValue]="n">{{ n }}</option>
-                }
-              </select>
-            </label>
-            <span class="spacer"></span>
-            <button class="btn btn-outline btn-sm" [disabled]="pagina() === 0" (click)="paginaAnterior()" >←</button>
-            <span class="pag-jump">
-              Página
-              <input
-                type="number"
-                min="1"
-                [max]="totalPaginas()"
-                [value]="pagina() + 1"
-                (change)="irAPagina($any($event.target).value)"
-                (keyup.enter)="irAPagina($any($event.target).value)"
-              />
-              de {{ totalPaginas() }}
-            </span>
-            <button class="btn btn-outline btn-sm" [disabled]="pagina() >= totalPaginas() - 1" (click)="paginaSiguiente()" >→</button>
-          </div>
-        }
+        <div class="paginacion">
+          <label class="pag-size">
+            Por página:
+            <select [ngModel]="tamanoPagina()" (ngModelChange)="cambiarTamano($event)">
+              @for (n of OPCIONES_TAMANO; track n) {
+                <option [ngValue]="n">{{ n }}</option>
+              }
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <button class="btn btn-outline btn-sm" [disabled]="pagina() === 0" (click)="paginaAnterior()">←</button>
+          <span class="pag-jump">
+            Página
+            <input
+              type="number"
+              min="1"
+              [max]="totalPaginas()"
+              [value]="pagina() + 1"
+              (change)="irAPagina($any($event.target).value)"
+              (keyup.enter)="irAPagina($any($event.target).value)"
+            />
+            de {{ totalPaginas() }}
+          </span>
+          <button class="btn btn-outline btn-sm" [disabled]="pagina() >= totalPaginas() - 1" (click)="paginaSiguiente()">→</button>
+        </div>
       }
     </div>
 
