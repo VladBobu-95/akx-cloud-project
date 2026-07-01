@@ -7,6 +7,7 @@ import {
   ctrlCrear,
   ctrlActualizar,
   ctrlEliminar,
+  ctrlLogs,
   ctrlAccesibles,
   ctrlListarArchivos,
   ctrlSubir,
@@ -43,6 +44,7 @@ router.use(verificarToken);
 // --- Gestión (admin) ---
 router.get("/admin", soloAdmin, ctrlListarAdmin);
 router.post("/admin", soloAdmin, ctrlCrear);
+router.get("/admin/:id/logs", soloAdmin, ctrlLogs);
 router.patch("/admin/:id", soloAdmin, ctrlActualizar);
 router.delete("/admin/:id", soloAdmin, ctrlEliminar);
 

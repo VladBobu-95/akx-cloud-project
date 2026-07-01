@@ -109,8 +109,10 @@
                 </th>
                 <th>Nombre</th>
                 <th class="col-tamano">Tamaño</th>
-                <th class="col-subido">Subido</th>
-                <th class="col-estado">Estado</th>
+                <th class="col-subido">{{ opciones.etiquetaFecha ?? 'Subido' }}</th>
+                @if (opciones.mostrarEstado !== false) {
+                  <th class="col-estado">Estado</th>
+                }
               </tr>
             </thead>
             <tbody>
@@ -143,7 +145,9 @@
                       —
                     }
                   </td>
-                  <td class="col-estado"></td>
+                  @if (opciones.mostrarEstado !== false) {
+                    <td class="col-estado"></td>
+                  }
                 </tr>
               }
               <!-- Archivos después -->
@@ -158,23 +162,25 @@
                   </td>
                   <td class="nombre">📄 {{ a.nombre }}</td>
                   <td class="col-tamano">{{ a.tamanoBytes | fileSize }}</td>
-                  <td class="muted col-subido">{{ a.subidoEn | date: 'dd/MM/yy HH:mm' }}</td>
-                  <td class="col-estado">
-                    @if (
-                      a.estadoEscaneo === 'pendiente' ||
-                      a.estadoEscaneo === 'escaneando' ||
-                      a.estadoIndexado === 'pendiente' ||
-                      a.estadoIndexado === 'indexando'
-                    ) {
-                      <span class="estado-prog" title="Procesando…"><span class="spinner"></span> Procesando</span>
-                    } @else if (a.estadoIndexado === 'error') {
-                      <span class="estado-error" title="No se pudo leer el contenido">✕</span>
-                    } @else if (a.estadoEscaneo === 'escaneada' || a.estadoEscaneo === 'no_factura') {
-                      <span class="estado-ok" title="Procesado">✓</span>
-                    } @else if (a.estadoEscaneo === 'error') {
-                      <span class="estado-error" title="Error al procesar">✕</span>
-                    }
-                  </td>
+                  <td class="muted col-subido">{{ fechaArchivo(a) | date: 'dd/MM/yy HH:mm' }}</td>
+                  @if (opciones.mostrarEstado !== false) {
+                    <td class="col-estado">
+                      @if (
+                        a.estadoEscaneo === 'pendiente' ||
+                        a.estadoEscaneo === 'escaneando' ||
+                        a.estadoIndexado === 'pendiente' ||
+                        a.estadoIndexado === 'indexando'
+                      ) {
+                        <span class="estado-prog" title="Procesando…"><span class="spinner"></span> Procesando</span>
+                      } @else if (a.estadoIndexado === 'error') {
+                        <span class="estado-error" title="No se pudo leer el contenido">✕</span>
+                      } @else if (a.estadoEscaneo === 'escaneada' || a.estadoEscaneo === 'no_factura') {
+                        <span class="estado-ok" title="Procesado">✓</span>
+                      } @else if (a.estadoEscaneo === 'error') {
+                        <span class="estado-error" title="Error al procesar">✕</span>
+                      }
+                    </td>
+                  }
                 </tr>
               }
             </tbody>
@@ -219,18 +225,14 @@
       ></div>
       <div class="context-menu" [style.left.px]="m.x" [style.top.px]="m.y">
         @if (m.tipo === 'archivo') {
-          <button (click)="accionAbrirArchivo(m.ref)">👁️ Abrir</button>
           @if (opciones.soportaIA) {
             <button (click)="accionDescribir(m.ref)">📝 Añadir descripción</button>
             <button (click)="accionEscanear(m.ref)">🧾 Escanear factura</button>
           }
           <button (click)="accionDescargarArchivo(m.ref)">⬇️ Descargar</button>
-          <button (click)="accionCopiarArchivo(m.ref)">📋 Copiar</button>
+          <button (click)="accionCopiarEn(m.ref)">📋 Copiar en…</button>
           <button (click)="accionRenombrarArchivo(m.ref)">✏️ Renombrar</button>
           <button (click)="accionMoverA('archivo', m.ref)">📂 Mover a…</button>
-          @if (opciones.destinoExterno; as ext) {
-            <button (click)="accionCopiarAExterno('archivo', m.ref)">⬇️ Copiar a {{ ext.etiqueta }}</button>
-          }
           <button class="peligro" (click)="accionEliminarArchivo(m.ref)">🗑️ Borrar</button>
         } @else {
           <button (click)="accionDescargarCarpeta(m.ref)">⬇️ Descargar</button>
@@ -326,6 +328,32 @@
           </div>
           <div class="row" style="justify-content: flex-end; margin-top: 8px;">
             <button class="btn btn-ghost" (click)="moverModal.set(null)">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal copiar en… (copia a un destino elegido; el original permanece) -->
+    @if (copiarEnModal()) {
+      <div class="modal-backdrop">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Copiar en…</h2>
+          <p class="muted" style="margin-bottom: 10px;">Elige dónde copiar (el original se queda):</p>
+          <div class="destinos">
+            @for (d of destinosCopiar(); track d.ruta) {
+              <button class="destino-item" (click)="confirmarCopiarEn(d.ruta)">📁 {{ d.etiqueta }}</button>
+            }
+          </div>
+          @if (destinosExternos().length) {
+            <p class="muted" style="margin: 12px 0 8px;">Copiar a otro espacio:</p>
+            <div class="destinos">
+              @for (d of destinosExternos(); track d.ruta) {
+                <button class="destino-item" (click)="confirmarCopiarEnExterno(d.ruta)">📥 {{ d.etiqueta }}</button>
+              }
+            </div>
+          }
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="copiarEnModal.set(null)">Cancelar</button>
           </div>
         </div>
       </div>

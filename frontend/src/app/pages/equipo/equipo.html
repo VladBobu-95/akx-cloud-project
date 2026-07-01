@@ -131,6 +131,7 @@
                     <td class="muted">{{ resumenRolesCompartida(c) }}</td>
                     <td>
                       <div class="acciones">
+                        <button class="btn btn-outline btn-sm" (click)="verLogs(c)">📜 Registro</button>
                         <button class="btn btn-outline btn-sm" (click)="abrirEditarCompartida(c)">Editar</button>
                         <button class="btn btn-danger btn-sm" (click)="eliminarCompartida(c)">Eliminar</button>
                       </div>
@@ -174,6 +175,56 @@
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    }
+
+    <!-- ===================== MODAL REGISTRO DE ACTIVIDAD ===================== -->
+    @if (logsCarpeta(); as lc) {
+      <div class="modal-backdrop">
+        <div class="card modal modal-ancho" (click)="$event.stopPropagation()">
+          <div class="row" style="justify-content: space-between; align-items: center;">
+            <h2 style="margin: 0;">Registro · {{ lc.nombre }}</h2>
+            <button class="btn btn-ghost btn-sm" (click)="cerrarLogs()">Cerrar</button>
+          </div>
+          <p class="muted" style="margin: 4px 0 12px;">{{ logsTotal() }} movimiento(s) registrados</p>
+
+          @if (cargandoLogs()) {
+            <div class="empty">Cargando…</div>
+          } @else if (logsEventos().length === 0) {
+            <div class="empty"><div class="icon">📭</div> Aún no hay actividad en esta carpeta.</div>
+          } @else {
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Fecha y hora</th>
+                  <th>Usuario</th>
+                  <th>Acción</th>
+                  <th>Elemento</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (e of logsEventos(); track e.id) {
+                  <tr>
+                    <td class="muted">{{ e.creadoEn | date: 'dd/MM/yy HH:mm' }}</td>
+                    <td>{{ e.usuarioNombre }}</td>
+                    <td>{{ etiquetaAccion(e.accion) }}</td>
+                    <td>
+                      {{ e.objeto || (e.ruta || '') }}
+                      @if (e.detalle) { <span class="muted">— {{ e.detalle }}</span> }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+            @if (logsPaginas() > 1) {
+              <div class="row" style="justify-content: center; align-items: center; gap: 10px; margin-top: 10px;">
+                <button class="btn btn-outline btn-sm" [disabled]="logsPagina() === 1" (click)="logsAnterior()">←</button>
+                <span class="muted">Página {{ logsPagina() }} de {{ logsPaginas() }}</span>
+                <button class="btn btn-outline btn-sm" [disabled]="logsPagina() >= logsPaginas()" (click)="logsSiguiente()">→</button>
+              </div>
+            }
+          }
         </div>
       </div>
     }

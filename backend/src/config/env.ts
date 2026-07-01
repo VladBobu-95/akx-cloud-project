@@ -88,6 +88,10 @@ const envSchema = z.object({
   //    en la papelera. 0 = desactivado (la papelera no se vacía sola), opt-in.
   MANTENIMIENTO_INTERVAL_HORAS: z.coerce.number().min(1).default(24),
   RETENCION_PAPELERA_DIAS: z.coerce.number().int().min(0).default(0),
+  // Retención del registro de actividad de carpetas compartidas
+  // (eventos_compartido): se purga lo que lleve más de N días. 0 = sin límite
+  // (no se purga nunca). Por defecto 1 año.
+  RETENCION_LOGS_DIAS: z.coerce.number().int().min(0).default(365),
 });
 
 // Si falta alguna variable obligatoria, el servidor no arranca y muestra exactamente

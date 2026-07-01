@@ -8,6 +8,7 @@ import { CarpetaCompartidaCarpeta } from "../entities/CarpetaCompartidaCarpeta";
 import { Rol } from "../entities/Rol";
 import { Usuario } from "../entities/Usuario";
 import { Archivo } from "../entities/Archivo";
+import { EventoCompartido, AccionCompartida } from "../entities/EventoCompartido";
 import { minioClient } from "../config/minio";
 import { env } from "../config/env";
 import { AppError } from "../utils/errors";
@@ -25,6 +26,70 @@ const ccCarpetaRepo = () => AppDataSource.getRepository(CarpetaCompartidaCarpeta
 const rolRepo = () => AppDataSource.getRepository(Rol);
 const usuarioRepo = () => AppDataSource.getRepository(Usuario);
 const archivoRepo = () => AppDataSource.getRepository(Archivo);
+const eventoRepo = () => AppDataSource.getRepository(EventoCompartido);
+
+// Registra una acción en el historial de una carpeta compartida. Guarda el nombre
+// del usuario como snapshot (para que el evento se lea aunque luego se borre el
+// usuario). NUNCA lanza: un fallo del log no debe tumbar la operación principal.
+export const registrarEvento = async (
+  carpetaCompartidaId: string,
+  usuarioId: string,
+  accion: AccionCompartida,
+  extra: { objeto?: string; ruta?: string; detalle?: string } = {},
+): Promise<void> => {
+  try {
+    const usuario = await usuarioRepo().findOne({
+      where: { id: usuarioId },
+      select: { id: true, nombre: true },
+    });
+    await eventoRepo().insert({
+      carpetaCompartidaId,
+      usuarioId,
+      usuarioNombre: usuario?.nombre ?? "—",
+      accion,
+      objeto: extra.objeto ?? null,
+      ruta: extra.ruta ?? null,
+      detalle: extra.detalle ?? null,
+    });
+  } catch (err) {
+    console.error("[eventos] no se pudo registrar el evento:", err);
+  }
+};
+
+// Historial de una carpeta compartida (para el admin de la empresa dueña),
+// paginado y más reciente primero.
+export const listarEventos = async (
+  empresaId: string,
+  carpetaCompartidaId: string,
+  pagina = 1,
+  limite = 20,
+): Promise<{ eventos: EventoCompartido[]; total: number; paginas: number }> => {
+  const carpeta = await ccRepo().findOneBy({ id: carpetaCompartidaId, empresaId });
+  if (!carpeta) throw new AppError(404, "Carpeta compartida no encontrada");
+  const [eventos, total] = await eventoRepo().findAndCount({
+    where: { carpetaCompartidaId },
+    order: { creadoEn: "DESC" },
+    skip: (pagina - 1) * limite,
+    take: limite,
+  });
+  return { eventos, total, paginas: Math.max(1, Math.ceil(total / limite)) };
+};
+
+// Retención: borra eventos con más de `dias` días de antigüedad. 0 = sin límite
+// (no se purga). Lo llama el mantenimiento periódico (reconciliacion.service).
+export const purgarEventosAntiguos = async (
+  dias: number = env.RETENCION_LOGS_DIAS,
+): Promise<{ purgados: number }> => {
+  if (dias <= 0) return { purgados: 0 };
+  const corte = new Date(Date.now() - dias * 24 * 60 * 60 * 1000);
+  const res = await eventoRepo()
+    .createQueryBuilder()
+    .delete()
+    .from(EventoCompartido)
+    .where("creadoEn < :corte", { corte })
+    .execute();
+  return { purgados: res.affected ?? 0 };
+};
 
 // ===================== ADMIN: CRUD =====================
 
@@ -128,6 +193,31 @@ export const carpetasAccesibles = async (usuarioId: string): Promise<CarpetaComp
 export const idsCompartidasAccesibles = async (usuarioId: string): Promise<string[]> =>
   (await carpetasAccesibles(usuarioId)).map((c) => c.id);
 
+// Resumen por carpeta compartida para el listado de "Compartido": tamaño total
+// (suma de bytes de sus archivos) y última actualización (subida más reciente).
+// Una sola query agregada para todas las carpetas dadas.
+export const resumenCompartidas = async (
+  ids: string[],
+): Promise<Map<string, { tamano: number; actualizado: string | null }>> => {
+  const resumen = new Map<string, { tamano: number; actualizado: string | null }>();
+  if (ids.length === 0) return resumen;
+  const filas: Array<{ id: string; tamano: string; actualizado: Date | null }> = await archivoRepo()
+    .createQueryBuilder("a")
+    .select("a.carpetaCompartidaId", "id")
+    .addSelect("COALESCE(SUM(a.tamanoBytes), 0)", "tamano")
+    .addSelect("MAX(a.actualizadoEn)", "actualizado")
+    .where("a.carpetaCompartidaId IN (:...ids)", { ids })
+    .groupBy("a.carpetaCompartidaId")
+    .getRawMany();
+  for (const f of filas) {
+    resumen.set(f.id, {
+      tamano: Number(f.tamano),
+      actualizado: f.actualizado ? new Date(f.actualizado).toISOString() : null,
+    });
+  }
+  return resumen;
+};
+
 // Verifica que el usuario puede acceder a esa carpeta compartida; devuelve la carpeta.
 const verificarAcceso = async (
   usuarioId: string,
@@ -221,6 +311,10 @@ export const subirCompartido = async (
 
   try {
     const guardado = await archivoRepo().save(archivo);
+    await registrarEvento(carpetaCompartidaId, usuarioId, "subir", {
+      objeto: guardado.nombre,
+      ruta: carpetaFinal,
+    });
     return { archivo: guardado, duplicado: false };
   } catch (err) {
     await minioClient.removeObject(env.MINIO_BUCKET, clave).catch(() => {});
@@ -244,6 +338,10 @@ export const descargarCompartido = async (
 ): Promise<{ archivo: Archivo; stream: Readable }> => {
   const archivo = await cargarCompartidoConAcceso(archivoId, usuarioId);
   const stream = await minioClient.getObject(env.MINIO_BUCKET, archivo.claveMinio);
+  await registrarEvento(archivo.carpetaCompartidaId!, usuarioId, "descargar", {
+    objeto: archivo.nombre,
+    ruta: archivo.carpeta,
+  });
   return { archivo, stream };
 };
 
@@ -255,6 +353,10 @@ export const eliminarCompartido = async (archivoId: string, usuarioId: string): 
   // Los fragmentos RAG del archivo se borran solos por el FK ON DELETE CASCADE
   // (FK_fragmentos_archivo), igual que en el borrado permanente personal.
   await archivoRepo().delete(archivo.id);
+  await registrarEvento(archivo.carpetaCompartidaId!, usuarioId, "eliminar", {
+    objeto: archivo.nombre,
+    ruta: archivo.carpeta,
+  });
 };
 
 // ===================== EXPLORADOR COMPLETO (paridad con "Mis archivos") =====================
@@ -294,14 +396,19 @@ export const crearSubcarpetaCompartida = async (
   usuarioId: string,
   carpetaCompartidaId: string,
   ruta: string,
+  // false cuando lo llama un movimiento de carpeta (para no registrar un
+  // "crear_carpeta" espurio: ese caso ya se registra como "mover_carpeta").
+  registrar = true,
 ): Promise<string> => {
   await verificarAcceso(usuarioId, carpetaCompartidaId);
   const r = normalizarCarpeta(ruta);
   if (r === "/") throw new AppError(400, "No se puede crear la carpeta raíz");
   const existe = await ccCarpetaRepo().findOneBy({ carpetaCompartidaId, ruta: r });
+  let creada = false;
   if (!existe) {
     try {
       await ccCarpetaRepo().save(ccCarpetaRepo().create({ carpetaCompartidaId, ruta: r }));
+      creada = true;
     } catch (err: unknown) {
       // 23505 = unique_violation por creación concurrente; idempotente, se ignora.
       const code =
@@ -309,6 +416,12 @@ export const crearSubcarpetaCompartida = async (
         (err as { driverError?: { code?: string } })?.driverError?.code;
       if (code !== "23505") throw err;
     }
+  }
+  if (creada && registrar) {
+    await registrarEvento(carpetaCompartidaId, usuarioId, "crear_carpeta", {
+      objeto: r.split("/").pop() ?? r,
+      ruta: r,
+    });
   }
   return r;
 };
@@ -329,6 +442,10 @@ export const eliminarSubcarpetaCompartida = async (
     .where("carpetaCompartidaId = :cc", { cc: carpetaCompartidaId })
     .andWhere("(ruta = :r OR ruta LIKE :p)", { r, p: `${r}/%` })
     .execute();
+  await registrarEvento(carpetaCompartidaId, usuarioId, "borrar_carpeta", {
+    objeto: r.split("/").pop() ?? r,
+    ruta: r,
+  });
 };
 
 // Mueve/renombra una subcarpeta CON su contenido: re-prefija la ruta de todos los
@@ -363,7 +480,14 @@ export const reubicarSubcarpetaCompartida = async (
   if (metas.length) await ccCarpetaRepo().save(metas);
 
   // Garantiza que la carpeta destino exista como metadata (aunque quede vacía).
-  await crearSubcarpetaCompartida(usuarioId, carpetaCompartidaId, d);
+  // registrar=false: este movimiento se registra como "mover_carpeta", no como
+  // un "crear_carpeta" del destino.
+  await crearSubcarpetaCompartida(usuarioId, carpetaCompartidaId, d, false);
+  await registrarEvento(carpetaCompartidaId, usuarioId, "mover_carpeta", {
+    objeto: d.split("/").pop() ?? d,
+    ruta: d,
+    detalle: `${o} → ${d}`,
+  });
 };
 
 // Renombra/mueve un archivo compartido DENTRO de su misma carpeta compartida.
@@ -373,9 +497,27 @@ export const actualizarArchivoCompartido = async (
   datos: { nombre?: string; carpeta?: string },
 ): Promise<Archivo> => {
   const archivo = await cargarCompartidoConAcceso(archivoId, usuarioId);
+  const nombreAntes = archivo.nombre;
+  const carpetaAntes = archivo.carpeta;
   if (datos.nombre !== undefined) archivo.nombre = datos.nombre;
   if (datos.carpeta !== undefined) archivo.carpeta = normalizarCarpeta(datos.carpeta);
-  return archivoRepo().save(archivo);
+  const guardado = await archivoRepo().save(archivo);
+  const ccId = archivo.carpetaCompartidaId!;
+  if (datos.nombre !== undefined && archivo.nombre !== nombreAntes) {
+    await registrarEvento(ccId, usuarioId, "renombrar", {
+      objeto: archivo.nombre,
+      ruta: archivo.carpeta,
+      detalle: `${nombreAntes} → ${archivo.nombre}`,
+    });
+  }
+  if (datos.carpeta !== undefined && archivo.carpeta !== carpetaAntes) {
+    await registrarEvento(ccId, usuarioId, "mover", {
+      objeto: archivo.nombre,
+      ruta: archivo.carpeta,
+      detalle: `${carpetaAntes} → ${archivo.carpeta}`,
+    });
+  }
+  return guardado;
 };
 
 // Copia un archivo compartido (binario incluido) dentro de la misma carpeta
@@ -443,6 +585,11 @@ export const copiarArchivoCompartido = async (
     } catch (errFrag) {
       console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
     }
+    await registrarEvento(carpetaCompartidaId, usuarioId, "copiar", {
+      objeto: guardado.nombre,
+      ruta: carpetaFinal,
+      detalle: `desde ${original.nombre}`,
+    });
     return guardado;
   } catch (err) {
     await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
@@ -540,6 +687,12 @@ export const copiarCompartidoAPersonal = async (
       prioridad: /^image\//.test(guardado.mimeType) ? P_IMG_SCAN : P_ALTA,
     });
   }
+
+  await registrarEvento(original.carpetaCompartidaId!, usuarioId, "copia_personal", {
+    objeto: original.nombre,
+    ruta: original.carpeta,
+    detalle: carpetaFinal === "/" ? "a Mis archivos" : `a Mis archivos ${carpetaFinal}`,
+  });
 
   return { archivo: guardado, duplicado: false };
 };

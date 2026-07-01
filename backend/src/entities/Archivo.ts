@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  UpdateDateColumn,
   ManyToOne,
   Index,
   DeleteDateColumn,
@@ -90,4 +91,10 @@ export class Archivo {
 
   @CreateDateColumn()
   subidoEn!: Date;
+
+  // Última modificación del registro: se actualiza sola al guardar (renombrar,
+  // mover, copiar, reindexar…). Es la "última actualización" que muestra el
+  // explorador de carpetas compartidas.
+  @UpdateDateColumn()
+  actualizadoEn!: Date;
 }

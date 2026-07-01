@@ -57,6 +57,9 @@ export interface Archivo {
   textoExtraido?: string | null;
   eliminadoEn?: string | null;
   subidoEn: string;
+  // Última modificación (renombrar/mover/copiar/reindexar). La usa la columna
+  // "Última actualización" del explorador de carpetas compartidas.
+  actualizadoEn: string;
   estadoEscaneo?: 'pendiente' | 'escaneando' | 'escaneada' | 'no_factura' | 'error' | null;
   // Estado del indexado RAG (extracción de texto + embeddings), independiente
   // del escaneo de factura. Lo gestiona la cola durable del backend.

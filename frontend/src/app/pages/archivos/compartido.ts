@@ -1,10 +1,12 @@
 import { Component, inject, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { Observable, of, throwError, forkJoin, map, catchError } from 'rxjs';
-import { CompartidoService } from '../../core/compartido.service';
+import { CompartidoService, CarpetaCompartidaAccesible } from '../../core/compartido.service';
 import { ArchivosService } from '../../core/archivos.service';
 import { ToastService } from '../../core/toast.service';
 import { ResultadoBusqueda } from '../../core/models';
 import { mensajeError } from '../../shared/errores';
+import { FileSizePipe } from '../../shared/file-size.pipe';
 import { ExploradorComponent } from './explorador';
 import { FuenteArchivos, OpcionesExplorador, PeticionExportar } from './fuente';
 
@@ -47,7 +49,7 @@ class FuenteCompartida implements FuenteArchivos {
 // mismo explorador que los archivos personales (almacenamiento único por rol).
 @Component({
   selector: 'app-compartido',
-  imports: [ExploradorComponent],
+  imports: [ExploradorComponent, DatePipe, FileSizePipe],
   template: `
     @if (carpeta() === null) {
       @if (carpetas().length === 0) {
@@ -56,25 +58,25 @@ class FuenteCompartida implements FuenteArchivos {
           No tienes carpetas compartidas. El administrador puede crearlas y darte acceso por rol.
         </div>
       } @else {
-        <!-- Misma tabla/columnas que "Mis archivos": las carpetas compartidas se ven
-             como filas de carpeta del explorador (Tamaño/Subido no aplican → "—"). -->
+        <!-- Cada carpeta compartida se ve como una fila con su tamaño total y la
+             fecha/hora de su última actualización (subida más reciente). -->
         <div class="card list">
           <table class="table">
             <thead>
               <tr>
                 <th>Nombre</th>
                 <th class="col-tamano">Tamaño</th>
-                <th class="col-subido">Subido</th>
-                <th class="col-acceso">Acceso</th>
+                <th class="col-actualizado">Última actualización</th>
               </tr>
             </thead>
             <tbody>
               @for (c of carpetas(); track c.id) {
                 <tr class="fila-carpeta" (click)="abrir(c)">
                   <td class="nombre">📁 {{ c.nombre }}</td>
-                  <td class="col-tamano muted">—</td>
-                  <td class="col-subido muted">—</td>
-                  <td class="col-acceso muted">Por rol</td>
+                  <td class="col-tamano muted">{{ c.tamano ? (c.tamano | fileSize) : '—' }}</td>
+                  <td class="col-actualizado muted">
+                    {{ c.actualizado ? (c.actualizado | date: 'dd/MM/yy HH:mm') : '—' }}
+                  </td>
                 </tr>
               }
             </tbody>
@@ -104,8 +106,7 @@ class FuenteCompartida implements FuenteArchivos {
     .fila-carpeta .nombre { font-weight: 600; }
     /* Mismos anchos/alineación de columnas que el explorador de Mis archivos. */
     .col-tamano { width: 120px; }
-    .col-subido { width: 150px; }
-    .col-acceso { width: 110px; white-space: nowrap; }
+    .col-actualizado { width: 170px; white-space: nowrap; }
     .barra { align-items: center; gap: 10px; margin-bottom: 12px; }
     .barra .ruta { font-weight: 700; font-size: 1.05rem; }
     .barra .spacer { flex: 1; }
@@ -116,9 +117,12 @@ export class CompartidoComponent {
   private archivos = inject(ArchivosService);
   private toast = inject(ToastService);
 
-  protected carpetas = signal<{ id: string; nombre: string }[]>([]);
+  protected carpetas = signal<CarpetaCompartidaAccesible[]>([]);
   protected carpeta = signal<{ id: string; nombre: string } | null>(null);
   protected total = signal(0);
+  // Carpetas del espacio PERSONAL, para ofrecerlas como destino en "Copiar en…"
+  // (copiar un archivo compartido a una subcarpeta concreta de Mis archivos).
+  private carpetasPersonales = signal<string[]>([]);
 
   // Origen de datos y opciones del explorador para la carpeta seleccionada.
   protected fuente = signal<FuenteArchivos | null>(null);
@@ -126,6 +130,10 @@ export class CompartidoComponent {
 
   constructor() {
     this.cargarCarpetas();
+    this.archivos.listarCarpetas().subscribe({
+      next: (cs) => this.carpetasPersonales.set(cs.map((c) => c.ruta)),
+      error: () => {}, // si falla, "Copiar en…" ofrecerá solo la raíz de Mis archivos
+    });
   }
 
   cargarCarpetas() {
@@ -143,7 +151,11 @@ export class CompartidoComponent {
       soportaBusqueda: false, // la búsqueda semántica del chat es personal
       soportaIA: false, // los compartidos se indexan solos; no se escanean a analítica
       aPapelera: false, // los compartidos se borran definitivamente (afecta a todos)
-      destinoExterno: { etiqueta: 'Mis archivos' }, // copiar/arrastrar a personal
+      mostrarEstado: false, // el estado de indexado no aporta al usuario en compartido
+      etiquetaFecha: 'Última actualización',
+      campoFecha: 'actualizadoEn', // mostrar la última modificación, no la subida
+      // copiar/arrastrar a personal (raíz + subcarpetas concretas en "Copiar en…")
+      destinoExterno: { etiqueta: 'Mis archivos', carpetas: this.carpetasPersonales() },
     });
     this.carpeta.set(c);
   }

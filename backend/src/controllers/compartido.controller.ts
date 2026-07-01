@@ -7,6 +7,8 @@ import {
   actualizarCarpetaCompartida,
   eliminarCarpetaCompartida,
   carpetasAccesibles,
+  resumenCompartidas,
+  listarEventos,
   listarArchivosCompartidos,
   subirCompartido,
   descargarCompartido,
@@ -65,11 +67,30 @@ export const ctrlEliminar = async (req: Request, res: Response, next: NextFuncti
   }
 };
 
+// Registro de actividad de una carpeta compartida (admin de su empresa), paginado.
+export const ctrlLogs = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const pagina = Math.max(1, parseInt(String(req.query.pagina ?? "1"), 10) || 1);
+    const limite = Math.min(100, Math.max(1, parseInt(String(req.query.limite ?? "20"), 10) || 20));
+    res.json(await listarEventos(empresaDe(req), String(req.params.id), pagina, limite));
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ---- MIEMBRO: uso de carpetas compartidas accesibles ----
 export const ctrlAccesibles = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const carpetas = await carpetasAccesibles(req.usuario!.id);
-    res.json(carpetas.map((c) => ({ id: c.id, nombre: c.nombre })));
+    const resumen = await resumenCompartidas(carpetas.map((c) => c.id));
+    res.json(
+      carpetas.map((c) => ({
+        id: c.id,
+        nombre: c.nombre,
+        tamano: resumen.get(c.id)?.tamano ?? 0,
+        actualizado: resumen.get(c.id)?.actualizado ?? null,
+      })),
+    );
   } catch (error) {
     next(error);
   }

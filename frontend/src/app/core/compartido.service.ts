@@ -4,6 +4,41 @@ import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { Archivo, CarpetaCompartida } from './models';
 
+// Carpeta compartida accesible + resumen para el listado (tamaño y última actualización).
+export interface CarpetaCompartidaAccesible {
+  id: string;
+  nombre: string;
+  tamano: number;
+  actualizado: string | null;
+}
+
+// Un evento del registro de actividad de una carpeta compartida.
+export interface EventoCompartido {
+  id: string;
+  usuarioNombre: string;
+  accion:
+    | 'subir'
+    | 'descargar'
+    | 'renombrar'
+    | 'mover'
+    | 'copiar'
+    | 'eliminar'
+    | 'copia_personal'
+    | 'crear_carpeta'
+    | 'borrar_carpeta'
+    | 'mover_carpeta';
+  objeto: string | null;
+  ruta: string | null;
+  detalle: string | null;
+  creadoEn: string;
+}
+
+export interface PaginaEventos {
+  eventos: EventoCompartido[];
+  total: number;
+  paginas: number;
+}
+
 // Carpetas compartidas por rol (Fase 3). Gestión (admin) + uso (miembros con acceso).
 @Injectable({ providedIn: 'root' })
 export class CompartidoService {
@@ -11,8 +46,10 @@ export class CompartidoService {
   private base = `${environment.apiUrl}/api/compartido`;
 
   // --- Miembro: uso ---
-  accesibles(): Observable<{ id: string; nombre: string }[]> {
-    return this.http.get<{ id: string; nombre: string }[]>(this.base);
+  // `tamano` = suma de bytes de sus archivos; `actualizado` = subida más reciente
+  // (ISO) o null si está vacía. Para las columnas del listado de "Compartido".
+  accesibles(): Observable<CarpetaCompartidaAccesible[]> {
+    return this.http.get<CarpetaCompartidaAccesible[]>(this.base);
   }
 
   listarArchivos(
@@ -126,5 +163,13 @@ export class CompartidoService {
 
   eliminar(id: string): Observable<void> {
     return this.http.delete<void>(`${this.base}/admin/${id}`);
+  }
+
+  // Registro de actividad de una carpeta compartida (admin), paginado.
+  logs(id: string, pagina = 1, limite = 20): Observable<PaginaEventos> {
+    const params = new HttpParams()
+      .set('pagina', String(pagina))
+      .set('limite', String(limite));
+    return this.http.get<PaginaEventos>(`${this.base}/admin/${id}/logs`, { params });
   }
 }

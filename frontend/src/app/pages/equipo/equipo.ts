@@ -3,7 +3,7 @@ import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
 import { EquipoService } from '../../core/equipo.service';
-import { CompartidoService } from '../../core/compartido.service';
+import { CompartidoService, EventoCompartido } from '../../core/compartido.service';
 import { ToastService } from '../../core/toast.service';
 import { Archivo, CarpetaCompartida, Miembro, Rol } from '../../core/models';
 import { FileSizePipe } from '../../shared/file-size.pipe';
@@ -44,6 +44,29 @@ export class EquipoPage {
   protected cRolesSel = signal<Set<string>>(new Set());
 
   protected confirmacion = signal<{ titulo: string; mensaje: string; onOk: () => void } | null>(null);
+
+  // ---- Modal registro de actividad de una carpeta compartida ----
+  protected logsCarpeta = signal<CarpetaCompartida | null>(null);
+  protected logsEventos = signal<EventoCompartido[]>([]);
+  protected logsPagina = signal(1);
+  protected logsPaginas = signal(1);
+  protected logsTotal = signal(0);
+  protected cargandoLogs = signal(false);
+
+  // Etiqueta legible de cada acción del registro.
+  protected readonly ACCION_LABELS: Record<string, string> = {
+    subir: 'Subió',
+    descargar: 'Descargó',
+    renombrar: 'Renombró',
+    mover: 'Movió',
+    copiar: 'Copió',
+    eliminar: 'Eliminó',
+    copia_personal: 'Copió a Mis archivos',
+    crear_carpeta: 'Creó carpeta',
+    borrar_carpeta: 'Borró carpeta',
+    mover_carpeta: 'Movió carpeta',
+  };
+  protected etiquetaAccion = (a: string) => this.ACCION_LABELS[a] ?? a;
 
   // ---- Modal miembro ----
   protected mMostrar = signal(false);
@@ -298,6 +321,50 @@ export class EquipoPage {
           error: (err) => this.toast.error(mensajeError(err)),
         }),
     });
+  }
+
+  // ===================== REGISTRO DE ACTIVIDAD (LOGS) =====================
+  verLogs(c: CarpetaCompartida) {
+    this.logsCarpeta.set(c);
+    this.logsPagina.set(1);
+    this.cargarLogs();
+  }
+
+  cargarLogs() {
+    const c = this.logsCarpeta();
+    if (!c) return;
+    this.cargandoLogs.set(true);
+    this.compartidoSvc.logs(c.id, this.logsPagina(), 20).subscribe({
+      next: (r) => {
+        this.logsEventos.set(r.eventos);
+        this.logsPaginas.set(r.paginas);
+        this.logsTotal.set(r.total);
+        this.cargandoLogs.set(false);
+      },
+      error: (err) => {
+        this.cargandoLogs.set(false);
+        this.toast.error(mensajeError(err));
+      },
+    });
+  }
+
+  logsAnterior() {
+    if (this.logsPagina() > 1) {
+      this.logsPagina.update((p) => p - 1);
+      this.cargarLogs();
+    }
+  }
+
+  logsSiguiente() {
+    if (this.logsPagina() < this.logsPaginas()) {
+      this.logsPagina.update((p) => p + 1);
+      this.cargarLogs();
+    }
+  }
+
+  cerrarLogs() {
+    this.logsCarpeta.set(null);
+    this.logsEventos.set([]);
   }
 
   // ===================== ARCHIVOS DE MIEMBRO =====================

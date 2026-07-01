@@ -35,10 +35,24 @@ export interface OpcionesExplorador {
   soportaIA: boolean;
   // true → los borrados van a la papelera; false → borrado definitivo (compartido).
   aPapelera: boolean;
-  // Si está presente, habilita "Copiar a {etiqueta}" (menú/bulk) y marca el botón con
-  // [data-drop-personal] como zona de drop para exportar fuera del explorador (hoy:
-  // de una carpeta compartida al espacio personal). Ausente en el explorador personal.
-  destinoExterno?: { etiqueta: string };
+  // Muestra la columna "Estado" (progreso de escaneo/indexado). Por defecto true;
+  // en compartido se pone false (los archivos se indexan solos y no se escanean a
+  // analítica, así que ese estado no aporta al usuario).
+  mostrarEstado?: boolean;
+  // Etiqueta de la columna de fecha. Personal: "Subido" (por defecto); compartido:
+  // "Última actualización".
+  etiquetaFecha?: string;
+  // Qué fecha del archivo muestra la columna: "subidoEn" (fecha de subida, por
+  // defecto) o "actualizadoEn" (última modificación: renombrar/mover/copiar). En
+  // compartido se usa "actualizadoEn". Afecta también a la fecha de las carpetas
+  // (min de subida vs. max de última actualización de su contenido).
+  campoFecha?: 'subidoEn' | 'actualizadoEn';
+  // Si está presente, marca el botón [data-drop-personal] como zona de drop para
+  // exportar (arrastrar) fuera del explorador y añade el destino externo a "Copiar
+  // en…" (hoy: de una carpeta compartida al espacio personal). `carpetas` son las
+  // subcarpetas del espacio externo donde también se puede copiar. Ausente en el
+  // explorador personal.
+  destinoExterno?: { etiqueta: string; carpetas?: string[] };
 }
 
 // Petición de exportación que emite el explorador cuando el usuario copia elementos a

@@ -4,6 +4,7 @@ import { Archivo } from "../entities/Archivo";
 import { minioClient } from "../config/minio";
 import { env } from "../config/env";
 import { borrarPermanente } from "./archivos.service";
+import { purgarEventosAntiguos } from "./compartido.service";
 
 // Mantenimiento periódico (#5): mantiene la coherencia entre MinIO y Postgres y
 // aplica la retención de papelera. La subida hace MinIO→Postgres con borrado
@@ -105,6 +106,10 @@ export const ejecutarMantenimiento = async (): Promise<void> => {
   try {
     const rec = await reconciliarMinioPostgres();
     await purgarPapeleraAntigua();
+    const logs = await purgarEventosAntiguos();
+    if (logs.purgados > 0) {
+      console.log(`[reconciliacion] retención: ${logs.purgados} evento(s) de compartido purgados (> ${env.RETENCION_LOGS_DIAS}d).`);
+    }
     if (rec.huerfanosBorrados > 0 || rec.filasColgadas > 0) {
       console.log(
         `[reconciliacion] hecho: ${rec.huerfanosBorrados} huérfano(s) borrados, ${rec.filasColgadas} fila(s) colgadas.`,

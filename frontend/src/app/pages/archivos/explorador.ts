@@ -89,6 +89,10 @@ export class ExploradorComponent implements OnInit {
   protected renombrarModal = signal<{ origen: string } | null>(null);
   protected nombreRenombrar = '';
   protected moverModal = signal<{ tipo: 'archivo' | 'carpeta'; ref: string } | null>(null);
+  // "Copiar en…": selector de destino que COPIA un archivo (el original se queda).
+  // Solo aplica a archivos; el destino puede ser una carpeta del espacio actual o,
+  // si hay destino externo (compartido), Mis archivos y sus subcarpetas.
+  protected copiarEnModal = signal<{ ref: string } | null>(null);
   protected descripcionModal = signal<{ id: string; nombre: string } | null>(null);
   protected textoDescripcion = '';
   protected guardandoDescripcion = signal(false);
@@ -256,10 +260,20 @@ export class ExploradorComponent implements OnInit {
   protected tamanoCarpeta(ruta: string): number {
     return this.archivosBajo(ruta).reduce((s, a) => s + Number(a.tamanoBytes ?? 0), 0);
   }
-  // Fecha de la carpeta = su fecha de creación local. Si la carpeta no se creó
-  // explícitamente (apareció al subir un archivo en una ruta anidada), usamos la
-  // fecha de subida más antigua de su contenido. null si no hay nada.
+  // Fecha del archivo según el campo configurado (subida o última actualización).
+  protected fechaArchivo(a: Archivo): string {
+    return this.opciones.campoFecha === 'actualizadoEn' ? a.actualizadoEn : a.subidoEn;
+  }
+  // Fecha de la carpeta. En modo "última actualización" (compartido) = la MÁS
+  // RECIENTE de su contenido (o su fecha de creación si está vacía). En modo
+  // "subida" (personal) = su fecha de creación o, si no se creó explícitamente, la
+  // subida más ANTIGUA de su contenido. null si no hay nada.
   protected fechaCarpeta(ruta: string): string | null {
+    if (this.opciones.campoFecha === 'actualizadoEn') {
+      const fechas = this.archivosBajo(ruta).map((a) => a.actualizadoEn).filter(Boolean);
+      if (fechas.length > 0) return fechas.reduce((max, f) => (f > max ? f : max));
+      return this.carpetas().find((c) => c.ruta === ruta)?.creada ?? null;
+    }
     const creada = this.carpetas().find((c) => c.ruta === ruta)?.creada;
     if (creada) return creada;
     const fechas = this.archivosBajo(ruta).map((a) => a.subidoEn);
@@ -516,15 +530,6 @@ export class ExploradorComponent implements OnInit {
       error: (err) => this.toast.error(mensajeError(err)),
     });
   }
-  copiarArchivo(a: Archivo) {
-    this.datos.copiar(a.id, { carpeta: this.normalizar(a.carpeta), nombre: `${a.nombre} (copia)` }).subscribe({
-      next: () => {
-        this.toast.exito('Archivo copiado');
-        this.cargar();
-      },
-      error: (err) => this.toast.error(mensajeError(err)),
-    });
-  }
   pedirEliminar(a: Archivo) {
     this.confirmacion.set(
       this.opciones.aPapelera
@@ -572,11 +577,6 @@ export class ExploradorComponent implements OnInit {
   }
   private archivoPorId(id: string): Archivo | undefined {
     return this.todos().find((a) => a.id === id);
-  }
-  accionAbrirArchivo(id: string) {
-    const a = this.archivoPorId(id);
-    this.cerrarMenu();
-    if (a) this.abrir(a);
   }
   // Todo se escanea/indexa automáticamente al subir; este modal sirve para
   // AÑADIR una descripción a mano (sobre todo a fotos) y que se pueda encontrar
@@ -626,11 +626,6 @@ export class ExploradorComponent implements OnInit {
     const a = this.archivoPorId(id);
     this.cerrarMenu();
     if (a) this.descargar(a);
-  }
-  accionCopiarArchivo(id: string) {
-    const a = this.archivoPorId(id);
-    this.cerrarMenu();
-    if (a) this.copiarArchivo(a);
   }
   accionRenombrarArchivo(id: string) {
     const a = this.archivoPorId(id);
@@ -707,6 +702,52 @@ export class ExploradorComponent implements OnInit {
     if (!mv) return;
     if (mv.tipo === 'archivo') this.moverArchivo(mv.ref, destino);
     else this.moverCarpeta(mv.ref, destino);
+  }
+
+  // --- Copiar en… (copia a un destino elegido; el original permanece) ---
+  accionCopiarEn(id: string) {
+    this.cerrarMenu();
+    this.copiarEnModal.set({ ref: id });
+  }
+  // Destinos INTERNOS: cualquier carpeta del espacio actual (incluida la actual, que
+  // equivale a duplicar en el sitio). Se ofrecen todas porque copiar no tiene la
+  // restricción de "no a la misma carpeta" que sí tiene mover.
+  destinosCopiar(): { ruta: string; etiqueta: string }[] {
+    return [...new Set<string>(['/', ...this.rutasConocidas()])]
+      .sort((a, b) => a.localeCompare(b))
+      .map((r) => ({ ruta: r, etiqueta: r === '/' ? this.opciones.etiquetaRaiz : r }));
+  }
+  // Destinos EXTERNOS (solo si hay destinoExterno, p. ej. compartido → Mis archivos):
+  // la raíz del espacio externo y sus subcarpetas.
+  destinosExternos(): { ruta: string; etiqueta: string }[] {
+    const ext = this.opciones.destinoExterno;
+    if (!ext) return [];
+    const destinos = [{ ruta: '/', etiqueta: ext.etiqueta }];
+    for (const r of ext.carpetas ?? []) {
+      destinos.push({ ruta: r, etiqueta: `${ext.etiqueta} › ${r.replace(/^\//, '')}` });
+    }
+    return destinos;
+  }
+  confirmarCopiarEn(destino: string) {
+    const ce = this.copiarEnModal();
+    this.copiarEnModal.set(null);
+    if (!ce) return;
+    // Sin `nombre`: el backend conserva el nombre original y solo añade "(copia)"
+    // si ya existe en el destino (p. ej. al copiar en la misma carpeta).
+    this.datos.copiar(ce.ref, { carpeta: destino }).subscribe({
+      next: () => {
+        this.toast.exito('Archivo copiado');
+        this.cargar();
+      },
+      error: (err) => this.toast.error(mensajeError(err)),
+    });
+  }
+  confirmarCopiarEnExterno(destino: string) {
+    const ce = this.copiarEnModal();
+    this.copiarEnModal.set(null);
+    if (!ce) return;
+    const nombre = this.archivoPorId(ce.ref)?.nombre ?? '';
+    this.emitirExportacion([{ tipo: 'archivo', ref: ce.ref, nombre }], destino);
   }
 
   // --- Arrastre propio (eventos de puntero) ---
@@ -862,8 +903,8 @@ export class ExploradorComponent implements OnInit {
   }
 
   // --- Exportar a un destino externo (Compartido → Mis archivos) ---
-  private emitirExportacion(items: ItemArrastre[]) {
-    const peticion = this.construirExportacion(items);
+  private emitirExportacion(items: ItemArrastre[], baseExterna = '/') {
+    const peticion = this.construirExportacion(items, baseExterna);
     if (peticion.archivos.length === 0 && peticion.carpetasVacias.length === 0) return;
     this.copiarAExterno.emit(peticion);
     this.limpiarSeleccion();
@@ -873,16 +914,20 @@ export class ExploradorComponent implements OnInit {
   // archivos sueltos van a la raíz ("/"); una carpeta se recrea en la raíz
   // conservando su subárbol (archivos y subcarpetas vacías). Misma lógica de remap
   // que copiarCarpeta, pero hacia otro espacio.
-  private construirExportacion(items: ItemArrastre[]): PeticionExportar {
+  private construirExportacion(items: ItemArrastre[], baseExterna = '/'): PeticionExportar {
+    // Prefijo de la carpeta destino en el espacio externo ('' si es la raíz, o
+    // p. ej. '/facturas' para copiar dentro de esa subcarpeta de Mis archivos).
+    const raiz = this.normalizar(baseExterna);
+    const pref = raiz === '/' ? '' : raiz;
     const archivos: { id: string; carpetaDestino: string }[] = [];
     const vacias = new Set<string>();
     for (const it of items) {
       if (it.tipo === 'archivo') {
-        archivos.push({ id: it.ref, carpetaDestino: '/' });
+        archivos.push({ id: it.ref, carpetaDestino: raiz });
         continue;
       }
       const ruta = it.ref;
-      const base = '/' + this.nombreHoja(ruta);
+      const base = pref + '/' + this.nombreHoja(ruta);
       for (const a of this.archivosBajo(ruta)) {
         const rel = this.normalizar(a.carpeta).slice(ruta.length); // '' o '/sub...'
         archivos.push({ id: a.id, carpetaDestino: base + rel || '/' });
