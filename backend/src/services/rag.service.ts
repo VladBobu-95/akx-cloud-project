@@ -34,6 +34,8 @@ export const embeddings = async (
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: env.OLLAMA_EMBED_MODEL, input }),
+      // Timeout para no colgarse si Ollama no libera VRAM (ver OLLAMA_TIMEOUT_MS).
+      signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
     });
   } catch {
     throw new Error("No se puede conectar con Ollama para generar embeddings.");

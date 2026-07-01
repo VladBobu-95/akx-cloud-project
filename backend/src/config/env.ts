@@ -56,6 +56,15 @@ const envSchema = z.object({
   // solo VLM).
   OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
   OLLAMA_CAPTION_MODEL: z.string().default("granite3.2-vision"),
+  // Timeout (ms) de CADA llamada a Ollama (embeddings/visión/extracción). Sin
+  // esto, si Ollama se cuelga esperando VRAM —p. ej. no puede cargar el modelo
+  // que toca porque otro sigue fijado en la GPU por su keep_alive— el `fetch` se
+  // queda colgado indefinidamente y la tarea del worker se eterniza en
+  // "escaneando" (el archivo nunca sale de "procesando"). Con el timeout, la
+  // llamada falla y la tarea reintenta/marca error en vez de colgarse. 180 s
+  // cubre de sobra una inferencia lenta real (incl. cargar deepseek-ocr de disco
+  // y OCR en CPU), pero corta muy por debajo del keep_alive de 10 min.
+  OLLAMA_TIMEOUT_MS: z.coerce.number().int().min(1000).default(180_000),
   // Worker de la cola durable (tareas.service.ts):
   //  - WORKER_CONCURRENCIA: cuántas tareas se procesan a la vez. 1 por defecto,
   //    como las colas en memoria anteriores: el trabajo pesado va a Ollama/GPU y

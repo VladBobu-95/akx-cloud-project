@@ -36,6 +36,10 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
       // Ollama descargue el modelo por inactividad entre dos imágenes consecutivas.
       keep_alive: "10m",
     }),
+    // Timeout para no colgarse si Ollama no puede cargar este VLM porque otro
+    // modelo sigue fijado en la GPU (ver OLLAMA_TIMEOUT_MS). Si salta, ocrImagen
+    // lo captura y pasa a la siguiente pasada de la cascada.
+    signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
   });
   const data = (await res.json()) as {
     message?: { content?: string };
@@ -322,6 +326,8 @@ const traducirAlEspanol = async (texto: string): Promise<string> => {
         stream: false,
         options: { temperature: 0 },
       }),
+      // Timeout: si la traducción se cuelga, devolvemos el texto original (catch).
+      signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
     });
     const data = (await res.json()) as { message?: { content?: string } };
     return data.message?.content?.trim() || texto;

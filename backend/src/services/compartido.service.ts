@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { Readable } from "stream";
 import { z } from "zod";
-import { In } from "typeorm";
+import { In, IsNull } from "typeorm";
 import { AppDataSource } from "../config/database";
 import { CarpetaCompartida } from "../entities/CarpetaCompartida";
 import { CarpetaCompartidaCarpeta } from "../entities/CarpetaCompartidaCarpeta";
@@ -12,6 +12,9 @@ import { minioClient } from "../config/minio";
 import { env } from "../config/env";
 import { AppError } from "../utils/errors";
 import { calcularHashSha256 } from "./archivos.service";
+import { crearCarpeta } from "./carpetas.service";
+import { esArchivoFactura, marcarPendiente } from "./facturas.service";
+import { encolarTarea, P_ALTA, P_IMG_SCAN } from "./tareas.service";
 
 // Carpetas compartidas por rol. El admin las crea y decide qué roles acceden; los
 // miembros con esos roles ven/usan los archivos (almacenamiento ÚNICO: lo que
@@ -445,6 +448,100 @@ export const copiarArchivoCompartido = async (
     await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
     throw err;
   }
+};
+
+// Copia un archivo compartido al espacio PERSONAL de quien la pide (fuera de la
+// carpeta compartida). El original PERMANECE en compartido. Se comporta como una
+// subida propia: nombre EXACTO (sin "(copia)"), dedup por hash con lo que ya tienes
+// en personal, y auto-escaneo de factura si procede (la analítica de facturas es
+// personal, así que ahora sí se atribuye a este usuario). Reutiliza el binario y los
+// fragmentos RAG ya calculados del compartido: no re-OCR ni re-embeddings.
+export const copiarCompartidoAPersonal = async (
+  archivoId: string,
+  usuarioId: string,
+  carpetaDestino?: string,
+): Promise<{ archivo: Archivo; duplicado: boolean }> => {
+  const original = await cargarCompartidoConAcceso(archivoId, usuarioId);
+
+  // Dedup por hash contra tus archivos PERSONALES vivos. El filtro
+  // carpetaCompartidaId IS NULL es imprescindible: sin él, si quien copia es el
+  // mismo que subió el compartido, el mismo hash + propietario casaría con el
+  // propio archivo compartido y "reutilizaría" ese en vez de crear la copia personal.
+  if (original.hashSha256) {
+    const yaExiste = await archivoRepo().findOne({
+      where: {
+        propietario: { id: usuarioId },
+        hashSha256: original.hashSha256,
+        eliminadoEn: IsNull(),
+        carpetaCompartidaId: IsNull(),
+      },
+    });
+    if (yaExiste) return { archivo: yaExiste, duplicado: true };
+  }
+
+  // Carpeta y clave con el formato PERSONAL (${usuarioId}/...), no el de compartido.
+  const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  const carpetaLimpia = carpetaFinal === "/" ? "raiz" : carpetaFinal.slice(1);
+  const nuevaClave = `${usuarioId}/${carpetaLimpia}/${randomUUID()}`;
+
+  await minioClient.copyObject(
+    env.MINIO_BUCKET,
+    nuevaClave,
+    `/${env.MINIO_BUCKET}/${original.claveMinio}`,
+  );
+
+  const copia = archivoRepo().create({
+    nombre: original.nombre, // nombre EXACTO, sin sufijo "(copia)"
+    carpeta: carpetaFinal,
+    mimeType: original.mimeType,
+    tamanoBytes: original.tamanoBytes,
+    claveMinio: nuevaClave,
+    hashSha256: original.hashSha256,
+    textoExtraido: original.textoExtraido,
+    propietario: { id: usuarioId } as Usuario,
+    carpetaCompartidaId: null, // pasa a ser un archivo personal
+    estadoIndexado: "indexado", // reutilizamos texto + fragmentos ya calculados
+    indexadoEn: new Date(),
+  });
+
+  let guardado: Archivo;
+  try {
+    guardado = await archivoRepo().save(copia);
+  } catch (err) {
+    await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
+    throw err;
+  }
+
+  // Persistimos la carpeta personal destino como metadata (igual que subirArchivo),
+  // para que exista aunque un futuro movimiento la deje vacía.
+  if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal).catch(() => {});
+
+  // Copiamos los fragmentos RAG como PERSONALES: nuevo propietario y sin carpeta
+  // compartida, para que la copia sea buscable en el RAG personal sin re-embeddings.
+  try {
+    await AppDataSource.query(
+      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
+       SELECT $1, $2, NULL, "indice", "texto", "embedding"
+       FROM "fragmentos" WHERE "archivoId" = $3`,
+      [guardado.id, usuarioId, original.id],
+    );
+  } catch (errFrag) {
+    console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
+  }
+
+  // Auto-escaneo "como si fuera mía": si es candidata a factura, encolamos la tarea
+  // durable de autoescaneo. El worker deja el estado final en la columna "Estado".
+  if (esArchivoFactura(guardado)) {
+    await marcarPendiente(guardado);
+    await encolarTarea({
+      tipo: "autoescanear",
+      archivoId: guardado.id,
+      usuarioId,
+      prioridad: /^image\//.test(guardado.mimeType) ? P_IMG_SCAN : P_ALTA,
+    });
+  }
+
+  return { archivo: guardado, duplicado: false };
 };
 
 // Prepara el .zip de una subcarpeta compartida (o de toda la carpeta si ruta = "/"),

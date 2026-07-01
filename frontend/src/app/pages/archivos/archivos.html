@@ -6,9 +6,11 @@
         </div>
       </div>
 
-      <!-- Toggle Personales / Compartido -->
-      <div class="ambito-toggle">
-        <button [class.active]="ambito() === 'personal'" (click)="ambito.set('personal')">Personales</button>
+      <!-- Toggle Personales / Compartido. El botón "Personales" es además zona de
+           drop: arrastrando desde Compartido se sueltan ahí para copiar a personal
+           ([data-drop-personal] lo detecta el explorador). -->
+      <div class="ambito-toggle" [class.modo-compartido]="ambito() === 'compartido'">
+        <button data-drop-personal [class.active]="ambito() === 'personal'" (click)="ambito.set('personal')">Personales</button>
         <button [class.active]="ambito() === 'compartido'" (click)="ambito.set('compartido')">Compartido</button>
       </div>
 

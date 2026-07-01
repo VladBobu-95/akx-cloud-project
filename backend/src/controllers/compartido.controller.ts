@@ -18,6 +18,7 @@ import {
   reubicarSubcarpetaCompartida,
   actualizarArchivoCompartido,
   copiarArchivoCompartido,
+  copiarCompartidoAPersonal,
   prepararDescargaCarpetaCompartida,
   schemaCrearCarpetaCompartida,
   schemaActualizarCarpetaCompartida,
@@ -222,6 +223,24 @@ export const ctrlCopiarArchivo = async (req: Request, res: Response, next: NextF
     if (nombre !== undefined) datos.nombre = String(nombre);
     if (carpeta !== undefined) datos.carpeta = String(carpeta);
     res.status(201).json(await copiarArchivoCompartido(String(req.params.archivoId), req.usuario!.id, datos));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /archivo/:archivoId/copiar-a-personal  { carpeta? }
+// Copia el archivo compartido al espacio personal del usuario (el original sigue en
+// compartido). Devuelve { ...archivo, duplicado } — duplicado=true si ya tenías ese
+// mismo contenido en personal (dedup por hash) y no se creó nada nuevo.
+export const ctrlCopiarAPersonal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const carpeta = req.body?.carpeta !== undefined ? String(req.body.carpeta) : undefined;
+    const { archivo, duplicado } = await copiarCompartidoAPersonal(
+      String(req.params.archivoId),
+      req.usuario!.id,
+      carpeta,
+    );
+    res.status(duplicado ? 200 : 201).json({ ...archivo, duplicado });
   } catch (error) {
     next(error);
   }

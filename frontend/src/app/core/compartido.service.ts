@@ -96,6 +96,18 @@ export class CompartidoService {
     return this.http.post<Archivo>(`${this.base}/archivo/${archivoId}/copiar`, datos);
   }
 
+  // Copia un archivo compartido al espacio PERSONAL del usuario (el original sigue en
+  // compartido). `duplicado=true` → ya tenías ese contenido en personal (dedup por hash).
+  copiarAPersonal(
+    archivoId: string,
+    carpetaDestino: string,
+  ): Observable<Archivo & { duplicado?: boolean }> {
+    return this.http.post<Archivo & { duplicado?: boolean }>(
+      `${this.base}/archivo/${archivoId}/copiar-a-personal`,
+      { carpeta: carpetaDestino },
+    );
+  }
+
   // --- Admin: gestión ---
   listarAdmin(): Observable<CarpetaCompartida[]> {
     return this.http.get<CarpetaCompartida[]>(`${this.base}/admin`);

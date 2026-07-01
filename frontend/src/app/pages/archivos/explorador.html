@@ -82,6 +82,9 @@
           <span class="bulk-count">{{ numSeleccionados() }} seleccionado(s)</span>
           <button class="btn btn-outline btn-sm" (click)="ejecutarCopiarSeleccion()">📋 Copiar</button>
           <button class="btn btn-outline btn-sm" (click)="abrirBulkMover()">📂 Mover a…</button>
+          @if (opciones.destinoExterno; as ext) {
+            <button class="btn btn-outline btn-sm" (click)="ejecutarCopiarAExterno()">⬇️ Copiar a {{ ext.etiqueta }}</button>
+          }
           <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
           <span class="spacer"></span>
           <button class="btn btn-ghost btn-sm" (click)="limpiarSeleccion()">✕ Cancelar</button>
@@ -225,12 +228,18 @@
           <button (click)="accionCopiarArchivo(m.ref)">📋 Copiar</button>
           <button (click)="accionRenombrarArchivo(m.ref)">✏️ Renombrar</button>
           <button (click)="accionMoverA('archivo', m.ref)">📂 Mover a…</button>
+          @if (opciones.destinoExterno; as ext) {
+            <button (click)="accionCopiarAExterno('archivo', m.ref)">⬇️ Copiar a {{ ext.etiqueta }}</button>
+          }
           <button class="peligro" (click)="accionEliminarArchivo(m.ref)">🗑️ Borrar</button>
         } @else {
           <button (click)="accionDescargarCarpeta(m.ref)">⬇️ Descargar</button>
           <button (click)="cerrarMenu(); copiarCarpeta(m.ref)">📋 Copiar</button>
           <button (click)="cerrarMenu(); abrirRenombrarCarpeta(m.ref)">✏️ Renombrar</button>
           <button (click)="accionMoverA('carpeta', m.ref)">📂 Mover a…</button>
+          @if (opciones.destinoExterno; as ext) {
+            <button (click)="accionCopiarAExterno('carpeta', m.ref)">⬇️ Copiar a {{ ext.etiqueta }}</button>
+          }
           <button class="peligro" (click)="cerrarMenu(); pedirBorrarCarpeta(m.ref)">🗑️ Borrar</button>
         }
       </div>
@@ -402,7 +411,8 @@
 
     <!-- Etiqueta flotante mientras se arrastra -->
     @if (arrastrando(); as ar) {
-      <div class="ghost" [style.left.px]="ghostPos().x + 14" [style.top.px]="ghostPos().y + 14">
-        {{ ar.tipo === 'carpeta' ? '📁' : '📄' }} {{ ar.nombre }}
+      <div class="ghost" [class.hacia-personal]="sobrePersonal()" [style.left.px]="ghostPos().x + 14" [style.top.px]="ghostPos().y + 14">
+        {{ ar.items.length === 1 ? (ar.items[0].tipo === 'carpeta' ? '📁' : '📄') : '🗂️' }} {{ etiquetaArrastre() }}
+        @if (sobrePersonal()) { <span class="destino-hint">→ copiar a {{ opciones.destinoExterno?.etiqueta }}</span> }
       </div>
     }

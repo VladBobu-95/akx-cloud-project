@@ -158,6 +158,7 @@
           name="entrada"
           [ngModel]="chat.borrador()"
           (ngModelChange)="chat.borrador.set($event)"
+          [placeholder]="pensando() ? 'La IA está pensando… escribe para redirigirla' : 'Escribe tu mensaje…'"
           autocomplete="off"
         />
         <button class="btn btn-primary" type="submit" [disabled]="!chat.borrador().trim()">

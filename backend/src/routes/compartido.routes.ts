@@ -19,6 +19,7 @@ import {
   ctrlEliminarSubcarpeta,
   ctrlActualizarArchivo,
   ctrlCopiarArchivo,
+  ctrlCopiarAPersonal,
   ctrlDescargarCarpetaZip,
 } from "../controllers/compartido.controller";
 import { AppError } from "../utils/errors";
@@ -49,6 +50,7 @@ router.delete("/admin/:id", soloAdmin, ctrlEliminar);
 router.get("/archivo/:archivoId/descargar", ctrlDescargar);
 router.patch("/archivo/:archivoId", ctrlActualizarArchivo);
 router.post("/archivo/:archivoId/copiar", ctrlCopiarArchivo);
+router.post("/archivo/:archivoId/copiar-a-personal", ctrlCopiarAPersonal);
 router.delete("/archivo/:archivoId", ctrlEliminarArchivo);
 
 // --- Uso (cualquier miembro con acceso) ---

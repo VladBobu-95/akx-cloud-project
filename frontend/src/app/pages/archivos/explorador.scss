@@ -14,10 +14,20 @@
         padding: 6px 10px;
         border-radius: 8px;
         box-shadow: var(--shadow-sm);
-        max-width: 240px;
+        max-width: 300px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      /* Resalte del ghost cuando se va a soltar sobre "Personal" (exportar). */
+      .ghost.hacia-personal {
+        background: var(--green);
+        box-shadow: 0 0 0 2px #fff, var(--shadow);
+      }
+      .ghost .destino-hint {
+        opacity: 0.9;
+        font-weight: 700;
+        margin-left: 4px;
       }
       .upload {
         margin-bottom: 16px;

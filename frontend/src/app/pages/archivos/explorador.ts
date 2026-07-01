@@ -20,7 +20,7 @@ import { Archivo, ResultadoBusqueda } from '../../core/models';
 import { FileSizePipe } from '../../shared/file-size.pipe';
 import { mensajeError } from '../../shared/errores';
 import { normalizarRuta, unir, padre, nombreHoja } from './rutas.util';
-import { FuenteArchivos, OpcionesExplorador } from './fuente';
+import { FuenteArchivos, OpcionesExplorador, PeticionExportar } from './fuente';
 import {
   ACCEPT_ARCHIVOS,
   esTipoPermitido,
@@ -29,11 +29,15 @@ import {
   MENSAJE_ARCHIVO_GRANDE,
 } from '../../shared/tipos-archivo';
 
-// Payload de lo que se está arrastrando: un archivo (por id) o una carpeta (por ruta).
-interface Arrastre {
+// Un elemento arrastrable: un archivo (por id) o una carpeta (por ruta).
+interface ItemArrastre {
   tipo: 'archivo' | 'carpeta';
   ref: string;
   nombre: string;
+}
+// Payload de lo que se está arrastrando: uno o varios elementos (arrastre múltiple).
+interface Arrastre {
+  items: ItemArrastre[];
 }
 
 // Explorador de archivos reutilizable. Lo usan tanto "Mis archivos" (fuente =
@@ -52,6 +56,9 @@ export class ExploradorComponent implements OnInit {
   @Input({ required: true }) opciones!: OpcionesExplorador;
   // Emite el nº total de archivos cargados (para que el contenedor lo muestre).
   @Output() totalCambio = new EventEmitter<number>();
+  // Copiar elementos a un destino EXTERNO (ej. Compartido → Mis archivos). El
+  // contenedor (compartido.ts) recibe la petición ya resuelta y hace las llamadas.
+  @Output() copiarAExterno = new EventEmitter<PeticionExportar>();
 
   private toast = inject(ToastService);
 
@@ -104,6 +111,14 @@ export class ExploradorComponent implements OnInit {
   protected ghostPos = signal<{ x: number; y: number }>({ x: 0, y: 0 });
   // Destino actual bajo el puntero: ruta de carpeta, o '..' (mover al padre).
   protected destinoHover = signal<string | null>(null);
+  // true mientras el puntero está sobre un destino EXTERNO (botón [data-drop-personal]).
+  protected sobrePersonal = signal(false);
+  // Etiqueta del "ghost": el nombre si es un solo elemento, o "N elementos" si son varios.
+  protected etiquetaArrastre = computed(() => {
+    const a = this.arrastrando();
+    if (!a) return '';
+    return a.items.length === 1 ? a.items[0].nombre : `${a.items.length} elementos`;
+  });
   // Candidato de arrastre registrado en pointerdown, antes de superar el umbral.
   private pendiente: { tipo: 'archivo' | 'carpeta'; ref: string; nombre: string; x0: number; y0: number } | null =
     null;
@@ -722,17 +737,48 @@ export class ExploradorComponent implements OnInit {
     if (this.arrastrando()) {
       ev.preventDefault();
       this.ghostPos.set({ x: ev.clientX, y: ev.clientY });
+      this.detectarDestinoExterno(ev);
       return;
     }
     const p = this.pendiente;
     if (!p) return;
     // ¿Hemos superado el umbral? Entonces empieza el arrastre.
     if (Math.abs(ev.clientX - p.x0) + Math.abs(ev.clientY - p.y0) >= this.UMBRAL) {
-      this.arrastrando.set({ tipo: p.tipo, ref: p.ref, nombre: p.nombre });
+      this.arrastrando.set({ items: this.itemsArrastre(p) });
       this.destinoHover.set('..');
       this.ghostPos.set({ x: ev.clientX, y: ev.clientY });
       document.body.classList.add('arrastrando-archivo');
     }
+  }
+
+  // Si el explorador tiene un destino externo (Compartido), detecta cuándo el puntero
+  // está sobre el botón [data-drop-personal] para soltar allí (exportar a personal).
+  private detectarDestinoExterno(ev: PointerEvent) {
+    if (!this.opciones.destinoExterno) return;
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    const sobre = !!el?.closest('[data-drop-personal]');
+    if (sobre !== this.sobrePersonal()) {
+      this.sobrePersonal.set(sobre);
+      document.body.classList.toggle('sobre-personal', sobre);
+    }
+  }
+
+  // Elementos que representa el arrastre: si la fila iniciadora forma parte de una
+  // selección múltiple, se arrastra TODA la selección; si no, solo esa fila.
+  private itemsArrastre(p: { tipo: 'archivo' | 'carpeta'; ref: string; nombre: string }): ItemArrastre[] {
+    const clave = p.tipo === 'archivo' ? this.claveArchivo(p.ref) : this.claveCarpeta(p.ref);
+    const sel = this.seleccionados();
+    if (sel.size > 1 && sel.has(clave)) return this.itemsDesdeClaves([...sel]);
+    return [{ tipo: p.tipo, ref: p.ref, nombre: p.nombre }];
+  }
+
+  // Convierte claves de selección ('f:<id>' / 'd:<ruta>') en elementos arrastrables.
+  private itemsDesdeClaves(claves: string[]): ItemArrastre[] {
+    return claves.map((k) =>
+      k.startsWith('f:')
+        ? { tipo: 'archivo' as const, ref: k.slice(2), nombre: this.archivoPorId(k.slice(2))?.nombre ?? '' }
+        : { tipo: 'carpeta' as const, ref: k.slice(2), nombre: this.nombreHoja(k.slice(2)) },
+    );
   }
 
   @HostListener('document:pointerup')
@@ -740,13 +786,24 @@ export class ExploradorComponent implements OnInit {
     const a = this.arrastrando();
     const p = this.pendiente;
     const dh = this.destinoHover();
+    const sobrePersonal = this.sobrePersonal();
     this.finArrastre();
     if (a) {
-      // Era un arrastre: mover al destino resuelto.
+      // ¿Soltado sobre "Personal" (destino externo)? → exportar en vez de mover.
+      if (sobrePersonal && this.opciones.destinoExterno) {
+        this.emitirExportacion(a.items);
+        return;
+      }
+      // Era un arrastre normal: mover al destino resuelto.
       if ((dh === '..' || dh === null) && this.rutaActual() === '/') return; // sin padre en la raíz
       const destino = dh === '..' || dh === null ? this.padre(this.rutaActual()) : dh;
-      if (a.tipo === 'archivo') this.moverArchivo(a.ref, destino);
-      else this.moverCarpeta(a.ref, destino);
+      if (a.items.length === 1) {
+        const it = a.items[0];
+        if (it.tipo === 'archivo') this.moverArchivo(it.ref, destino);
+        else this.moverCarpeta(it.ref, destino);
+      } else {
+        this.moverItems(a.items, destino);
+      }
     } else if (p && p.tipo === 'carpeta') {
       // Fue un clic simple sobre una carpeta: entrar.
       this.entrar(p.ref);
@@ -766,8 +823,10 @@ export class ExploradorComponent implements OnInit {
     this.pendiente = null;
     this.arrastrando.set(null);
     this.destinoHover.set(null);
+    this.sobrePersonal.set(false);
     document.body.classList.remove('agarrando');
     document.body.classList.remove('arrastrando-archivo');
+    document.body.classList.remove('sobre-personal');
   }
 
   private moverArchivo(id: string, destino: string) {
@@ -780,6 +839,72 @@ export class ExploradorComponent implements OnInit {
       },
       error: (err) => this.toast.error(mensajeError(err)),
     });
+  }
+
+  // Mueve varios elementos a la vez a una carpeta destino (arrastre múltiple). Las
+  // carpetas se reubican una a una (cada reubicación valida ciclos); los archivos
+  // se agrupan en un forkJoin para un único refresco y un toast de resumen.
+  private moverItems(items: ItemArrastre[], destino: string) {
+    for (const c of items.filter((i) => i.tipo === 'carpeta')) this.moverCarpeta(c.ref, destino);
+    const ops = items
+      .filter((i) => i.tipo === 'archivo')
+      .map((i) => this.todos().find((a) => a.id === i.ref))
+      .filter((a): a is Archivo => !!a && this.normalizar(a.carpeta) !== destino)
+      .map((a) => this.datos.actualizar(a.id, { carpeta: destino }));
+    if (ops.length === 0) return;
+    forkJoin(ops).subscribe({
+      next: () => {
+        this.toast.exito(`${ops.length} elemento${ops.length !== 1 ? 's' : ''} movido${ops.length !== 1 ? 's' : ''}`);
+        this.cargar();
+      },
+      error: (err) => this.toast.error(mensajeError(err)),
+    });
+  }
+
+  // --- Exportar a un destino externo (Compartido → Mis archivos) ---
+  private emitirExportacion(items: ItemArrastre[]) {
+    const peticion = this.construirExportacion(items);
+    if (peticion.archivos.length === 0 && peticion.carpetasVacias.length === 0) return;
+    this.copiarAExterno.emit(peticion);
+    this.limpiarSeleccion();
+  }
+
+  // Traduce los elementos a rutas destino relativas a la raíz del destino: los
+  // archivos sueltos van a la raíz ("/"); una carpeta se recrea en la raíz
+  // conservando su subárbol (archivos y subcarpetas vacías). Misma lógica de remap
+  // que copiarCarpeta, pero hacia otro espacio.
+  private construirExportacion(items: ItemArrastre[]): PeticionExportar {
+    const archivos: { id: string; carpetaDestino: string }[] = [];
+    const vacias = new Set<string>();
+    for (const it of items) {
+      if (it.tipo === 'archivo') {
+        archivos.push({ id: it.ref, carpetaDestino: '/' });
+        continue;
+      }
+      const ruta = it.ref;
+      const base = '/' + this.nombreHoja(ruta);
+      for (const a of this.archivosBajo(ruta)) {
+        const rel = this.normalizar(a.carpeta).slice(ruta.length); // '' o '/sub...'
+        archivos.push({ id: a.id, carpetaDestino: base + rel || '/' });
+      }
+      vacias.add(base);
+      for (const c of this.carpetas()) {
+        if (c.ruta.startsWith(ruta + '/')) vacias.add(base + c.ruta.slice(ruta.length));
+      }
+    }
+    return { archivos, carpetasVacias: [...vacias] };
+  }
+
+  // Copiar a destino externo desde el menú contextual (un solo elemento).
+  accionCopiarAExterno(tipo: 'archivo' | 'carpeta', ref: string) {
+    this.cerrarMenu();
+    const nombre = tipo === 'archivo' ? this.archivoPorId(ref)?.nombre ?? '' : this.nombreHoja(ref);
+    this.emitirExportacion([{ tipo, ref, nombre }]);
+  }
+
+  // Copiar a destino externo la selección múltiple (barra bulk).
+  protected ejecutarCopiarAExterno() {
+    this.emitirExportacion(this.itemsDesdeClaves([...this.seleccionados()]));
   }
 
   protected moverCarpeta(origen: string, destinoPadre: string) {

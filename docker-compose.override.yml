@@ -13,6 +13,18 @@ services:
     restart: unless-stopped
     ports:
       - "11434:11434"
+    # GPU de 8 GB: no caben dos modelos grandes a la vez (deepseek-ocr ~6.7 GB +
+    # qwen 4.9 GB, o + bge-m3). Con el keep_alive de 10 min de las llamadas, un
+    # modelo se quedaba fijado en VRAM y la siguiente pasada del MISMO escaneo
+    # (OCR->embeddings->extraccion, que salta de modelo) esperaba hasta 10 min a
+    # que expirara -> el archivo se quedaba "procesando" para siempre.
+    # Con un solo modelo cargado a la vez, Ollama EXPULSA el anterior y carga el
+    # que toca (swap limpio) en vez de esperar. Cuesta una recarga por cambio de
+    # modelo, pero elimina el cuelgue. (En el servidor, con GPU grande y Ollama
+    # externo, este override no aplica.)
+    environment:
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
     volumes:
       - clouddrive_ollama_data:/root/.ollama
     deploy:

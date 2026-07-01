@@ -118,6 +118,10 @@ const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => 
         options: { temperature: 0, num_ctx: 8192 },
         keep_alive: "10m",
       }),
+      // Timeout para no colgarse si Ollama no libera VRAM para cargar el modelo
+      // de chat (ver OLLAMA_TIMEOUT_MS): mejor un 503 reintentable que dejar el
+      // archivo eternamente en "escaneando".
+      signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
     });
   } catch {
     throw new AppError(503, "No se puede conectar con la IA para procesar la factura.");

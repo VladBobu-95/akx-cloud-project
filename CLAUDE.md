@@ -157,7 +157,7 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 | PATCH/DELETE | `/roles/:id` | editar `{nombre?, capacidades?}` / eliminar |
 
 ### `/api/compartido` (carpetas compartidas por rol — Fase 3)
-Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; cualquier miembro con un rol asignado a la carpeta la usa. Almacenamiento **único** (lo que sube uno lo ven todos los del rol). Los archivos compartidos **no van a la papelera** (borrado directo). Dentro de cada carpeta compartida el explorador es **idéntico a "Mis archivos"** (mismo `ExploradorComponent` en el front): subcarpetas persistidas, mover/renombrar/copiar, drag&drop, selección múltiple y descarga zip.
+Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; cualquier miembro con un rol asignado a la carpeta la usa. Almacenamiento **único** (lo que sube uno lo ven todos los del rol). Los archivos compartidos **no van a la papelera** (borrado directo). Dentro de cada carpeta compartida el explorador es **idéntico a "Mis archivos"** (mismo `ExploradorComponent` en el front): subcarpetas persistidas, mover/renombrar/copiar, drag&drop (con **arrastre múltiple**), selección múltiple y descarga zip. Además se puede **copiar a Mis archivos** (menú/bulk o arrastrando sobre "Personales"): copia al espacio personal con el nombre exacto y auto-escaneo de factura como propia; el original permanece en compartido.
 | Método | Ruta | Notas |
 |---|---|---|
 | GET/POST | `/admin` 🔒 admin | listar carpetas de la empresa (con roles) / crear `{nombre, rolesIds[]}` (nombre único por empresa) |
@@ -172,6 +172,7 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | GET | `/archivo/:archivoId/descargar` | streaming del binario (verifica acceso por la carpeta) |
 | PATCH | `/archivo/:archivoId` | renombrar/mover dentro de la carpeta compartida `{nombre?, carpeta?}` |
 | POST | `/archivo/:archivoId/copiar` | duplica el archivo (binario + fragmentos RAG) `{carpeta?, nombre?}` |
+| POST | `/archivo/:archivoId/copiar-a-personal` | copia el archivo al espacio **personal** del usuario (el original sigue en compartido) `{carpeta?}`. Nombre **exacto**, dedup por hash (`{...,duplicado:true}` 200), y auto-escaneo de factura como propia. El front lo usa desde "Copiar a Mis archivos" y al arrastrar sobre "Personales" |
 | DELETE | `/archivo/:archivoId` | borrado definitivo (afecta a todos los del rol) |
 
 ### `/api/archivos`

@@ -35,4 +35,16 @@ export interface OpcionesExplorador {
   soportaIA: boolean;
   // true → los borrados van a la papelera; false → borrado definitivo (compartido).
   aPapelera: boolean;
+  // Si está presente, habilita "Copiar a {etiqueta}" (menú/bulk) y marca el botón con
+  // [data-drop-personal] como zona de drop para exportar fuera del explorador (hoy:
+  // de una carpeta compartida al espacio personal). Ausente en el explorador personal.
+  destinoExterno?: { etiqueta: string };
+}
+
+// Petición de exportación que emite el explorador cuando el usuario copia elementos a
+// un destino EXTERNO (p. ej. Compartido → Mis archivos). Ya trae calculadas las rutas
+// destino (relativas a la raíz del destino) para cada archivo y las subcarpetas vacías.
+export interface PeticionExportar {
+  archivos: { id: string; carpetaDestino: string }[];
+  carpetasVacias: string[];
 }
