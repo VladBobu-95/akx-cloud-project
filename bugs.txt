@@ -1,17 +1,38 @@
-
-ocultar carpeta facturas con todo lo que tiene dentro incluso cuando hago querrys por chat
+- Crear logs para que el admin vea todos los cambios que se han hecho en la carpeta compartida y por quien
+- Prohibir hacer cambios a las carpetas compartidas pero si de lo que hay dentro
+- En compartido en lugar de que aparezc las carpetas directamente , q salgan en un alista igual que mis archivos
+- He quitado el acceso al chatbot del rol y la persona sigue utilizando el chatbot . Si no hay acceso al chatbot directamente no le tiene que aparecer.
+- Tambien un boton mover a compartido o mover a mis archivos (chatbot tambien)
+- En lugar de miembro Empleado 
+- quitar el boton de ver archivos de admin si eres admin
+- acciones en plataforma y equipo esta demasiado a la derecha
+- poner 3 advertencias si pulsas borrar empresa
+- el superadmin que pueda ver los usuarios de cada empresa y sus detalles.
+- paginacion Plataforma
+- si se borra una carpeta vacia que me diga que se borro ,no uqe se envio a la papelera
+- que pueda arrastrar carpetas o  ficheros desde compartido a personales y personales a compartido.Si se puede al arrastra y mantener encima de compartido que se abra compartido y asi succesivamente hasta llegar a la carpeta qu quiera.
+- poner el mensaje de prohibicion mejor si no pido cosas sobre facturas directamente.Por ejemplosi pido: mejores clientes 
+    Hecho.
+    ✓ Restaurados 0 archivo/s de la papelera.
+- si le doy a ver archivos de otro usuario que me aparezca como le aperece a el en mis archivos para que los pueda abrir tambien y descargar o mover a la lista de mis archivos o los compartidos.
+- al subir factura_1 en compartido se subio tambien al personal y esta escaneando todo el rato
+- separar por devoluciones/cliente/emisor
+- quien me ha facturado en juio
+- factura.pdf emisor mal
+- personalizar acceso a chatbot
+- fecha esta mal en invoice.pdf
+- si hay menos en factura no lo cuenta
+- poder escribir otro comando y cancelar el anterior
+- losta todo escanea archivos
+- ocultar carpeta facturas con todo lo que tiene dentro incluso cuando hago querrys por chat
 - falta buscador compartido y boton volver
 - no lee bien facturas por x 
 - la primera factura la lee mal
 - sufijo en compartido para el chatbot
-- archivos huerfanos minio
--quitar chat del superadmin
 - mismo layout en compartido 
 -Carpetas compartidas en dark mode
-- cambiar contraseña en superadmin
-- bloquear al escribir ( no hacer click fuera)
+- quitar camp contraseña en general, ya se puede hacer desde el admin
 - info de la cuenta empresa
-- si hago click en empresa desde super admin poder ver todos los usuarios
 - mayusculas en el correo
 - escanear carpetas compartida factura
 - mirar lo del avatar para redimensionar en front
@@ -25,128 +46,16 @@ ocultar carpeta facturas con todo lo que tiene dentro incluso cuando hago querry
 -pasame todas las facturas en dolar 
 - mover varios seleccionados
 - highlight palabra en buscador
+- Mejorar papelera
 - si se sube un archiv oque no reconoce ,error. El chat si no sabe algo error
-- al selecionar autocompletado en login usuario y depsues contraseña desaparece la linea vertical
 - pensar en segundo plano(el chatbot) para poder mover 
 - guardar mensaje del chabot (pensando) 
-- facturas en yen o ...
-- abre facturas junio 2026  de Suministros López SA (o sin de)
+
 
 -escanea todas las facturas 
  Error 504 (supongo pq ya se escanean en segundo plano al subirlas)
 
-- totales facturados toma en cuenta también si una carpeta esta varias veces copiada, no deberia
+- Mirar posibles bug con la carpeta facturas
  
--en la carpeta facturas las facturas escaneadas que tengan el nomre resumen-y el nombre de la factura. tmb en resumen ventas el numero de facturas escaneadas sube siempre auque he borrado facturas o he subido otras (no se actualiza a lo que hay actualmente ,debería solo escanear las facturas qe hay actualmente)
-- En el resumen pnme mas estadísticas ,que podrías poner?
 
-Plan: Multi-tenant (SaaS), roles configurables, equipo y carpetas compartidas
-Context
-AKX Cloud hoy es mono-usuario: cada Usuario tiene un rol string (user/admin, sin uso real) y todo (archivos, carpetas, facturas, fragmentos RAG) se aísla por propietario. El objetivo es venderla como SaaS a varias empresas sobre una sola instancia. Esto exige:
 
-Multi-tenant: una entidad Empresa; todo se aísla además por empresa.
-Onboarding de venta: un superadmin (el dueño de la plataforma = Vlad) da de alta empresas y crea el admin de cada una desde un panel propio. Sin auto-registro.
-Admin de empresa: gestiona su equipo, sus roles configurables y sus carpetas compartidas. Un usuario tiene 0..N roles funcionales.
-Equipo (pestaña solo-admin): crear/editar usuarios y roles, y ver los archivos de cada empleado tal cual los ve él.
-Carpetas compartidas por rol: el admin define carpetas y qué roles acceden; los miembros con ese rol las ven en Mis archivos (toggle Personales / Compartido) y los cambios son visibles para todos los que comparten el rol (almacenamiento único, no copias).
-Decisiones tomadas con Vlad: instancia compartida multi-tenant · alta de empresas por panel de superadmin · roles funcionales configurables por el admin · UI de archivos con toggle Personales / Compartido · entrega completa por fases (3 fases independientes y testeables).
-
-Tras cada fase: cd backend && npm run dev y cd frontend && npm start (dev loop del CLAUDE.md). Las migraciones TypeORM corren al arrancar la API.
-
-Modelo de datos (objetivo final)
-Niveles de cuenta en Usuario.rol (enum): superadmin | admin | miembro (migrar user→miembro). Los roles funcionales (contabilidad, etc.) son entidad aparte y N:N, NO van en Usuario.rol.
-
-empresas (nueva): id, nombre, estado (activa|suspendida), creadoEn.
-usuarios (cambia): + empresa ManyToOne (nullable solo para superadmin); rol enum ampliado; N:N con Rol (join usuario_roles).
-roles (nueva, por empresa, configurable): id, empresa, nombre (unique por empresa), capacidades (jsonb/text[] de un vocabulario fijo que entiende la app: facturas, busqueda, gestion_archivos, chat…), creadoEn; N:N con Usuario. El admin nombra/asigna roles libremente, pero las capacidades que un rol puede otorgar son ese set fijo (porque el código debe saber qué desbloquea cada una).
-carpetas_compartidas (nueva): id, empresa, ruta, nombre, creadoEn; N:N con Rol (join carpeta_compartida_roles) = qué roles acceden.
-archivos/carpetas/facturas/fragmentos (cambian): + empresa (NOT NULL para datos de empresa) e índice. archivos/carpetas/fragmentos además + carpetaCompartida ManyToOne nullable: si es null → personal (gobernado por propietario); si tiene valor → compartido (gobernado por empresa + roles, propietario solo audita quién subió).
-Ajustar unicidad de Carpeta: personal (propietario, ruta), compartida (carpetaCompartida, ruta).
-JWT: añadir empresaId al payload (cambia poco). El rol de cuenta va en el JWT; los roles funcionales se consultan en BD por request (evita permisos rancios al editar roles, dado que el token vive 7d). Actualizar generarToken, JwtPayload, express.d.ts (req.usuario + empresaId).
-
-FASE 1 — Multi-tenant + auth + panel superadmin
-Backend
-
-Entidad backend/src/entities/Empresa.ts. Relación empresa en Usuario, Archivo, Carpeta, Factura, entities de RAG (Fragmento).
-Usuario.rol → enum superadmin|admin|miembro.
-Migración: crear empresas; backfill = crear "Empresa por defecto" y vincular todos los registros existentes; usuarios.rol 'user'→'miembro'; añadir empresaId + FK + índices a las tablas citadas.
-backend/src/config/env.ts (Zod): + SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD. Al arrancar, si no existe ningún superadmin, sembrarlo (empresa null). Documentar en .env.example y CLAUDE.md.
-backend/src/middlewares/auth.middleware.ts: poblar req.usuario.empresaId; añadir soloSuperadmin (junto al ya existente soloAdmin); bloquear (403) si la empresa del usuario está suspendida (login y requests).
-Auth: quitar la ruta pública POST /api/auth/registro (controller/route/rate-limit de registro en auth.routes.ts). login/perfil se mantienen.
-Plataforma (superadmin): plataforma.service.ts + controller + plataforma.routes.ts (/api/plataforma, verificarToken+soloSuperadmin): GET /empresas, POST /empresas (crea Empresa + su primer admin: nombre, email, pass), PATCH /empresas/:id (renombrar/suspender/activar), DELETE /empresas/:id.
-Aislar por empresa los servicios existentes: añadir filtro empresa (derivado de req.usuario.empresaId) en las queries de archivos.service.ts, carpetas.service.ts, facturas.service.ts, rag.service.ts (additivo a los WHERE propietario).
-Frontend
-
-core/models.ts: Usuario + empresaId; nuevo Empresa.
-pages/login/login.*: dejar solo login (quitar modo/tab "Crear cuenta" y registrar() del flujo de UI).
-core/auth.service.ts: helpers esAdmin()/esSuperadmin() (sobre el signal usuario); quitar registrar() del uso público.
-Guards nuevos core/admin.guard.ts y core/superadmin.guard.ts (patrón de auth.guard.ts, redirigen a /inicio si no cumplen).
-pages/plataforma/ (solo superadmin): lista de empresas + alta (empresa + admin) + suspender/borrar. Servicio core/plataforma.service.ts (patrón archivos.service.ts).
-layout/shell.html: pestaña "Plataforma" si esSuperadmin(), "Equipo" si esAdmin() (esta última se llena en Fase 2). app.routes.ts: rutas con sus guards.
-Verificación F1: sembrar superadmin por .env → login superadmin → crear empresa + admin → logout → login admin (ve su empresa, no la de otros) → confirmar que el auto-registro ya no existe → suspender empresa y comprobar que su admin no entra.
-
-FASE 2 — Equipo: usuarios, roles configurables, ver archivos de un miembro
-Backend
-
-Entidad Rol (por empresa, con capacidades de vocabulario fijo) + join N:N usuario_roles; migración. Helper capacidadesDe(usuarioId) = unión de capacidades de sus roles (admin/superadmin = todas).
-equipo.service.ts + controller + equipo.routes.ts (/api/equipo, verificarToken+ soloAdmin, todo scoped a req.usuario.empresaId):
-Usuarios: GET /usuarios (lista de la empresa), POST /usuarios (nombre, email, password, rolesIds[], opcional rol de cuenta), PATCH /usuarios/:id (editar datos, password opcional, rolesIds[], rol), DELETE /usuarios/:id.
-Roles: GET/POST/PATCH/DELETE /roles (CRUD de roles de la empresa).
-Ver archivos de un miembro: GET /usuarios/:id/archivos (reusa listarArchivos con el id objetivo + chequeo misma-empresa; solo lectura/descarga).
-Mover la creación de usuarios aquí (sustituye al antiguo registro público).
-Frontend
-
-core/models.ts: Rol, Miembro.
-pages/equipo/equipo.* (plantilla: pages/papelera/):
-Lista de miembros estilo "Mis archivos" (tabla/tarjetas) con botón Editar a la derecha de cada uno → modal editar datos + multi-select de roles + rol de cuenta.
-Botón + Agregar miembro (mismo modal).
-Sección Gestionar roles: crear/renombrar/borrar roles + toggles de capacidades (facturas, búsqueda, gestión de archivos, chat…) por rol.
-Al seleccionar un miembro → vista de sus archivos reutilizando el explorador (modo lectura) vía GET /usuarios/:id/archivos.
-core/equipo.service.ts (patrón archivos.service.ts).
-Verificación F2: como admin, crear roles (contabilidad, mantenimiento…), crear un miembro con 2 roles, editarlo (quitar un rol), abrir su detalle y ver sus archivos, borrar miembro. Confirmar aislamiento entre empresas.
-
-FASE 3 — Carpetas compartidas por rol + RAG + toggle en Mis archivos
-Backend
-
-Entidad CarpetaCompartida + join carpeta_compartida_roles; migración que añade carpetaCompartidaId (nullable) a archivos, carpetas, fragmentos.
-Gestión por el admin (en Equipo o sección propia): CRUD de carpetas compartidas + asignar qué roles acceden (/api/equipo/compartido o /api/compartido, soloAdmin).
-Helper carpetasCompartidasAccesibles(usuarioId) → ids de carpetas cuyos roles intersecan los roles del usuario (consulta BD). Úsalo para autorizar lectura/escritura.
-archivos.service.ts/carpetas.service.ts: soportar ambito = compartido:
-listar carpetas compartidas accesibles (raíces) y navegar/subir/editar dentro (poner carpetaCompartidaId, sin filtro por propietario, scoped a empresa + rol).
-Subcarpetas libres dentro de una carpeta compartida (como en personal).
-rag.service.ts: al indexar un archivo compartido, escribir fragmentos con carpetaCompartidaId; buscarSemantica = fragmentos personales (propietario=yo) UNION fragmentos compartidos accesibles. El worker (tareas.service.ts) deriva el ámbito del propio archivo.
-Escaneo/OCR único en compartido: un archivo en carpeta compartida se OCR/escanea e indexa una sola vez al subirse (el resultado vive en BD: textoExtraido, fragmentos, factura). El resto de usuarios del rol reutilizan esa info; nada se reprocesa por usuario. Apóyate en la deduplicación por hashSha256 ya existente y en el almacenamiento único.
-Chat consciente del rol (chat.service.ts) — RBAC enforzado en código, nunca en el prompt (los modelos pequeños no son frontera de seguridad fiable):
-Mapa tool → capacidad en código: cada tool declara qué capacidad requiere (o ninguna = siempre disponible). Capacidades = grupos: facturas (escanear/listar/ ventas_top/totales/clientes_top/obtener_factura), busqueda (buscar_semantica/ leer_archivo), gestion_archivos (crear/copiar/mover/renombrar/eliminar/papelera), chat (usar el chatbot). Se guardan como array de strings en Rol.capacidades, así partir un grupo en piezas más finas luego NO requiere migración.
-Defensa en profundidad: gating en las DOS capas — se cortocircuitan los pre-flights por regex de capacidades ausentes y se filtra el registro de tools del bucle según capacidadesDe(usuario). Si el rol no tiene la capacidad, la tool ni se carga (el dato no es recuperable) y el bot responde "esto no está disponible para tu rol".
-System prompt consciente del rol = capa blanda de UX (enfoca al bot en el dominio del rol para que ni lo intente); NO es la frontera de seguridad.
-Scope por datos: las tools de búsqueda/lectura operan sobre lo que el usuario puede ver (personal + carpetas compartidas accesibles), reusando los helpers de Fase 3.
-Frontend
-
-pages/archivos/archivos.*: signal ambito: 'personal' | 'compartido' + toggle bajo el buscador (mockup elegido). En compartido: cargar carpetas compartidas accesibles como raíces y reutilizar el explorador (navegación/subida/edición) dentro.
-core/archivos.service.ts: parámetro ambito / endpoints de compartido.
-Admin (Equipo): UI para crear carpetas compartidas y elegir roles con acceso.
-Verificación F3: admin crea carpeta "Contabilidad" y le da acceso al rol contabilidad; dos miembros con ese rol ven la carpeta en el toggle Compartido; uno sube un archivo y el otro lo ve; un miembro sin el rol no la ve; la búsqueda semántica encuentra el archivo compartido para quien tiene acceso y no para quien no. Chat por rol: un miembro de mantenimiento (sin capacidad facturas) pide "lista mis facturas" → el bot responde que no está disponible para su rol; un miembro de contabilidad sí las lista. Escaneo único: subir una factura a compartido la escanea una vez; otro usuario la ve ya procesada sin reescaneo (verificar logs: no se vuelve a llamar a OCR/Ollama).
-
-Reutilización (no reinventar)
-soloAdmin ya existe en auth.middleware.ts; el JWT ya lleva rol.
-Patrón de servicio HTTP: frontend/src/app/core/archivos.service.ts.
-Plantilla de página simple: frontend/src/app/pages/papelera/.
-Explorador reutilizable (árbol, paginación cliente, selección): pages/archivos/.
-Headers de paginación X-Total-Count/-Pages/-Current-Page ya implementados.
-Limitaciones asumidas en este alcance (revisables luego)
-El chat IA respeta capacidades de rol (RBAC enforzado en código, mapa tool→capacidad) y el scope de datos accesibles (personal + compartido del rol). Granularidad por grupos; refinar un grupo en piezas más finas luego no requiere migración (es un array de strings).
-Las facturas en carpetas compartidas se escanean una sola vez y son visibles para los usuarios del rol, pero no se atribuyen a un único propietario (la analítica personal de facturas sigue centrada en lo personal; ampliar la analítica compartida queda para después).
-Self-serve de empresas (registro público + trial/billing) queda fuera; el modelo de datos lo permite encima del panel de superadmin.
-Los roles funcionales se consultan en BD por request (cambios de rol surten efecto sin re-login); solo rol de cuenta y empresaId viajan en el JWT.
-
-Backend: COMPLETO y compila (npx tsc --noEmit pasa). Incluye: entidad CarpetaCompartida + migración, compartido.service/controller/routes (/api/compartido), RAG con fragmentos compartidos + búsqueda que incluye lo accesible, worker que no auto-escanea facturas compartidas, y el chat por rol (mapa tool→capacidad, guard en el ejecutor, filtro de tools que ve el modelo, y pre-flights de facturas gateados).
-
-Frontend: ESCRITO pero sin compilar todavía (justo se quedó el ng build sin ejecutar): toggle Personales/Compartido en Mis archivos, componente app-compartido, y la pestaña Compartido en Equipo (admin gestiona carpetas + roles).
-
-Lo que falta (en orden, en el handoff con detalle)
-cd frontend && npx ng build y arreglar errores de plantilla (lo más probable: mis @if del toggle en archivos.html o el bloque/modal nuevo en equipo.html).
-cd backend && npm test — confirmar que el chat-gating no rompió confirmacion.test.ts, y añadir tests de compartido y de chat por rol.
-Actualizar CLAUDE.md (entidad, rutas /api/compartido, schema, limitaciones) y borrar el HANDOFF al terminar.
-Desplegar: docker compose build api web && docker compose up -d api web (corre la migración AgregarCompartido). Ctrl+F5 en el navegador.
-Verificar: admin crea carpeta "Contabilidad" con rol → miembro con rol la ve/sube/descarga, sin rol no; chat de mantenimiento no lista facturas.
