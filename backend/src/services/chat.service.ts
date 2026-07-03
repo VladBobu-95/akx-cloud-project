@@ -1417,6 +1417,55 @@ export const chatear = async (
     return { mes, anio };
   };
 
+  // Detecta un RANGO de periodo y lo convierte a desde/hasta (ISO): "de junio a
+  // julio", "de marzo 2005 a mayo 2026", "entre enero y marzo", "de 2005 a 2026".
+  // detectarMesAnio solo capta UN mes (se queda con el primero), así que sin esto
+  // "facturas de junio a julio" mostraba solo junio. El año que falte en un extremo
+  // se hereda del otro (o el actual si faltan ambos); si el usuario invierte el
+  // orden ("de julio a junio") se corrige. Devuelve null si no hay dos extremos
+  // unidos por "a"/"al"/"hasta"/"y"/"-"/"/". `texto` ya viene sin tildes.
+  const detectarRangoPeriodo = (
+    texto: string,
+  ): { desde: string; hasta: string; etiqueta: string } | null => {
+    const meses = Object.keys(MESES).join("|");
+    const conector = `(?:\\s+(?:a|al|hasta|y)\\s+|\\s*[-\\/]\\s*)`;
+    const nombreDe = (m: number, a: number) =>
+      `${new Date(a, m - 1).toLocaleString("es-ES", { month: "long" })} ${a}`;
+    // Rango de MESES: "de <mesA> [añoA] (a|hasta|y) <mesB> [añoB]".
+    const mm = texto.match(
+      new RegExp(
+        `\\b(?:de(?:sde)?\\s+|entre\\s+)?(${meses})\\s*(20\\d{2})?${conector}(${meses})\\s*(20\\d{2})?\\b`,
+      ),
+    );
+    if (mm) {
+      const mesA = MESES[mm[1]];
+      const mesB = MESES[mm[3]];
+      let anioA = mm[2] ? Number(mm[2]) : undefined;
+      let anioB = mm[4] ? Number(mm[4]) : undefined;
+      if (anioA === undefined && anioB === undefined) anioA = anioB = new Date().getFullYear();
+      else if (anioA === undefined) anioA = anioB;
+      else if (anioB === undefined) anioB = anioA;
+      let ini = { y: anioA!, m: mesA };
+      let fin = { y: anioB!, m: mesB };
+      if (ini.y > fin.y || (ini.y === fin.y && ini.m > fin.m)) [ini, fin] = [fin, ini];
+      const ultimoDia = new Date(fin.y, fin.m, 0).getDate();
+      return {
+        desde: `${ini.y}-${String(ini.m).padStart(2, "0")}-01`,
+        hasta: `${fin.y}-${String(fin.m).padStart(2, "0")}-${ultimoDia}`,
+        etiqueta: `${nombreDe(ini.m, ini.y)} – ${nombreDe(fin.m, fin.y)}`,
+      };
+    }
+    // Rango solo de AÑOS: "de <añoA> (a|hasta|y) <añoB>".
+    const aa = texto.match(new RegExp(`\\b(?:de(?:sde)?\\s+|entre\\s+)?(20\\d{2})${conector}(20\\d{2})\\b`));
+    if (aa) {
+      let a1 = Number(aa[1]);
+      let a2 = Number(aa[2]);
+      if (a1 > a2) [a1, a2] = [a2, a1];
+      return { desde: `${a1}-01-01`, hasta: `${a2}-12-31`, etiqueta: `${a1} – ${a2}` };
+    }
+    return null;
+  };
+
   // Divisa mencionada en el mensaje (código ISO o undefined). Se calcula una vez
   // y la usan todos los pre-flights de facturas de abajo para filtrar por moneda
   // ("facturas en dólares", "cuánto he facturado en yenes"). Calcularlo siempre
@@ -2170,18 +2219,30 @@ export const chatear = async (
   // esTotalesMultiple (varias facturas nombradas).
   const esTotalesGeneral = pideTotales && !esTotalesMultiple && nombresFactura.length < 2;
   if (esTotalesGeneral) {
+    // Un RANGO ("cuánto he facturado de junio a julio", "de marzo 2005 a mayo
+    // 2026") tiene prioridad sobre el mes/año único. En un rango no se extrae
+    // cliente (la "a"/"y" del propio rango contaminaría la extracción).
+    const rango = detectarRangoPeriodo(msgSinTildes);
     const { mes, anio } = detectarMesAnio(msgSinTildes);
-    const clienteRaw = extraerClienteDeFrase(msgSinTildes, msgLower);
-    let cliente = clienteRaw ? limpiarClientePeriodo(clienteRaw) : null;
-    if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
+    let cliente: string | null = null;
+    if (!rango) {
+      const clienteRaw = extraerClienteDeFrase(msgSinTildes, msgLower);
+      cliente = clienteRaw ? limpiarClientePeriodo(clienteRaw) : null;
+      if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
+    }
     // Señal explícita de facturas, para permitir el total de TODO sin filtros
     // ("cuánto he facturado") sin disparar con "cuántos archivos tengo en total"
     // (que también lleva "total" pero no es una pregunta de facturación).
     const senalFacturas = /\bfacturado\b/.test(msgLower) || contieneFactura(msgSinTildes);
-    if (mes || anio || cliente || monedaDetectada || senalFacturas) {
+    if (rango || mes || anio || cliente || monedaDetectada || senalFacturas) {
       const args: Record<string, unknown> = {};
-      if (mes) args.mes = mes;
-      if (anio) args.anio = anio;
+      if (rango) {
+        args.desde = rango.desde;
+        args.hasta = rango.hasta;
+      } else {
+        if (mes) args.mes = mes;
+        if (anio) args.anio = anio;
+      }
       if (cliente) args.cliente = cliente;
       if (monedaDetectada) args.moneda = monedaDetectada;
       const resultado = (await ejecutarTool(
@@ -2209,20 +2270,32 @@ export const chatear = async (
     /\bse\s+vende[n]?\s+(mas|menos)\b/.test(msgSinTildes) ||
     /\bque\b.*\b(mas|menos)\b.*\bse\s+vende/.test(msgSinTildes) ||
     /\bque\s+(mas|menos)\s+(he\s+)?vend(i|o|ido)/.test(msgSinTildes) ||
+    // Verbo ANTES de "más/menos": "qué vendí más", "he vendido más", "vendimos
+    // menos". (El "más/menos" tras el verbo lo distingue de "vendido DE X", que
+    // es el total de un producto concreto, no un ranking.)
+    /\bvend(?:i|o|ido|imos|iste)\s+(mas|menos)\b/.test(msgSinTildes) ||
     /\bproductos?\s+(mas|menos)\s+vendidos?\b/.test(msgSinTildes) ||
     /\branking\s+de\s+(ventas|productos|lo\s+(mas|menos))/.test(msgSinTildes);
   if (esRankingVentas) {
+    // Un RANGO ("qué vendí más de junio a julio", "de 2005 a 2026") tiene
+    // prioridad sobre el mes/año único.
+    const rango = detectarRangoPeriodo(msgSinTildes);
     const { mes, anio } = detectarMesAnio(msgSinTildes);
     const orden = /\bmenos\b/.test(msgSinTildes) ? "menos" : "mas";
     const args: Record<string, unknown> = { orden };
-    if (mes) args.mes = mes;
-    if (anio) args.anio = anio;
-    // "qué es lo más vendido DE [cliente] X" — ranking de productos acotado a
-    // ese cliente, no global. Solo si no hay periodo (single-dimensión).
-    if (!mes && !anio) {
-      let cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
-      if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
-      if (cliente) args.cliente = cliente;
+    if (rango) {
+      args.desde = rango.desde;
+      args.hasta = rango.hasta;
+    } else {
+      if (mes) args.mes = mes;
+      if (anio) args.anio = anio;
+      // "qué es lo más vendido DE [cliente] X" — ranking de productos acotado a
+      // ese cliente, no global. Solo si no hay periodo (single-dimensión).
+      if (!mes && !anio) {
+        let cliente = extraerClienteDeFrase(msgSinTildes, msgLower);
+        if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
+        if (cliente) args.cliente = cliente;
+      }
     }
     // "lo más vendido en dólares" — ranking acotado a esa divisa.
     if (monedaDetectada) args.moneda = monedaDetectada;
@@ -2280,32 +2353,42 @@ export const chatear = async (
     (new RegExp(`\\b(${Object.keys(MESES).join("|")}|20\\d{2})\\b`).test(msgSinTildes) ||
       RELATIVO_PERIODO.test(msgSinTildes));
   if (esListarFacturasPeriodo) {
-    const { mes, anio } = detectarMesAnio(msgSinTildes);
     const filtro: FiltroFacturas = {};
     const partes: string[] = [];
-    if (mes) {
-      const anioEfectivo = anio ?? new Date().getFullYear();
-      const mm = String(mes).padStart(2, "0");
-      const ultimoDia = new Date(anioEfectivo, mes, 0).getDate();
-      filtro.desde = `${anioEfectivo}-${mm}-01`;
-      filtro.hasta = `${anioEfectivo}-${mm}-${ultimoDia}`;
-      const nombreMes = new Date(anioEfectivo, mes - 1).toLocaleString("es-ES", { month: "long" });
-      partes.push(`${nombreMes} ${anioEfectivo}`);
-    } else if (anio) {
-      filtro.desde = `${anio}-01-01`;
-      filtro.hasta = `${anio}-12-31`;
-      partes.push(`${anio}`);
-    }
-    // Combinar el periodo con cliente ("facturas de junio 2026 de Acme") y/o
-    // moneda ("...en dólares"): el periodo no es la única dimensión. El cliente
-    // se descarta si en realidad es solo el periodo (el "de junio 2026" suelto
-    // que captura extraerClienteDeFrase del último "de").
-    const clienteRaw = extraerClienteDeFrase(msgSinTildes, msgLower);
-    let cliente = clienteRaw ? limpiarClientePeriodo(clienteRaw) : null;
-    if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
-    if (cliente) {
-      filtro.cliente = cliente;
-      partes.push(`de ${cliente}`);
+    // Un RANGO ("de junio a julio", "de marzo 2005 a mayo 2026") tiene prioridad
+    // sobre el mes/año único (que se quedaría solo con el primer mes).
+    const rango = detectarRangoPeriodo(msgSinTildes);
+    if (rango) {
+      filtro.desde = rango.desde;
+      filtro.hasta = rango.hasta;
+      partes.push(rango.etiqueta);
+    } else {
+      const { mes, anio } = detectarMesAnio(msgSinTildes);
+      if (mes) {
+        const anioEfectivo = anio ?? new Date().getFullYear();
+        const mm = String(mes).padStart(2, "0");
+        const ultimoDia = new Date(anioEfectivo, mes, 0).getDate();
+        filtro.desde = `${anioEfectivo}-${mm}-01`;
+        filtro.hasta = `${anioEfectivo}-${mm}-${ultimoDia}`;
+        const nombreMes = new Date(anioEfectivo, mes - 1).toLocaleString("es-ES", { month: "long" });
+        partes.push(`${nombreMes} ${anioEfectivo}`);
+      } else if (anio) {
+        filtro.desde = `${anio}-01-01`;
+        filtro.hasta = `${anio}-12-31`;
+        partes.push(`${anio}`);
+      }
+      // Combinar el periodo SIMPLE con cliente ("facturas de junio 2026 de Acme"):
+      // el periodo no es la única dimensión. El cliente se descarta si en realidad
+      // es solo el periodo (el "de junio 2026" suelto que captura extraerClienteDeFrase
+      // del último "de"). No se hace en un rango: la "a"/"y" del propio rango
+      // contaminaría la extracción del cliente.
+      const clienteRaw = extraerClienteDeFrase(msgSinTildes, msgLower);
+      let cliente = clienteRaw ? limpiarClientePeriodo(clienteRaw) : null;
+      if (cliente && monedaDetectada) cliente = limpiarClienteMoneda(cliente);
+      if (cliente) {
+        filtro.cliente = cliente;
+        partes.push(`de ${cliente}`);
+      }
     }
     if (monedaDetectada) {
       filtro.moneda = monedaDetectada;

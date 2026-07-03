@@ -281,6 +281,9 @@ con ejemplos reales de frases que entiende:
   - "cuánto he facturado" (en total)	Totales de todo, agrupados por moneda
   - "lo más vendido en dólares"	Ranking de productos filtrado por divisa
   - cuantos led panel he vendido 
+  - resumen facturas de junio a julio
+  - cuánto facturé de junio a julio
+  - qué vendí más de 2005 a 2026
 - **Imágenes** — ver qué contienen, buscarlas por contenido, o tratarlas como factura:
   - "qué dice foto.jpg" / "muéstrame foto.jpg" (la descripción que se generó al
     subirla: el OCR automático si tenía texto real, o la escrita a mano si no lo tenía)
