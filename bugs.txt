@@ -60,4 +60,10 @@
 - Mirar posibles bug con la carpeta facturas
  
 
+ El typecheck pasa. Pero hay un segundo punto de cuelgue posible y más probable en el contenedor: createWorker("spa") de Tesseract. En la primera ejecución tesseract.js descarga los datos del idioma; si el contenedor no tiene salida a internet o va lento, obtenerWorkerTesseract() se cuelga antes de llegar al timeout de recognize (que solo envuelve recognize, no la creación del worker). Y esto encaja con que funcione en tu máquina (con internet/caché) pero no en el servidor.
 
+Es muy posible que Tesseract nunca se hubiera ejecutado en producción hasta ahora (las imágenes las resuelven granite/deepseek; era solo la 3ª red), y mi cambio es la primera vez que se invoca sobre PDFs. Voy a acotar también la creación del worker y hacer que el reinicio no bloquee:
+
+Ahora acoto la creación del worker en ocrConTesseract:
+
+Typecheck en verde. El código ya no puede colgarse. Pero para que el OCR realmente funcione en el servidor (y no solo "no se cuelgue"), necesito saber si Tesseract puede cargar los datos del idioma ahí. Veo cómo resuelve tesseract.js los ficheros por defecto:

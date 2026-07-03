@@ -210,15 +210,20 @@ const obtenerWorkerTesseract = (): Promise<Worker> => {
 
 // Tras un fallo o timeout de Tesseract, tiramos el worker actual para no arrastrar
 // un worker en mal estado a la siguiente imagen (se recrea solo en la próxima llamada).
+// Anula el singleton al instante (la próxima llamada crea uno nuevo) y termina el
+// viejo en SEGUNDO PLANO y con timeout: si `createWorker` se quedó colgado (p. ej.
+// tesseract.js intentando descargar los datos del idioma sin salida a internet en
+// el contenedor), `await actual` bloquearía aquí para siempre — justo el cuelgue
+// que hay que evitar. Por eso no se espera su resolución.
 const reiniciarWorkerTesseract = async (): Promise<void> => {
   const actual = workerTesseract;
   workerTesseract = null;
   if (actual) {
-    try {
-      await (await actual).terminate();
-    } catch {
-      /* el worker ya podía estar muerto; da igual */
-    }
+    void conTimeout(actual, 5_000, "Tesseract terminate")
+      .then((w) => w.terminate())
+      .catch(() => {
+        /* el worker ya podía estar muerto o colgado; da igual */
+      });
   }
 };
 
@@ -262,10 +267,10 @@ const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer | null> => 
 // Corta una recognize que se cuelgue: sin esto, un worker atascado bloquearía la
 // cola indefinidamente. Al saltar el timeout reiniciamos el worker (más abajo).
 const TIMEOUT_TESSERACT_MS = 60_000;
-const conTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+const conTimeout = <T>(p: Promise<T>, ms: number, etiqueta = "Tesseract"): Promise<T> =>
   Promise.race([
     p,
-    new Promise<T>((_, rej) => setTimeout(() => rej(new Error("Tesseract timeout")), ms)),
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${etiqueta} timeout`)), ms)),
   ]);
 
 // Nunca lanza: ante cualquier fallo/timeout devuelve "" y reinicia el worker, de
@@ -276,7 +281,15 @@ const ocrConTesseract = async (buffer: Buffer): Promise<string> => {
   const preparado = await prepararParaTesseract(buffer);
   if (!preparado) return "";
   try {
-    const worker = await obtenerWorkerTesseract();
+    // También con timeout: la PRIMERA creación del worker descarga los datos del
+    // idioma ("spa"); si eso se cuelga (sin salida a internet / CDN caído en el
+    // contenedor), sin este límite quedaría bloqueado antes incluso del recognize
+    // y colgaría la tarea de la cola para siempre.
+    const worker = await conTimeout(
+      obtenerWorkerTesseract(),
+      TIMEOUT_TESSERACT_MS,
+      "Tesseract init",
+    );
     await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
     const auto = await conTimeout(worker.recognize(preparado), TIMEOUT_TESSERACT_MS);
 
@@ -412,6 +425,13 @@ const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
 // las facturas caben en muchas menos.
 const ESCALA_OCR_PDF = 2;
 const MAX_PAGINAS_OCR_PDF = 8;
+// Timeout DURO del rasterizado: el worker de la cola no tiene timeout por tarea,
+// así que si getScreenshot se colgara (visto: el archivo se quedaba "procesando"
+// para siempre — puede pasar en el contenedor por las libs nativas de canvas/
+// pdfjs), la tarea quedaría "en_proceso" eternamente. Con esto, si el rasterizado
+// no termina a tiempo se aborta y la extracción sigue solo con la capa de texto
+// de pdf-parse (el comportamiento previo a añadir el OCR de página).
+const TIMEOUT_RASTER_MS = 30_000;
 
 // Rasteriza las primeras `maxPaginas` de un PDF (con la MISMA instancia de
 // PDFParse ya abierta) y devuelve el texto que el OCR saca de esas imágenes.
@@ -427,7 +447,11 @@ const MAX_PAGINAS_OCR_PDF = 8;
 const ocrPaginasPdf = async (parser: PDFParse, maxPaginas: number): Promise<string> => {
   let paginas: { data: Uint8Array }[];
   try {
-    const shot = await parser.getScreenshot({ first: maxPaginas, scale: ESCALA_OCR_PDF });
+    const shot = await conTimeout(
+      parser.getScreenshot({ first: maxPaginas, scale: ESCALA_OCR_PDF }),
+      TIMEOUT_RASTER_MS,
+      "Rasterizado PDF",
+    );
     paginas = shot.pages ?? [];
   } catch (err) {
     console.error("[extraccion] no se pudo rasterizar el PDF para OCR:", err);
