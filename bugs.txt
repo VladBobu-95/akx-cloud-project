@@ -60,6 +60,30 @@
 - Mirar posibles bug con la carpeta facturas
  
 
+he vuelto a subir el fichero y ahora se queda colgado en procesando
+Se queda colgado en "procesando" — muy probablemente getScreenshot (que añadí sin timeout) se bloquea en el entorno del servidor y deja la tarea de la cola colgada para siempre. Déjame revisar cómo procesa la cola y confirmar.
+
+Read c:\Users\Vlad\Desktop\Proyectos\akx-cloud-project\backend\src\services\tareas.service.ts
+Confirmado el mecanismo: el worker no tiene timeout por tarea. Si getScreenshot se cuelga (ni resuelve ni lanza), la tarea queda en_proceso para siempre y el archivo en "escaneando" → "colgado en procesando". Yo añadí getScreenshot sin timeout, ese es el fallo.
+
+La solución robusta: ponerle un timeout duro al rasterizado, de modo que si se cuelga (o tarda demasiado en el contenedor), caiga con gracia al texto de pdf-parse (comportamiento previo a mi cambio). Tesseract ya tiene su propio timeout.
+
+Read c:\Users\Vlad\Desktop\Proyectos\akx-cloud-project\backend\src\services\extraccion.service.ts (lines 263-276)
+Generalizo conTimeout con una etiqueta y añado el timeout al rasterizado:
+
+Edit c:\Users\Vlad\Desktop\Proyectos\akx-cloud-project\backend\src\services\extraccion.service.ts
+Modified
+Edit c:\Users\Vlad\Desktop\Proyectos\akx-cloud-project\backend\src\services\extraccion.service.ts
+Added 7 lines
+Edit c:\Users\Vlad\Desktop\Proyectos\akx-cloud-project\backend\src\services\extraccion.service.ts
+Added 4 lines
+Bash Typecheck after timeout changes
+IN
+cd /c/Users/Vlad/Desktop/Proyectos/akx-cloud-project/backend && npx tsc --noEmit 2>&1 | head -20 && echo "=== EXIT $? ==="
+
+OUT
+=== EXIT 0 ===
+
  El typecheck pasa. Pero hay un segundo punto de cuelgue posible y más probable en el contenedor: createWorker("spa") de Tesseract. En la primera ejecución tesseract.js descarga los datos del idioma; si el contenedor no tiene salida a internet o va lento, obtenerWorkerTesseract() se cuelga antes de llegar al timeout de recognize (que solo envuelve recognize, no la creación del worker). Y esto encaja con que funcione en tu máquina (con internet/caché) pero no en el servidor.
 
 Es muy posible que Tesseract nunca se hubiera ejecutado en producción hasta ahora (las imágenes las resuelven granite/deepseek; era solo la 3ª red), y mi cambio es la primera vez que se invoca sobre PDFs. Voy a acotar también la creación del worker y hacer que el reinicio no bloquee:
