@@ -624,7 +624,18 @@ export const escanearFactura = async (
       datos.fecha?.trim() ||
       datos.emisor?.trim()
     );
-    if (!tieneImportes || !tieneIdentificacion) {
+    // Factura legítima de importe 0 (p. ej. una devolución/RMA sin cargo: el PDF
+    // trae los importes en blanco —solo el símbolo "€" sin número— y
+    // verificarImportesReales los dejó a 0 arriba). Sin esto caería como
+    // "no_factura" pese a ser una factura real. Solo se acepta con una señal
+    // FUERTE e inequívoca —el texto dice literalmente "factura" Y la IA sacó nº
+    // + (fecha o emisor)— para no abrir la puerta a que cualquier PDF con un
+    // número suelto cuele como factura de 0 €.
+    const señalFuerteFactura =
+      /\bfactura\b/i.test(contenido) &&
+      !!datos.numero?.trim() &&
+      (!!datos.fecha?.trim() || !!datos.emisor?.trim());
+    if ((!tieneImportes && !señalFuerteFactura) || !tieneIdentificacion) {
       await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
       // Si un escaneo anterior llegó a guardar una factura (inventada) para este
       // archivo, ahora que sabemos que NO es factura la eliminamos: si no, seguiría
@@ -1040,7 +1051,8 @@ export const ventasTop = async (
   // Ranking TOP-N POR MONEDA: no se puede sumar unidades de productos facturados
   // en divisas distintas en una misma tabla. ROW_NUMBER particionado por moneda
   // da las N primeras de cada divisa; el llamador (rankingMd) las agrupa en una
-  // sección por moneda.
+  // sección por moneda. `l."total" > 0` descarta las líneas de importe 0 (una
+  // devolución/RMA sin cargo NO es una venta: no debe salir en "más vendidos").
   const filas: { producto: string; moneda: string; unidades: number; importe: number }[] =
     await AppDataSource.query(
       `SELECT t.producto, t.moneda, t.unidades, t.importe FROM (
@@ -1052,7 +1064,7 @@ export const ventasTop = async (
          FROM "lineas_factura" l
          JOIN "facturas" f ON f."id" = l."facturaId"
          LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-         WHERE ${where}
+         WHERE ${where} AND l."total" > 0
          GROUP BY lower(l."descripcion"), f."moneda"
        ) t
        WHERE t.rn <= ${limiteParam}
@@ -1216,6 +1228,8 @@ export const clientesTop = async (
   const limiteParam = `$${params.length + 1}`;
   // TOP-N POR MONEDA: el gasto de un cliente en € y en $ son cifras distintas
   // que no se suman. ROW_NUMBER particionado por moneda da las N de cada divisa.
+  // `HAVING SUM(total) > 0` excluye del ranking a un cliente cuyo gasto total es
+  // 0 (solo facturas de devolución sin cargo): no es "quién más/menos gastó".
   const filas: { cliente: string; moneda: string; numfacturas: string; importe: string }[] =
     await AppDataSource.query(
       `SELECT t.cliente, t.moneda, t.numfacturas, t.importe FROM (
@@ -1228,6 +1242,7 @@ export const clientesTop = async (
          LEFT JOIN "archivos" a ON a."id" = f."archivoId"
          WHERE ${where} AND f."cliente" IS NOT NULL AND f."cliente" <> ''
          GROUP BY f."cliente", f."moneda"
+         HAVING SUM(f."total") > 0
        ) t
        WHERE t.rn <= ${limiteParam}
        ORDER BY t.moneda, t.importe ${orden}`,
