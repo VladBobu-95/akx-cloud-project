@@ -404,6 +404,43 @@ const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
   return await asegurarEspanol(resultado);
 };
 
+// Escala de rasterizado del PDF antes del OCR: a escala 1 la página A4 sale a
+// ~595px de ancho y el texto pequeño/denso se pierde; x2 (~1190px) le da a
+// Tesseract píxeles de sobra por carácter sin disparar el coste. Tope de páginas
+// para un PDF escaneado sin capa de texto: acota el coste del OCR (2 pasadas de
+// Tesseract por página) en documentos largos — el membrete/emisor y casi todas
+// las facturas caben en muchas menos.
+const ESCALA_OCR_PDF = 2;
+const MAX_PAGINAS_OCR_PDF = 8;
+
+// Rasteriza las primeras `maxPaginas` de un PDF (con la MISMA instancia de
+// PDFParse ya abierta) y devuelve el texto que el OCR saca de esas imágenes.
+// Sirve para leer lo que pdf-parse NO ve: texto que en el PDF va como IMAGEN
+// —logos/membretes con el nombre y NIF del emisor, o una factura entera
+// escaneada—. Usa Tesseract directamente en vez de la cascada de visión
+// (ocrImagen) porque una página de PDF renderizada es texto impreso limpio a
+// resolución real (el caso ideal de Tesseract), mientras que los VLM la
+// reescalan a baja resolución y pierden el texto denso (granite llegó a
+// devolver "no se puede transcribir el contenido" ante esta misma página).
+// Nunca lanza: si el rasterizado falla (p. ej. faltan libs nativas de canvas en
+// el contenedor), devuelve "" y la extracción continúa solo con la capa de texto.
+const ocrPaginasPdf = async (parser: PDFParse, maxPaginas: number): Promise<string> => {
+  let paginas: { data: Uint8Array }[];
+  try {
+    const shot = await parser.getScreenshot({ first: maxPaginas, scale: ESCALA_OCR_PDF });
+    paginas = shot.pages ?? [];
+  } catch (err) {
+    console.error("[extraccion] no se pudo rasterizar el PDF para OCR:", err);
+    return "";
+  }
+  const textos: string[] = [];
+  for (const p of paginas) {
+    const t = (await ocrConTesseract(Buffer.from(p.data))).trim();
+    if (t) textos.push(t);
+  }
+  return textos.join("\n\n");
+};
+
 // Carácter NUL: hay que quitarlo del texto extraído porque Postgres no admite
 //  en columnas de texto. Se construye así para no meter el byte en el código.
 const NUL = String.fromCharCode(0);
@@ -422,9 +459,29 @@ export const extraerTexto = async (
   try {
     if (mt === "application/pdf" || nom.endsWith(".pdf")) {
       const parser = new PDFParse({ data: buffer });
-      const res = await parser.getText();
-      await parser.destroy();
-      return limpiar(res.text);
+      try {
+        const textoPdf = (await parser.getText()).text?.trim() ?? "";
+        // pdf-parse solo lee la CAPA DE TEXTO del PDF. En muchas facturas el
+        // EMISOR (logo + membrete, y a veces el texto vertical del lateral) va
+        // como IMAGEN, no como texto: su nombre/NIF no aparece aquí y el único
+        // nombre de empresa en el texto suele ser el del CLIENTE. Sin esto la IA
+        // tomaba el cliente como emisor (caso real: una factura de "TRAZA
+        // NOSITEC" a "AKX STUDIO" salía con emisor = AKX). Para recuperar ese
+        // texto en imagen rasterizamos la página y le pasamos OCR, y lo
+        // combinamos con la capa de texto:
+        //  - PDF SIN texto (factura escaneada): OCR de las primeras páginas para
+        //    recuperar TODO el contenido (antes de esto no se indexaba nada).
+        //  - PDF que parece factura pero SÍ trae texto: OCR solo de la 1ª página
+        //    —donde está el membrete/logo— para completar el emisor sin duplicar
+        //    innecesariamente el resto del documento.
+        let ocrTexto = "";
+        if (!textoPdf || pareceFacturaConImportes(textoPdf)) {
+          ocrTexto = await ocrPaginasPdf(parser, textoPdf ? 1 : MAX_PAGINAS_OCR_PDF);
+        }
+        return limpiar([textoPdf, ocrTexto].filter(Boolean).join("\n\n"));
+      } finally {
+        await parser.destroy();
+      }
     }
 
     if (mt === DOCX_MIME || nom.endsWith(".docx")) {
