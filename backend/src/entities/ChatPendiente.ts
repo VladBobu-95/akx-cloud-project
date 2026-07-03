@@ -16,8 +16,10 @@ export class ChatPendiente {
 
   // "confirmacion" = operación masiva IRREVERSIBLE (p. ej. vaciar la papelera)
   // pendiente de un "sí" explícito antes de ejecutarse (#9).
+  // "sugerencia" = una acción que el bot OFRECIÓ hacer (listar/escanear facturas)
+  // y que un "sí" en el turno siguiente completa sin perder el contexto.
   @Column({ type: "varchar" })
-  tipo!: "aclaracion" | "valor" | "confirmacion";
+  tipo!: "aclaracion" | "valor" | "confirmacion" | "sugerencia";
 
   @Column({ type: "jsonb" })
   payload!: Record<string, unknown>;

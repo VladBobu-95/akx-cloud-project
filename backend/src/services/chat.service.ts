@@ -434,6 +434,33 @@ const registrarConfirmacion = async (
   return `⚠️ Vas a **${descripcion}**. Esto **no se puede deshacer**.\n\nResponde **"sí"** para confirmar o **"no"** para cancelar.`;
 };
 
+// Forma del payload de una SUGERENCIA pendiente: una acción concreta que el bot
+// OFRECIÓ hacer ("¿quieres que te muestre las facturas?", "¿las escaneo?") y que
+// un "sí" en el turno siguiente debe COMPLETAR sin perder el contexto (el chat
+// solo manda el último mensaje al modelo, así que un "sí" suelto se quedaba sin
+// referente). A diferencia de la confirmación —que gatea algo irreversible ya
+// decidido—, aquí el bot propuso algo útil y espera el visto bueno. La acción se
+// guarda como un descriptor SERIALIZABLE (no un cierre) para re-ejecutarla al
+// leer el pendiente. Así "que el bot pueda preguntar, pero que el sí cumpla".
+type AccionSugerida =
+  | { tipo: "listar_facturas"; filtro: FiltroFacturas; titulo: string }
+  | { tipo: "escanear_todas"; tipoEscaneo: "pdf" | "imagenes" | "todo" };
+
+interface PayloadSugerencia {
+  accion: AccionSugerida;
+  ts: number;
+}
+
+const registrarSugerencia = async (usuarioId: string, accion: AccionSugerida): Promise<void> => {
+  // Reemplaza cualquier pendiente previo (misma semántica de upsert por PK).
+  await guardarPendiente(
+    usuarioId,
+    "sugerencia",
+    { accion, ts: Date.now() } satisfies PayloadSugerencia,
+    TTL_ACLARACION_MS,
+  );
+};
+
 // Detecta una respuesta afirmativa a una confirmación ("sí", "vale", "hazlo"...).
 const ES_AFIRMACION =
   /^(?:s[ií]|claro|vale|ok(?:ay)?|adelante|hazl[oa]|confirm(?:o|ar|ado)|dale|de\s+acuerdo|eso(?:\s+es)?|exacto|correcto|por\s+supuesto|sip)\b/;
@@ -1587,6 +1614,69 @@ export const chatear = async (
     }
   }
 
+  // Pre-flight: si en el turno anterior el bot OFRECIÓ hacer algo concreto (una
+  // "sugerencia": listar las facturas, escanearlas...), este mensaje puede ser el
+  // visto bueno. Un "sí"/"vale"/"hazlo" EJECUTA la acción propuesta sin perder el
+  // contexto (el modelo solo ve el último mensaje); una negación la descarta con
+  // aviso; cualquier otra orden también la descarta (ya se `tomó`) y sigue su
+  // curso normal más abajo. Así el bot puede preguntar, pero el "sí" cumple.
+  const pendienteSugerencia = await tomarPendiente<PayloadSugerencia>(usuarioId, "sugerencia");
+  if (pendienteSugerencia && Date.now() - pendienteSugerencia.ts < TTL_ACLARACION_MS) {
+    const msgSug = quitarTildes(msgLower).trim();
+    const accion = pendienteSugerencia.accion;
+    const esNegacionSug =
+      /^(?:no|nope|nah|cancela(?:r|lo)?|olvidalo|dejalo|mejor\s+no|para\s+nada|nada)\b/.test(msgSug);
+    // "sí"/"vale"/"hazlo"... o, para el listado, también "todas"/"todo"/"muéstralas".
+    const esAfirmacionSug =
+      ES_AFIRMACION.test(msgSug) ||
+      (accion.tipo === "listar_facturas" &&
+        /^(?:todas|todo|muestral[ao]s|ensenal[ao]s|ver(?:las)?)\b/.test(msgSug));
+    if (esNegacionSug) {
+      return { respuesta: "Vale, lo dejo. Dime si quieres otra cosa.", acciones };
+    }
+    if (esAfirmacionSug) {
+      if (accion.tipo === "listar_facturas") {
+        const { filas, total, paginas } = await listarFacturas(usuarioId, accion.filtro, {
+          pagina: 1,
+          limite: 20,
+        });
+        return {
+          respuesta: listadoFacturasMd(filas, accion.titulo),
+          acciones,
+          tablaFacturas: {
+            titulo: accion.titulo,
+            pagina: 1,
+            totalPaginas: paginas,
+            total,
+            limite: 20,
+            filtro: accion.filtro,
+            filas: filas.map((f) => ({
+              archivoId: f.archivoId,
+              archivoNombre: f.archivoNombre,
+              fecha: formatearFecha(f.fecha),
+              total: f.total,
+              moneda: f.moneda,
+            })),
+          },
+        };
+      }
+      // escanear_todas: delega en la misma tool que el resto de escaneos masivos
+      // (respeta RBAC vía `capacidades` y devuelve su propio `resumen`).
+      const resultado = (await ejecutarTool(
+        "escanear_todas_facturas",
+        { tipo: accion.tipoEscaneo },
+        usuarioId,
+        acciones,
+        capacidades,
+      )) as Record<string, unknown>;
+      if (typeof resultado.error === "string") return { respuesta: resultado.error, acciones };
+      if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+      return { respuesta: "Hecho.", acciones };
+    }
+    // Ni sí ni no explícito: el pendiente ya se descartó; seguimos al flujo normal
+    // tratando este mensaje como una petición nueva.
+  }
+
   // Pre-flight: COMANDOS COMPUESTOS ("ábreme X y Y", "crea X y copia Y y borra Z").
   // Los pre-flights de abajo resuelven UNA sola acción y hacen return en cuanto
   // casan, así que un mensaje con varias órdenes encadenadas solo ejecutaba la
@@ -2302,11 +2392,77 @@ export const chatear = async (
     ),
   );
   const nombreResumen = matchResumenArchivo?.[1]?.trim();
+  // "factura"/"facturas"/"mis facturas"... (genérico, SIN nº ni nombre de archivo
+  // concreto): "resumen factura" no es un archivo llamado "factura", así que no
+  // debe tratarse como resumen de un archivo concreto (caería al modelo, que
+  // alucinaba "he escaneado la factura, ¿te lo muestro?"). Se resuelve aparte.
+  const RE_FACTURA_GENERICA = /^(?:la\s+|una\s+|mi\s+|mis\s+|las\s+|los\s+|tus?\s+)?facturas?$/;
+  const esResumenFacturaGenerico =
+    puedeFacturas && !!nombreResumen && RE_FACTURA_GENERICA.test(nombreResumen);
   const esResumenArchivoConcreto =
     !!matchResumenArchivo &&
     !!nombreResumen &&
     !STOPWORDS_NOMBRE.has(nombreResumen) &&
+    !esResumenFacturaGenerico &&
     !/\b(de\s+todo|de\s+ventas|general)\b/.test(msgSinTildes);
+
+  // Pre-flight: "resumen [de mis] factura(s)" genérico. Resolvemos según cuántas
+  // facturas ESCANEADAS haya, sin inventar nada: 1 sola → su resumen; varias → el
+  // resumen de ventas agregado (o el listado si aún no existe); ninguna → ofrecer
+  // escanearlas (sugerencia: un "sí" lo cumple). Return temprano para no caer en
+  // el pre-flight de facturas de abajo ni en el bucle del modelo.
+  if (esResumenFacturaGenerico) {
+    const { filas, total, paginas } = await listarFacturas(usuarioId, {}, { pagina: 1, limite: 20 });
+    if (total === 0) {
+      await registrarSugerencia(usuarioId, { tipo: "escanear_todas", tipoEscaneo: "pdf" });
+      return {
+        respuesta:
+          "No tengo ninguna factura escaneada todavía. ¿Quieres que escanee tus facturas ahora para poder darte el resumen?",
+        acciones,
+      };
+    }
+    const f0 = filas[0];
+    if (total === 1 && f0?.archivoId && f0.archivoNombre) {
+      const factura = await obtenerFactura(usuarioId, f0.archivoId, f0.archivoNombre);
+      if (factura.encontrada) {
+        return {
+          respuesta: factura.resumen!,
+          acciones,
+          archivos: [{ id: f0.archivoId, nombre: f0.archivoNombre }],
+        };
+      }
+    }
+    // Varias facturas: el resumen agregado (resumen-ventas.md) si existe.
+    const resumenVentas = await localizarResumenVentas(usuarioId);
+    if (resumenVentas) {
+      const contenido = await leerTextoArchivo(resumenVentas.id, usuarioId);
+      return {
+        respuesta: contenido,
+        acciones,
+        archivos: [{ id: resumenVentas.id, nombre: resumenVentas.nombre }],
+      };
+    }
+    // Sin resumen agregado aún: listar las facturas para que elija cuál ver.
+    return {
+      respuesta: listadoFacturasMd(filas, "Tus facturas"),
+      acciones,
+      tablaFacturas: {
+        titulo: "Tus facturas",
+        pagina: 1,
+        totalPaginas: paginas,
+        total,
+        limite: 20,
+        filtro: {},
+        filas: filas.map((f) => ({
+          archivoId: f.archivoId,
+          archivoNombre: f.archivoNombre,
+          fecha: formatearFecha(f.fecha),
+          total: f.total,
+          moneda: f.moneda,
+        })),
+      },
+    };
+  }
 
   // Pre-flight: "pásame/dame/búscame todas las facturas de [cliente] X" es un
   // LISTADO de facturas concretas filtrado por CLIENTE (con botón para abrir
@@ -2372,7 +2528,16 @@ export const chatear = async (
     // encaja en ningún pre-flight anterior (sin periodo/carpeta/cliente, sin
     // verbo de listado/apertura): es demasiado ambiguo para resolverlo aquí, y
     // dejarlo caer en el bucle de tools del modelo es justo el camino lento e
-    // inestable que causaba el cuelgue. Mejor preguntar directamente.
+    // inestable que causaba el cuelgue. Mejor preguntar directamente — pero
+    // dejando lista la respuesta al "sí": si el usuario confirma (o dice "todas"),
+    // el pre-flight de sugerencia de arriba lista TODAS las facturas sin volver a
+    // preguntar. Filtrar por cliente/periodo o los totales son mensajes nuevos que
+    // caen en sus propios pre-flights.
+    await registrarSugerencia(usuarioId, {
+      tipo: "listar_facturas",
+      filtro: {},
+      titulo: "Todas las facturas",
+    });
     return {
       respuesta:
         "No estoy seguro de qué quieres hacer con las facturas. ¿Quieres verlas todas, filtrarlas por cliente o periodo, o ver los totales facturados?",
