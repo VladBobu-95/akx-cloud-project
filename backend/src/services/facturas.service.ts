@@ -1131,8 +1131,10 @@ export type FilaFactura = {
 };
 
 // Lista (no agrega) las facturas que cumplen el filtro, con el archivo asociado
-// para poder ofrecer un botón "Abrir" por cada una. El campo `producto` no
-// aplica aquí (no hay JOIN con lineas_factura, igual que en totalesFacturado).
+// para poder ofrecer un botón "Abrir" por cada una. El filtro `producto` SÍ
+// aplica aquí (para "facturas donde he vendido X" / "facturas con X"): se resuelve
+// con un EXISTS sobre lineas_factura, en vez de un JOIN, para no duplicar filas ni
+// alterar la semántica del ranking (ventasTop, que sí usa el JOIN con alias `l`).
 // Paginado (pagina 1-indexada): con muchas facturas, devolver todas de golpe
 // en el chat sería una tabla enorme — el cuadro HTML del chat pagina pidiendo
 // página a página a esta misma función vía un endpoint dedicado (ver
@@ -1144,10 +1146,15 @@ export const listarFacturas = async (
 ): Promise<{ filas: FilaFactura[]; total: number; paginas: number }> => {
   const pagina = Math.max(1, opts.pagina ?? 1);
   const limite = Math.min(Math.max(1, opts.limite ?? 20), 100);
-  const { producto: _producto, ...rest } = filtro;
+  const { producto, ...rest } = filtro;
   const { where, params } = construirFiltro(usuarioId, rest);
+  let filtroWhere = where;
+  if (producto?.trim()) {
+    params.push(`%${producto.trim()}%`);
+    filtroWhere += ` AND EXISTS (SELECT 1 FROM "lineas_factura" l WHERE l."facturaId" = f."id" AND unaccent(l."descripcion") ILIKE unaccent($${params.length}))`;
+  }
   const [{ total }] = await AppDataSource.query(
-    `SELECT COUNT(*)::int AS total FROM "facturas" f LEFT JOIN "archivos" a ON a."id" = f."archivoId" WHERE ${where}`,
+    `SELECT COUNT(*)::int AS total FROM "facturas" f LEFT JOIN "archivos" a ON a."id" = f."archivoId" WHERE ${filtroWhere}`,
     params,
   );
   const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string; moneda: string }[] =
@@ -1156,7 +1163,7 @@ export const listarFacturas = async (
               f."fecha"::text AS fecha, f."total" AS total, f."moneda" AS moneda
        FROM "facturas" f
        LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-       WHERE ${where}
+       WHERE ${filtroWhere}
        ORDER BY f."fecha" DESC
        LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
       params,

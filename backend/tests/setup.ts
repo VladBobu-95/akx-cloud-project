@@ -44,6 +44,10 @@ beforeAll(async () => {
   if (!AppDataSource.isInitialized) {
     await AppDataSource.initialize(); // synchronize=true crea el esquema
   }
+  // Extensiones que en producción crean las migraciones (aquí usamos synchronize,
+  // que no las ejecuta). Sin "unaccent" fallan los filtros de cliente/producto de
+  // facturas (ILIKE unaccent(...)), que son parte de la funcionalidad probada.
+  await AppDataSource.query("CREATE EXTENSION IF NOT EXISTS unaccent");
   await inicializarBucket();
   // Estado limpio en cada arranque de suite
   await AppDataSource.query(

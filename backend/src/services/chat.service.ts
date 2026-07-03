@@ -1466,6 +1466,73 @@ export const chatear = async (
     return null;
   };
 
+  // Devuelve el periodo del mensaje (rango o mes/año único) como desde/hasta +
+  // etiqueta legible, o {} si no hay periodo. Reúne la lógica de periodo para
+  // poder COMBINARLA con producto ("facturas con X de junio", "cuánto he vendido
+  // de X en 2026").
+  const periodoDelMensaje = (): { desde?: string; hasta?: string; etiqueta?: string } => {
+    const rango = detectarRangoPeriodo(msgSinTildes);
+    if (rango) return { desde: rango.desde, hasta: rango.hasta, etiqueta: rango.etiqueta };
+    const { mes, anio } = detectarMesAnio(msgSinTildes);
+    if (mes) {
+      const anioEfectivo = anio ?? new Date().getFullYear();
+      const mm = String(mes).padStart(2, "0");
+      const ultimoDia = new Date(anioEfectivo, mes, 0).getDate();
+      return {
+        desde: `${anioEfectivo}-${mm}-01`,
+        hasta: `${anioEfectivo}-${mm}-${ultimoDia}`,
+        etiqueta: `${new Date(anioEfectivo, mes - 1).toLocaleString("es-ES", { month: "long" })} ${anioEfectivo}`,
+      };
+    }
+    if (anio) return { desde: `${anio}-01-01`, hasta: `${anio}-12-31`, etiqueta: `${anio}` };
+    return {};
+  };
+
+  // Limpia un nombre de PRODUCTO capturado de una frase: quita comillas,
+  // puntuación, artículo inicial y una COLETILLA final de periodo ("...de junio",
+  // "...de 2026", "...de marzo 2005 a mayo 2026", "...del mes pasado") o de moneda
+  // ("...en dólares"), para que "bombillas de junio en dólares" quede en
+  // "bombillas". Conserva el "de" INTERNO (nombres como "aceite de oliva"): solo
+  // se quita si va seguido de un mes/año, no de una palabra cualquiera.
+  const limpiarNombreProducto = (raw: string): string | null => {
+    const meses = Object.keys(MESES).join("|");
+    const endpoint = `(?:(?:${meses})(?:\\s+20\\d{2})?|20\\d{2})`;
+    const colaPeriodo = new RegExp(
+      `\\s+(?:(?:de|del|en|desde|entre)\\s+${endpoint}(?:\\s+(?:a|al|hasta|y)\\s+${endpoint})?` +
+        `|(?:de\\s+|del\\s+)?(?:este|el)\\s+(?:mes|ano)` +
+        `|(?:de\\s+|del\\s+)?(?:mes|ano)\\s+(?:pasado|anterior|actual))\\s*$`,
+    );
+    const colaMoneda = new RegExp(
+      `\\s+(?:en|de)\\s+(?:${MONEDAS.map((m) => m.re.source).join("|")})\\s*$`,
+    );
+    let p = raw.replace(/^["']+|["']+$/g, "").replace(/[?!.,]+$/g, "").trim();
+    // Dos pasadas para cubrir cualquier orden ("de junio en dólares" / al revés).
+    for (let i = 0; i < 2; i++) p = p.replace(colaMoneda, "").replace(colaPeriodo, "").trim();
+    p = p.replace(/^(?:el|la|los|las|un|una)\s+/, "").trim();
+    return p || null;
+  };
+
+  // "facturas donde he vendido X" / "lista facturas con X" / "facturas que
+  // contienen/incluyen/venden X" / "facturas del producto X" → producto X (filtro
+  // por LÍNEA, no por cliente: "facturas de Acme" sigue siendo cliente). null si no encaja.
+  const extraerProductoFactura = (texto: string): string | null => {
+    if (!contieneFactura(texto)) return null;
+    const patrones = [
+      /\bfacturas?\b.*?\b(?:donde|en\s+las?\s+(?:que|cuales)|en\s+que)\s+(?:he\s+|hemos\s+)?vend\w*\s+(.+)$/,
+      /\bfacturas?\b.*?\bque\s+(?:contienen|incluyen|llevan|tienen|venden|vendieron)\s+(.+)$/,
+      /\bfacturas?\b.*?\bcon\s+(?:el\s+|los?\s+)?(?:productos?\s+)?(.+)$/,
+      /\bfacturas?\b.*?\bdel?\s+producto\s+(.+)$/,
+    ];
+    for (const re of patrones) {
+      const m = texto.match(re);
+      if (m?.[1]) {
+        const p = limpiarNombreProducto(m[1]);
+        if (p) return p;
+      }
+    }
+    return null;
+  };
+
   // Divisa mencionada en el mensaje (código ISO o undefined). Se calcula una vez
   // y la usan todos los pre-flights de facturas de abajo para filtrar por moneda
   // ("facturas en dólares", "cuánto he facturado en yenes"). Calcularlo siempre
@@ -2330,6 +2397,50 @@ export const chatear = async (
       capacidades,
     )) as Record<string, unknown>;
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
+  // Pre-flight: LISTADO de facturas por PRODUCTO concreto (extraerProductoFactura
+  // se define arriba). El modelo no tiene una tool de "listar facturas que
+  // contienen el producto X", así que sin esto caía en el bucle lento o lo
+  // confundía con un ranking/cliente. Se resuelve con listarFacturas +
+  // filtro.producto (EXISTS sobre lineas_factura). Va ANTES del listado por
+  // periodo/cliente para que gane el filtro de producto, y COMBINA el periodo si
+  // lo hay ("facturas con bombillas de junio").
+  const productoFactura = puedeFacturas ? extraerProductoFactura(msgSinTildes) : null;
+  if (productoFactura) {
+    const filtro: FiltroFacturas = { producto: productoFactura };
+    const partes: string[] = [`"${productoFactura}"`];
+    const per = periodoDelMensaje();
+    if (per.desde) {
+      filtro.desde = per.desde;
+      filtro.hasta = per.hasta;
+      partes.push(`de ${per.etiqueta}`);
+    }
+    if (monedaDetectada) {
+      filtro.moneda = monedaDetectada;
+      partes.push(`en ${nombreMoneda(monedaDetectada).toLowerCase()}`);
+    }
+    const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
+    const titulo = `Facturas con ${partes.join(" ")}`;
+    return {
+      respuesta: listadoFacturasMd(filas, titulo),
+      acciones,
+      tablaFacturas: {
+        titulo,
+        pagina: 1,
+        totalPaginas: paginas,
+        total,
+        limite: 20,
+        filtro,
+        filas: filas.map((f) => ({
+          archivoId: f.archivoId,
+          archivoNombre: f.archivoNombre,
+          fecha: formatearFecha(f.fecha),
+          total: f.total,
+          moneda: f.moneda,
+        })),
+      },
+    };
   }
 
   // Periodo relativo ("este mes", "el mes pasado", "este año", "el año
