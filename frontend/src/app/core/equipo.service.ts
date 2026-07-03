@@ -16,6 +16,15 @@ export class EquipoService {
     return this.http.get<string[]>(`${this.base}/capacidades`);
   }
 
+  // --- Empresa propia (nombre + CIF) ---
+  obtenerEmpresa(): Observable<{ id: string; nombre: string; nif: string | null }> {
+    return this.http.get<{ id: string; nombre: string; nif: string | null }>(`${this.base}/empresa`);
+  }
+
+  actualizarEmpresa(datos: { nif?: string }): Observable<{ id: string; nombre: string; nif: string | null }> {
+    return this.http.patch<{ id: string; nombre: string; nif: string | null }>(`${this.base}/empresa`, datos);
+  }
+
   // --- Miembros ---
   listarMiembros(): Observable<Miembro[]> {
     return this.http.get<Miembro[]>(`${this.base}/usuarios`);

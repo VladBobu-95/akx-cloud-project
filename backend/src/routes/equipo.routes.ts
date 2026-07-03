@@ -10,6 +10,8 @@ import {
   ctrlCrearRol,
   ctrlActualizarRol,
   ctrlEliminarRol,
+  ctrlObtenerEmpresa,
+  ctrlActualizarEmpresa,
 } from "../controllers/equipo.controller";
 import { verificarToken, soloAdmin } from "../middlewares/auth.middleware";
 
@@ -19,6 +21,10 @@ const router = Router();
 router.use(verificarToken, soloAdmin);
 
 router.get("/capacidades", ctrlCapacidades);
+
+// Empresa propia (nombre + CIF; el CIF ancla la clasificación venta/compra)
+router.get("/empresa", ctrlObtenerEmpresa);
+router.patch("/empresa", ctrlActualizarEmpresa);
 
 // Miembros
 router.get("/usuarios", ctrlListarMiembros);

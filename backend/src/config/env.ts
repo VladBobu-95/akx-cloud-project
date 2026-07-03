@@ -77,6 +77,13 @@ const envSchema = z.object({
   // amplio sin penalizar la latencia normal (y mantiene los logs de dev limpios).
   WORKER_POLL_MS: z.coerce.number().int().min(200).default(3000),
   WORKER_MAX_INTENTOS: z.coerce.number().int().min(1).default(3),
+  //  - WORKER_TAREA_TIMEOUT_MS: tope DURO por tarea. Red de seguridad: aunque cada
+  //    operación pesada (rasterizado, Tesseract, Ollama) ya tiene su propio
+  //    timeout, si alguna se colgara sin cortar (el archivo se queda "procesando"
+  //    para siempre, tarea "en_proceso" eterna), este límite aborta la tarea, la
+  //    marca como fallo y deja que reintente/termine. 10 min cubre de sobra el peor
+  //    caso real (OCR de un PDF escaneado de varias páginas) sin dejar nada pegado.
+  WORKER_TAREA_TIMEOUT_MS: z.coerce.number().int().min(10_000).default(600_000),
   // Tope de tareas pendientes/en proceso por usuario (#8): evita que uno solo
   // encole miles de archivos y monopolice el worker. Alto para no estorbar
   // subidas masivas normales.

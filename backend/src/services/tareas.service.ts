@@ -223,10 +223,29 @@ const manejarFallo = async (t: Tarea, err: unknown): Promise<void> => {
   console.error(`[worker] tarea ${t.tipo} ${t.id} agotada/definitiva: ${mensaje}`);
 };
 
+// Timeout DURO por tarea (red de seguridad, ver WORKER_TAREA_TIMEOUT_MS). Cada
+// operación pesada (rasterizado, Tesseract, llamadas a Ollama) ya tiene su propio
+// timeout; esto cubre el caso de que, pese a ello, el cuerpo de una tarea no
+// termine y la deje "en_proceso" para siempre (archivo pegado en "procesando").
+// Al saltar, manejarFallo la reintenta o la marca "error" y el archivo sale del
+// limbo. Promise.race NO cancela el trabajo colgado (sigue en segundo plano), pero
+// libera la tarea. OJO: como todo timeout basado en setTimeout, no salva de un
+// bloqueo SÍNCRONO del event loop; cubre los cuelgues reales de este dominio
+// (esperas de red/IO que no resuelven, p. ej. una descarga que nunca llega).
+const conTimeoutTarea = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([
+    p,
+    new Promise<T>((_, rej) =>
+      setTimeout(() => rej(new Error(`Tarea excedió el tiempo máximo (${ms}ms)`)), ms),
+    ),
+  ]);
+
 const procesarTarea = async (t: Tarea): Promise<void> => {
   try {
-    if (t.tipo === "indexar") await ejecutarIndexar(t);
-    else await ejecutarAutoescanear(t);
+    await conTimeoutTarea(
+      t.tipo === "indexar" ? ejecutarIndexar(t) : ejecutarAutoescanear(t),
+      env.WORKER_TAREA_TIMEOUT_MS,
+    );
     await repo().update(t.id, { estado: "ok", error: null });
   } catch (err) {
     await manejarFallo(t, err);

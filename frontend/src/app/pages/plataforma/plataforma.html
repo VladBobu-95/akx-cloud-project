@@ -63,6 +63,11 @@
               <label for="nNombre">Nombre de la empresa</label>
               <input id="nNombre" class="input" type="text" name="nNombre" [(ngModel)]="nNombre" placeholder="Acme S.L." required />
             </div>
+            <div class="field">
+              <label for="nNif">CIF/NIF <span class="muted">(opcional)</span></label>
+              <input id="nNif" class="input" type="text" name="nNif" [(ngModel)]="nNif" placeholder="B12345678" />
+              <small class="muted">Clasifica las facturas como venta o compra. Si lo dejas vacío, se detecta solo al escanear la primera factura.</small>
+            </div>
 
             <p class="muted seccion">Primer administrador</p>
             <div class="field">
@@ -93,11 +98,16 @@
     @if (editando(); as e) {
       <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
-          <h2>Renombrar empresa</h2>
+          <h2>Editar empresa</h2>
           <form (ngSubmit)="guardarEditar()">
             <div class="field">
               <label for="eNombre">Nombre</label>
               <input id="eNombre" class="input" type="text" name="eNombre" [(ngModel)]="eNombre" required />
+            </div>
+            <div class="field">
+              <label for="eNif">CIF/NIF <span class="muted">(opcional)</span></label>
+              <input id="eNif" class="input" type="text" name="eNif" [(ngModel)]="eNif" placeholder="B12345678" />
+              <small class="muted">Ancla para clasificar facturas como venta o compra.</small>
             </div>
             <div class="row" style="justify-content: flex-end; margin-top: 16px;">
               <button type="button" class="btn btn-ghost" (click)="editando.set(null)">Cancelar</button>

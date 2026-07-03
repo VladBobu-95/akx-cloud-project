@@ -5,6 +5,22 @@
       </div>
     </div>
 
+    <!-- CIF de la empresa: ancla para clasificar facturas como venta o compra -->
+    @if (!cargando()) {
+      <div class="card" style="margin-bottom: 16px;">
+        <div class="row" style="align-items: flex-end; gap: 12px; flex-wrap: wrap;">
+          <div class="field" style="margin: 0; flex: 1 1 220px;">
+            <label for="empNif">CIF/NIF de la empresa</label>
+            <input id="empNif" class="input" type="text" name="empNif" [(ngModel)]="nifEdit" placeholder="B12345678" />
+            <small class="muted">Clasifica las facturas como <b>venta</b> (tu empresa emite) o <b>compra</b> (recibe). Se detecta solo al escanear la primera factura; puedes corregirlo aquí.</small>
+          </div>
+          <button class="btn btn-primary" (click)="guardarNif()" [disabled]="guardandoNif() || nifEdit.trim() === (empresaNif() ?? '')">
+            {{ guardandoNif() ? 'Guardando…' : 'Guardar' }}
+          </button>
+        </div>
+      </div>
+    }
+
     <!-- Toggle Miembros / Roles -->
     <div class="toggle">
       <button [class.active]="vista() === 'miembros'" (click)="vista.set('miembros')">Miembros</button>

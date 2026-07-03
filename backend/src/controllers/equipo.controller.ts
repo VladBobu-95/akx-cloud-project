@@ -9,15 +9,36 @@ import {
   crearRol,
   actualizarRol,
   eliminarRol,
+  obtenerEmpresaPropia,
+  actualizarEmpresaPropia,
   schemaCrearMiembro,
   schemaActualizarMiembro,
   schemaCrearRol,
   schemaActualizarRol,
+  schemaActualizarEmpresaPropia,
 } from "../services/equipo.service";
 import { CAPACIDADES } from "../config/capacidades";
 
 // La empresa del admin sale del token (soloAdmin garantiza que existe).
 const empresaDe = (req: Request): string => req.usuario!.empresaId!;
+
+// ---- Empresa propia (nombre + CIF) ----
+export const ctrlObtenerEmpresa = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    res.json(await obtenerEmpresaPropia(empresaDe(req)));
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const ctrlActualizarEmpresa = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const datos = schemaActualizarEmpresaPropia.parse(req.body);
+    res.json(await actualizarEmpresaPropia(empresaDe(req), datos));
+  } catch (error) {
+    next(error);
+  }
+};
 
 // ---- Vocabulario de capacidades (para pintar los toggles en el front) ----
 export const ctrlCapacidades = (_req: Request, res: Response): void => {

@@ -17,6 +17,9 @@ const usuarioRepo = () => AppDataSource.getRepository(Usuario);
 
 export const schemaCrearEmpresa = z.object({
   nombre: z.string().min(1, "el nombre de la empresa es obligatorio"),
+  // CIF/NIF opcional: si no se indica, se auto-aprende al escanear la primera
+  // factura de la empresa (ver resolverDireccion en facturas.service.ts).
+  nif: z.string().trim().optional(),
   admin: z.object({
     email: z.string().email("email inválido"),
     password: z.string().min(8, "la contraseña debe tener al menos 8 caracteres"),
@@ -26,6 +29,8 @@ export const schemaCrearEmpresa = z.object({
 
 export const schemaActualizarEmpresa = z.object({
   nombre: z.string().min(1, "el nombre no puede estar vacío").optional(),
+  // "" (cadena vacía) borra el CIF; undefined lo deja igual.
+  nif: z.string().trim().optional(),
   estado: z.enum(["activa", "suspendida"]).optional(),
 });
 
@@ -58,6 +63,7 @@ export const crearEmpresaConAdmin = async (
   return AppDataSource.transaction(async (manager) => {
     const empresa = manager.create(Empresa, {
       nombre: datos.nombre,
+      nif: datos.nif?.trim() || null,
       estado: "activa",
     });
     await manager.save(empresa);
@@ -85,6 +91,7 @@ export const actualizarEmpresa = async (
   if (!empresa) throw new AppError(404, "Empresa no encontrada");
 
   if (datos.nombre !== undefined) empresa.nombre = datos.nombre;
+  if (datos.nif !== undefined) empresa.nif = datos.nif.trim() || null;
   if (datos.estado !== undefined) empresa.estado = datos.estado;
   await empresaRepo().save(empresa);
   return empresa;

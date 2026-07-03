@@ -27,10 +27,9 @@ Cómo actuar:
   • Si el usuario pide VER o RESUMIR una factura específica YA escaneada → usa "obtener_factura" (lee de BD, rápido, sin re-procesar el PDF).
   • Si el usuario pide ESCANEAR/PROCESAR una o varias facturas concretas por nombre → usa "escanear_factura" UNA VEZ POR CADA archivo mencionado (nunca uses "escanear_todas_facturas" si el usuario nombró archivos específicos).
   • Si el usuario pide escanear/procesar TODAS sus facturas sin nombrarlas → usa "escanear_todas_facturas" con "tipo" según lo que pida: "pdf" (por defecto, solo PDFs) para "escanea todas las facturas"; "imagenes" (SOLO imágenes, NO los PDFs) para "escanea todas las imágenes"/"las fotos"; "todo" (PDFs e imágenes) para "escanea todo"/"todos los archivos". NUNCA escanees los PDFs si solo te pidieron las imágenes.
-- ANALÍTICA DE FACTURAS — llama a la herramienta INMEDIATAMENTE, sin preguntar:
-  • Rankings de productos o buscar un producto ("qué vendí más", "lo más/menos vendido", "ranking", "cuánto he vendido de X") → "ventas_top".
-  • Totales facturados ("cuánto he facturado", "total gastado", "cuánto le he facturado a X") → "totales_facturas".
-  • Ranking de CLIENTES por gasto ("qué cliente gastó más", "top clientes", "mi mejor cliente", "quién me ha comprado menos") → "clientes_top".
+- ANALÍTICA DE FACTURAS — llama a la herramienta INMEDIATAMENTE, sin preguntar. Distingue VENTAS (facturas que la empresa EMITE a sus clientes) de COMPRAS (facturas que RECIBE de sus proveedores):
+  • VENTAS — rankings de productos vendidos ("qué vendí más", "lo más/menos vendido", "cuánto he vendido de X") → "ventas_top"; totales facturados/vendidos ("cuánto he facturado", "cuánto le he facturado a X") → "totales_facturas"; ranking de CLIENTES ("qué cliente gastó más", "mi mejor cliente") → "clientes_top".
+  • COMPRAS — rankings de productos comprados ("qué he comprado más", "cuánto he comprado de X") → "compras_top"; totales de gasto ("cuánto he gastado", "cuánto le he comprado a X", "mi gasto en abril") → "totales_compras"; ranking de PROVEEDORES ("a qué proveedor le compro más", "mi principal proveedor") → "proveedores_top".
   • Aplica filtros SOLO si el usuario los menciona, extrayéndolos del mensaje:
     - Si nombra facturas concretas (por nº o por nombre de archivo) → ponlas TODAS en "facturas" (array).
     - Si nombra a quién se factura → "cliente"; si nombra el proveedor/quien emite → "emisor".
@@ -483,6 +482,73 @@ export const TOOLS = [
           desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
           hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
           limite: { type: "number", description: "cuántos clientes devolver (defecto 10)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "totales_compras",
+      description:
+        "Devuelve los TOTALES de COMPRAS/gastos (nº de facturas, subtotal, IVA y total) sobre las facturas que la empresa ha RECIBIDO de sus proveedores. Úsala cuando pregunten cuánto han GASTADO/COMPRADO en total, en un periodo, o a un proveedor concreto. TODOS los filtros son OPCIONALES.",
+      parameters: {
+        type: "object",
+        properties: {
+          facturas: {
+            type: "array",
+            items: { type: "string" },
+            description: "nº de factura o nombre de archivo de las facturas a incluir",
+          },
+          emisor: { type: "string", description: "filtrar por proveedor (quién emite la factura de compra)" },
+          moneda: { type: "string", description: "filtrar por divisa, código ISO 4217, ej: EUR, USD, JPY, GBP. Solo si el usuario menciona una moneda" },
+          mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
+          anio: { type: "number", description: "año, solo si lo especifica" },
+          desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
+          hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "compras_top",
+      description:
+        "Ranking de PRODUCTOS/servicios más o menos COMPRADOS (unidades e importe), o búsqueda de un producto en las facturas de compra. Úsala cuando pregunten qué han comprado más/menos o cuánto han comprado de un producto. TODOS los filtros son OPCIONALES.",
+      parameters: {
+        type: "object",
+        properties: {
+          facturas: { type: "array", items: { type: "string" }, description: "nº de factura o nombre de archivo" },
+          emisor: { type: "string", description: "filtrar por proveedor (quién emite)" },
+          producto: { type: "string", description: "filtrar por un producto concreto" },
+          moneda: { type: "string", description: "filtrar por divisa, código ISO 4217, ej: EUR, USD, JPY, GBP" },
+          orden: { type: "string", enum: ["mas", "menos"], description: "'mas' = más comprado (defecto), 'menos' = menos" },
+          mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
+          anio: { type: "number", description: "año, solo si lo especifica" },
+          desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
+          hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
+          limite: { type: "number", description: "cuántos productos devolver (defecto 10)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "proveedores_top",
+      description:
+        "Ranking de PROVEEDORES por gasto total (importe comprado y nº de facturas). Úsala cuando pregunten a qué proveedor le compran más/menos, el top de proveedores, o quién es su principal proveedor. TODOS los filtros son OPCIONALES.",
+      parameters: {
+        type: "object",
+        properties: {
+          moneda: { type: "string", description: "filtrar por divisa, código ISO 4217, ej: EUR, USD, JPY, GBP" },
+          orden: { type: "string", enum: ["mas", "menos"], description: "'mas' = a quién más compramos (defecto), 'menos' = a quién menos" },
+          mes: { type: "number", description: "mes 1-12, solo si lo especifica" },
+          anio: { type: "number", description: "año, solo si lo especifica" },
+          desde: { type: "string", description: "fecha inicio YYYY-MM-DD (opcional)" },
+          hasta: { type: "string", description: "fecha fin YYYY-MM-DD (opcional)" },
+          limite: { type: "number", description: "cuántos proveedores devolver (defecto 10)" },
         },
       },
     },

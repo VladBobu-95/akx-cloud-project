@@ -27,5 +27,9 @@ desktop.ini
 # Test coverage
 coverage/
 
-# Datos de idioma de Tesseract.js (se descargan solos en tiempo de ejecución)
+# Datos de idioma de Tesseract.js. Por defecto se ignoran (se descargaban solos en
+# tiempo de ejecución), PERO el modelo español va vendorizado en el repo a
+# propósito: cargarlo en local evita que la descarga desde el CDN se cuelgue en el
+# servidor sin salida a internet (ver backend/tessdata + extraccion.service.ts).
 *.traineddata
+!backend/tessdata/*.traineddata

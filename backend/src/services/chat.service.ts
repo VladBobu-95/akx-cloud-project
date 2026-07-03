@@ -36,13 +36,16 @@ import {
   ventasTop,
   totalesFacturado,
   clientesTop,
+  proveedoresTop,
   listarFacturas,
   listarFacturasPapelera,
   localizarResumenVentas,
+  localizarResumenCompras,
   asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
   clientesTopMd,
+  proveedoresTopMd,
   listadoFacturasMd,
   formatearFecha,
   encolarEscaneoManual,
@@ -508,6 +511,9 @@ const TOOL_CAPACIDAD: Record<string, string> = {
   ventas_top: "facturas",
   totales_facturas: "facturas",
   clientes_top: "facturas",
+  totales_compras: "facturas",
+  compras_top: "facturas",
+  proveedores_top: "facturas",
 };
 
 // Una fila de la tabla clicable de aclaración: `etiqueta` es lo que se muestra,
@@ -1092,6 +1098,43 @@ const ejecutarTool = async (
         const top = await clientesTop(usuarioId, filtro, { orden, limite });
         const prefijo = orden === "asc" ? "Clientes que menos gastaron" : "Clientes que más gastaron";
         return { resumen: clientesTopMd(top, `${prefijo} (${titulo})`) };
+      }
+      case "compras_top": {
+        const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        let pendientes = 0;
+        if (filtro.facturas?.length) {
+          pendientes = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
+        }
+        const orden: "asc" | "desc" = args.orden === "menos" ? "asc" : "desc";
+        const limite = typeof args.limite === "number" ? args.limite : 10;
+        const top = await ventasTop(usuarioId, { ...filtro, tipo: "compra" }, { orden, limite });
+        const prefijo = orden === "asc" ? "Productos menos comprados" : "Productos más comprados";
+        const aviso = pendientes > 0
+          ? `\n\n_${pendientes} factura(s) se están escaneando en segundo plano y todavía no están incluidas — pregúntame de nuevo en breve._`
+          : "";
+        if (pendientes > 0) acciones.push(`${pendientes} factura(s) puesta(s) a escanear`);
+        return { resumen: rankingMd(top, `${prefijo} (${titulo})`) + aviso };
+      }
+      case "totales_compras": {
+        const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        let pendientes = 0;
+        if (filtro.facturas?.length) {
+          pendientes = await asegurarFacturasEscaneadas(usuarioId, filtro.facturas);
+        }
+        const totales = await totalesFacturado(usuarioId, { ...filtro, tipo: "compra" });
+        const aviso = pendientes > 0
+          ? `\n\n_${pendientes} factura(s) se están escaneando en segundo plano y todavía no están incluidas — pregúntame de nuevo en breve._`
+          : "";
+        if (pendientes > 0) acciones.push(`${pendientes} factura(s) puesta(s) a escanear`);
+        return { resumen: totalesMd(totales, `Totales de compras (${titulo})`) + aviso };
+      }
+      case "proveedores_top": {
+        const { filtro, titulo } = filtroFacturasDesdeArgs(args);
+        const orden: "asc" | "desc" = args.orden === "menos" ? "asc" : "desc";
+        const limite = typeof args.limite === "number" ? args.limite : 10;
+        const top = await proveedoresTop(usuarioId, filtro, { orden, limite });
+        const prefijo = orden === "asc" ? "Proveedores a los que menos compramos" : "Proveedores a los que más compramos";
+        return { resumen: proveedoresTopMd(top, `${prefijo} (${titulo})`) };
       }
       default:
         return { error: `herramienta desconocida: ${nombre}` };
@@ -2278,13 +2321,47 @@ export const chatear = async (
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
+  // Pre-flight COMPRAS: "cuánto he gastado/comprado [en abril] [en dólares]" —
+  // total agregado de COMPRAS (tipo=compra), no de ventas. El modelo pequeño a
+  // veces enruta "cuánto he gastado" a totales_facturas (ventas) y devuelve vacío,
+  // así que se resuelve aquí de forma determinista. Va ANTES del de ventas porque
+  // "gastado"/"compra" es señal inequívoca de compras.
+  const intentGasto = /\b(gastad[oa]s?|gasto|gastos|comprad[oa]s?|compras?)\b/.test(msgSinTildes);
+  const esTotalesCompras =
+    puedeFacturas &&
+    intentGasto &&
+    (/\bcuant/.test(msgSinTildes) || pideTotales) &&
+    nombresFactura.length < 2 &&
+    !/\bvendid|factur/.test(msgSinTildes);
+  if (esTotalesCompras) {
+    const rango = detectarRangoPeriodo(msgSinTildes);
+    const { mes, anio } = detectarMesAnio(msgSinTildes);
+    const args: Record<string, unknown> = {};
+    if (rango) {
+      args.desde = rango.desde;
+      args.hasta = rango.hasta;
+    } else {
+      if (mes) args.mes = mes;
+      if (anio) args.anio = anio;
+    }
+    if (monedaDetectada) args.moneda = monedaDetectada;
+    const resultado = (await ejecutarTool(
+      "totales_compras",
+      args,
+      usuarioId,
+      acciones,
+      capacidades,
+    )) as Record<string, unknown>;
+    if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
   // Pre-flight: "cuánto he facturado/total facturado [en abril] [de cliente X]
   // [en dólares]" sin nombrar facturas concretas — total agregado que combina
   // periodo + cliente + moneda (las dimensiones que aparezcan). Si no se da
   // ninguna pero el mensaje habla claramente de facturas ("cuánto he facturado
   // en total"), devuelve los totales de TODO (agrupados por moneda). Distinto de
   // esTotalesMultiple (varias facturas nombradas).
-  const esTotalesGeneral = pideTotales && !esTotalesMultiple && nombresFactura.length < 2;
+  const esTotalesGeneral = pideTotales && !esTotalesMultiple && !esTotalesCompras && nombresFactura.length < 2;
   if (esTotalesGeneral) {
     // Un RANGO ("cuánto he facturado de junio a julio", "de marzo 2005 a mayo
     // 2026") tiene prioridad sobre el mes/año único. En un rango no se extrae
@@ -2796,6 +2873,31 @@ export const chatear = async (
       return {
         respuesta:
           "Todavía no hay ningún resumen de ventas — se genera automáticamente en /facturas al escanear la primera factura.",
+        acciones,
+      };
+    }
+    const contenido = await leerTextoArchivo(archivo.id, usuarioId);
+    return {
+      respuesta: contenido,
+      acciones,
+      archivos: [{ id: archivo.id, nombre: archivo.nombre }],
+    };
+  }
+
+  // Pre-flight: "resumen de compras / de gastos" → resumen-compras.md (el agregado
+  // que vive en /facturas, espejo del de ventas). Se excluye si se nombra una
+  // factura concreta.
+  const esResumenCompras =
+    puedeFacturas &&
+    /\bresumen(es)?\b/.test(msgSinTildes) &&
+    /\b(de\s+compras|de\s+gastos|gastos)\b/.test(msgSinTildes) &&
+    !/\bfacturas?[\d_-]/.test(msgSinTildes);
+  if (esResumenCompras) {
+    const archivo = await localizarResumenCompras(usuarioId);
+    if (!archivo) {
+      return {
+        respuesta:
+          "Todavía no hay ningún resumen de compras — se genera automáticamente en /facturas al escanear la primera factura de compra.",
         acciones,
       };
     }

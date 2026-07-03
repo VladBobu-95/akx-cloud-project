@@ -10,7 +10,7 @@ import { env } from "../config/env";
 import { z } from "zod";
 import { crearCarpeta, normalizarRuta } from "./carpetas.service";
 import {
-  regenerarResumenVentasSerie,
+  regenerarResumenesFacturasSerie,
   esArchivoFactura,
   actualizarResumenFacturaSiExiste,
   localizarResumenDeArchivo,
@@ -18,11 +18,12 @@ import {
 
 // Best-effort: nunca debe romper la operación de archivos en sí si falla
 // (p. ej. MinIO caído al regenerar el .md). Se usa tras cualquier cambio en
-// qué archivos están activos/en papelera, para que "resumen-ventas.md" (carpeta
-// /facturas) refleje siempre solo las facturas con archivo activo.
+// qué archivos están activos/en papelera, para que "resumen-ventas.md" y
+// "resumen-compras.md" (carpeta /facturas) reflejen siempre solo las facturas
+// con archivo activo.
 const refrescarResumenVentas = (usuarioId: string): void => {
-  void regenerarResumenVentasSerie(usuarioId).catch((err) =>
-    console.error("[archivos] Error al regenerar resumen-ventas (no crítico):", err),
+  void regenerarResumenesFacturasSerie(usuarioId).catch((err) =>
+    console.error("[archivos] Error al regenerar resúmenes de facturas (no crítico):", err),
   );
 };
 

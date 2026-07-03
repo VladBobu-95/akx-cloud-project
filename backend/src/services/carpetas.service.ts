@@ -4,7 +4,7 @@ import { Usuario } from "../entities/Usuario";
 import { Archivo } from "../entities/Archivo";
 import { AppError } from "../utils/errors";
 import { copiarArchivo } from "./archivos.service";
-import { regenerarResumenVentasSerie, enSerieFacturas } from "./facturas.service";
+import { regenerarResumenesFacturasSerie, enSerieFacturas } from "./facturas.service";
 
 const repo = () => AppDataSource.getRepository(Carpeta);
 
@@ -12,8 +12,8 @@ const repo = () => AppDataSource.getRepository(Carpeta);
 // directo por SQL (no pasan por eliminarArchivo/borrarPermanente), así que no
 // hay riesgo de bucle con la propia regeneración de "resumen-ventas.md".
 const refrescarResumenVentas = (usuarioId: string): void => {
-  void regenerarResumenVentasSerie(usuarioId).catch((err) =>
-    console.error("[carpetas] Error al regenerar resumen-ventas (no crítico):", err),
+  void regenerarResumenesFacturasSerie(usuarioId).catch((err) =>
+    console.error("[carpetas] Error al regenerar resúmenes de facturas (no crítico):", err),
   );
 };
 

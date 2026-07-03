@@ -12,6 +12,9 @@ export interface Usuario {
 export interface Empresa {
   id: string;
   nombre: string;
+  // CIF/NIF: ancla para clasificar facturas como venta/compra. Se auto-aprende al
+  // escanear la primera factura; opcional al dar de alta.
+  nif?: string | null;
   estado: 'activa' | 'suspendida';
   creadoEn?: string;
   usuariosCount?: number;

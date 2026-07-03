@@ -34,8 +34,20 @@ export class Factura {
   @Column({ nullable: true })
   emisor?: string;
 
+  @Column({ type: "varchar", nullable: true })
+  emisorNif?: string | null;
+
   @Column({ nullable: true })
   cliente?: string;
+
+  @Column({ type: "varchar", nullable: true })
+  clienteNif?: string | null;
+
+  // "venta" (la empresa del propietario es el emisor) | "compra" (es el cliente) |
+  // "desconocido" (no se pudo determinar). La analítica se separa por este campo:
+  // resumen-ventas.md (ventas) vs resumen-compras.md (compras). Ver resolverDireccion.
+  @Column({ type: "varchar", default: "desconocido" })
+  tipo!: "venta" | "compra" | "desconocido";
 
   @Column({ type: "numeric", precision: 12, scale: 2, default: 0 })
   subtotal!: string;

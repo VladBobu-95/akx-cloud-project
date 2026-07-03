@@ -5,6 +5,7 @@ import { AppDataSource } from "../config/database";
 import { Usuario } from "../entities/Usuario";
 import { Rol } from "../entities/Rol";
 import { Archivo } from "../entities/Archivo";
+import { Empresa } from "../entities/Empresa";
 import { AppError } from "../utils/errors";
 import { CAPACIDADES, esCapacidadValida } from "../config/capacidades";
 import { listarArchivos } from "./archivos.service";
@@ -15,6 +16,34 @@ import { listarArchivos } from "./archivos.service";
 
 const usuarioRepo = () => AppDataSource.getRepository(Usuario);
 const rolRepo = () => AppDataSource.getRepository(Rol);
+const empresaRepo = () => AppDataSource.getRepository(Empresa);
+
+// --- Datos de la propia empresa del admin (nombre + CIF) ---
+// El CIF ancla la clasificación venta/compra de las facturas; se auto-aprende al
+// escanear (ver resolverDireccion) pero el admin puede verlo/corregirlo aquí.
+export const schemaActualizarEmpresaPropia = z.object({
+  // "" borra el CIF; undefined lo deja igual.
+  nif: z.string().trim().optional(),
+});
+
+const empresaDTO = (e: Empresa) => ({ id: e.id, nombre: e.nombre, nif: e.nif ?? null });
+
+export const obtenerEmpresaPropia = async (empresaId: string) => {
+  const e = await empresaRepo().findOneBy({ id: empresaId });
+  if (!e) throw new AppError(404, "Empresa no encontrada");
+  return empresaDTO(e);
+};
+
+export const actualizarEmpresaPropia = async (
+  empresaId: string,
+  datos: z.infer<typeof schemaActualizarEmpresaPropia>,
+) => {
+  const e = await empresaRepo().findOneBy({ id: empresaId });
+  if (!e) throw new AppError(404, "Empresa no encontrada");
+  if (datos.nif !== undefined) e.nif = datos.nif.trim() || null;
+  await empresaRepo().save(e);
+  return empresaDTO(e);
+};
 
 // --- Vista pública de un miembro (sin hash) ---
 interface MiembroDTO {

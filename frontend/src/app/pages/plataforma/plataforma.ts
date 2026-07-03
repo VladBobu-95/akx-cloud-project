@@ -23,6 +23,7 @@ export class PlataformaPage {
   // Modal "nueva empresa" (empresa + su primer admin).
   protected mostrarCrear = signal(false);
   protected nNombre = '';
+  protected nNif = '';
   protected nAdminNombre = '';
   protected nAdminEmail = '';
   protected nAdminPassword = '';
@@ -30,6 +31,7 @@ export class PlataformaPage {
   // Modal "renombrar empresa".
   protected editando = signal<Empresa | null>(null);
   protected eNombre = '';
+  protected eNif = '';
 
   // Confirmación de borrado (acción destructiva).
   protected confirmacion = signal<{ empresa: Empresa } | null>(null);
@@ -55,6 +57,7 @@ export class PlataformaPage {
   // --- Crear ---
   abrirCrear() {
     this.nNombre = '';
+    this.nNif = '';
     this.nAdminNombre = '';
     this.nAdminEmail = '';
     this.nAdminPassword = '';
@@ -67,6 +70,7 @@ export class PlataformaPage {
     this.svc
       .crearEmpresa({
         nombre: this.nNombre,
+        nif: this.nNif.trim() || undefined,
         admin: {
           nombre: this.nAdminNombre,
           email: this.nAdminEmail,
@@ -90,6 +94,7 @@ export class PlataformaPage {
   // --- Editar (renombrar) ---
   abrirEditar(empresa: Empresa) {
     this.eNombre = empresa.nombre;
+    this.eNif = empresa.nif ?? '';
     this.editando.set(empresa);
   }
 
@@ -97,7 +102,7 @@ export class PlataformaPage {
     const empresa = this.editando();
     if (!empresa || !this.eNombre) return;
     this.guardando.set(true);
-    this.svc.actualizarEmpresa(empresa.id, { nombre: this.eNombre }).subscribe({
+    this.svc.actualizarEmpresa(empresa.id, { nombre: this.eNombre, nif: this.eNif.trim() }).subscribe({
       next: () => {
         this.guardando.set(false);
         this.editando.set(null);

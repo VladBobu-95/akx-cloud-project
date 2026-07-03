@@ -1,7 +1,8 @@
+import path from "path";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import sharp from "sharp";
-import { createWorker, PSM, type Worker } from "tesseract.js";
+import { createWorker, OEM, PSM, type Worker } from "tesseract.js";
 import { env } from "../config/env";
 
 // MIME de un .docx (Word moderno).
@@ -202,9 +203,27 @@ const pareceResultadoPobre = (texto: string): boolean => {
 // fallan (texto impreso, buen contraste). Al revés, es peor que ellos con fotos o
 // fondos complejos — por eso va el último, no el primero, y solo se usa su
 // resultado si de verdad aporta más que lo que ya había (ver ocrImagen).
+// Datos de idioma de Tesseract VENDORIZADOS (backend/tessdata/spa.traineddata,
+// copiado al contenedor por el Dockerfile). Sin langPath, createWorker("spa")
+// DESCARGA spa.traineddata de un CDN la primera vez: en dev/casa (con internet)
+// tardaba ~0,5s, pero en el servidor SIN salida a internet esa descarga se
+// COLGABA hasta agotar el timeout —y ahora se dispara por cada página de cada PDF
+// de factura—, dejando el archivo "colgado en procesando". Con langPath local +
+// cacheMethod "none" carga el fichero del disco y NUNCA toca la red. gzip:false
+// porque el .traineddata vendorizado va sin comprimir. Se resuelve contra cwd,
+// que es backend/ en dev (npm run dev) y /app en el contenedor (WORKDIR /app):
+// en ambos casos, <cwd>/tessdata.
+const TESSDATA_DIR = path.join(process.cwd(), "tessdata");
+
 let workerTesseract: Promise<Worker> | null = null;
 const obtenerWorkerTesseract = (): Promise<Worker> => {
-  if (!workerTesseract) workerTesseract = createWorker("spa");
+  if (!workerTesseract)
+    workerTesseract = createWorker("spa", OEM.LSTM_ONLY, {
+      langPath: TESSDATA_DIR,
+      cachePath: TESSDATA_DIR,
+      cacheMethod: "none",
+      gzip: false,
+    });
   return workerTesseract;
 };
 

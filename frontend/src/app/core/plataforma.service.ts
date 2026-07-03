@@ -16,6 +16,7 @@ export class PlataformaService {
 
   crearEmpresa(datos: {
     nombre: string;
+    nif?: string;
     admin: { email: string; password: string; nombre: string };
   }): Observable<{ empresa: Empresa; admin: Usuario }> {
     return this.http.post<{ empresa: Empresa; admin: Usuario }>(
@@ -26,7 +27,7 @@ export class PlataformaService {
 
   actualizarEmpresa(
     id: string,
-    datos: { nombre?: string; estado?: 'activa' | 'suspendida' },
+    datos: { nombre?: string; nif?: string; estado?: 'activa' | 'suspendida' },
   ): Observable<Empresa> {
     return this.http.patch<Empresa>(`${this.base}/empresas/${id}`, datos);
   }

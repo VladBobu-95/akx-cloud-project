@@ -19,6 +19,13 @@ export class Empresa {
   @Column()
   nombre!: string;
 
+  // CIF/NIF de la empresa. Ancla para clasificar cada factura como venta (la
+  // empresa es el emisor) o compra (es el cliente). Nullable: no se pide al alta;
+  // se auto-aprende al escanear la primera factura que casa por nombre y el admin
+  // puede corregirlo (ver resolverDireccion en facturas.service.ts).
+  @Column({ type: "varchar", nullable: true })
+  nif?: string | null;
+
   // "activa" = opera con normalidad. "suspendida" = sus usuarios no pueden entrar
   // (bloqueo en login y en cada petición), sin borrar nada. Lo controla el superadmin.
   @Column({ default: "activa" })
