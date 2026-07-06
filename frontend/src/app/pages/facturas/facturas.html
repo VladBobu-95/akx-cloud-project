@@ -3,10 +3,16 @@
   <p class="muted">Revisa y corrige las facturas escaneadas. Lo que edites aquí actualiza la analítica y los resúmenes.</p>
 </div>
 
-<div class="toggle">
-  @for (p of PESTANAS; track p.id) {
-    <button [class.active]="pestana() === p.id" (click)="cambiarPestana(p.id)">{{ p.etiqueta }}</button>
-  }
+<div class="barra">
+  <div class="toggle">
+    @for (p of PESTANAS; track p.id) {
+      <button [class.active]="pestana() === p.id" (click)="cambiarPestana(p.id)">{{ p.etiqueta }}</button>
+    }
+  </div>
+  <button class="btn btn-outline btn-sm" [disabled]="reclasificando()" (click)="reclasificar()"
+          title="Re-aplica venta/compra a las facturas ya escaneadas con el CIF/nombre actual de tu empresa">
+    {{ reclasificando() ? 'Reclasificando…' : '↻ Reclasificar' }}
+  </button>
 </div>
 
 @if (cargando()) {

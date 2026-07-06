@@ -1649,6 +1649,50 @@ export const actualizarFactura = async (
   return obtenerFacturaDetalle(usuarioId, facturaId);
 };
 
+// Re-aplica la clasificación venta/compra a TODAS las facturas del usuario usando
+// los datos ya guardados (emisor/cliente/NIFs + el texto del archivo para el ancla
+// CIF-en-texto), SIN re-escanear ni re-OCR. Para cuando se fija/corrige el CIF de la
+// empresa después de haber escaneado (típico: la empresa estaba sin CIF y todo salió
+// "desconocido"). Aprende el CIF por corroboración si aún no lo tiene y regenera los
+// resúmenes. Devuelve cuántas cambiaron de tipo.
+export const reclasificarFacturas = async (
+  usuarioId: string,
+): Promise<{ actualizadas: number; total: number }> => {
+  const usuario = await AppDataSource.getRepository(Usuario).findOne({
+    where: { id: usuarioId },
+    relations: { empresa: true },
+  });
+  const empresa = usuario?.empresa ?? null;
+  const facturaRepo = AppDataSource.getRepository(Factura);
+  const facturas = await facturaRepo.find({
+    where: { propietario: { id: usuarioId } },
+    relations: { archivo: true },
+  });
+  let actualizadas = 0;
+  for (const f of facturas) {
+    const datos: DatosFactura = {
+      emisor: f.emisor,
+      emisorNif: f.emisorNif ?? undefined,
+      cliente: f.cliente,
+      clienteNif: f.clienteNif ?? undefined,
+    };
+    const nuevo = resolverDireccion(datos, empresa, f.archivo?.textoExtraido ?? "");
+    if (nuevo !== f.tipo) {
+      await facturaRepo.update(f.id, { tipo: nuevo });
+      actualizadas++;
+    }
+  }
+  if (empresa && !empresa.nif) {
+    await intentarAprenderCifEmpresa(empresa.id).catch(() => {});
+  }
+  if (actualizadas > 0) {
+    await regenerarResumenesFacturasSerie(usuarioId).catch((err) =>
+      console.error("[facturas] Error al regenerar resúmenes tras reclasificar (no crítico):", err),
+    );
+  }
+  return { actualizadas, total: facturas.length };
+};
+
 // Ranking de clientes por gasto total. orden 'desc' = quién más gastó (defecto);
 // 'asc' = quién menos. El campo `producto` del filtro no aplica aquí (no hay
 // JOIN con lineas_factura, igual que en totalesFacturado).

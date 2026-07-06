@@ -94,6 +94,8 @@ El sistema cataloga **ventas** (la empresa del propietario es el emisor) y **com
 
 **Edición manual** (`GET`/`PATCH /api/facturas/:id`, página Facturas): el modelo pequeño siempre falla algún campo; la edición es la red de seguridad. `actualizarFactura` parchea cabecera (con `normalizarFecha`/`normalizarMoneda`), reemplaza las líneas enteras (borrar+insertar, para no dejar huérfanas) y regenera el resumen individual + los agregados. La pestaña "Sin clasificar" (filtro `tipo=desconocido`) lista las que hay que rescatar.
 
+**Reclasificar** (`POST /api/facturas/reclasificar`, botón "↻ Reclasificar"): el `tipo` se calcula y **guarda al escanear**, así que fijar/corregir el CIF de la empresa DESPUÉS no reclasifica lo ya escaneado — se quedaría todo en `desconocido`. `reclasificarFacturas` re-ejecuta `resolverDireccion` sobre los datos YA guardados (emisor/cliente/NIFs + el `textoExtraido` del archivo para el ancla CIF-en-texto), **sin re-escanear ni re-OCR** (instantáneo), aprende el CIF por corroboración si aún no lo tiene y regenera los resúmenes. Caso típico: empresa creada sin CIF → todas `desconocido` → el admin pone su CIF en Equipo → "Reclasificar".
+
 ## Chat — abrir archivo desde el chat
 
 Cuando una tool/pre-flight resuelve archivos concretos, `chatear()` devuelve `archivos: {id, nombre}[]`. El front (`pages/inicio/inicio.ts`) muestra un botón "Abrir `<nombre>`" por archivo. La ventana se abre en blanco **en el momento del clic** (antes de pedir el blob) para que el navegador no la bloquee como pop-up.

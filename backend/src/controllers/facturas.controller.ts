@@ -5,6 +5,7 @@ import {
   listarFacturasPapelera,
   obtenerFacturaDetalle,
   actualizarFactura,
+  reclasificarFacturas,
   schemaActualizarFactura,
   type FiltroFacturas,
 } from "../services/facturas.service";
@@ -74,6 +75,20 @@ export const ctrlObtenerFactura = async (
 ): Promise<void> => {
   try {
     res.json(await obtenerFacturaDetalle(req.usuario!.id, String(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/facturas/reclasificar — re-aplica venta/compra a las facturas ya
+// escaneadas con el CIF/nombre actual de la empresa (sin re-escanear).
+export const ctrlReclasificar = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    res.json(await reclasificarFacturas(req.usuario!.id));
   } catch (error) {
     next(error);
   }

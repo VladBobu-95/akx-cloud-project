@@ -35,6 +35,7 @@ export class FacturasPage {
   // Editor
   protected form = signal<FacturaDetalle | null>(null);
   protected guardando = signal(false);
+  protected reclasificando = signal(false);
 
   constructor() {
     this.cargar();
@@ -51,6 +52,25 @@ export class FacturasPage {
     if (p < 1 || p > this.paginas() || p === this.pagina()) return;
     this.pagina.set(p);
     this.cargar();
+  }
+
+  reclasificar() {
+    this.reclasificando.set(true);
+    this.svc.reclasificar().subscribe({
+      next: (r) => {
+        this.reclasificando.set(false);
+        this.toast.exito(
+          r.actualizadas > 0
+            ? `${r.actualizadas} factura(s) reclasificada(s)`
+            : 'Sin cambios (revisa el CIF/nombre de tu empresa en Equipo)',
+        );
+        this.cargar();
+      },
+      error: (err) => {
+        this.reclasificando.set(false);
+        this.toast.error(mensajeError(err));
+      },
+    });
   }
 
   cargar() {

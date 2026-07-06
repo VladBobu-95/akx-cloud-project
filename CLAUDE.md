@@ -204,6 +204,7 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | Método | Ruta | Notas |
 |---|---|---|
 | POST | `/escanear` | `{archivoId, pista?}` — **asíncrono** (202): valida, marca `pendiente`, encola en background; resultado vía polling de la columna "Estado" |
+| POST | `/reclasificar` | re-aplica venta/compra a las facturas YA escaneadas con el CIF/nombre actual de la empresa (sin re-escanear ni re-OCR) → `{actualizadas, total}`. Para cuando se fija el CIF **después** de escanear (si no, todo sale `desconocido`). Botón "↻ Reclasificar" en la página Facturas |
 | GET | `/` | listado paginado — query `cliente`/`emisor`/`carpeta`/`desde`/`hasta`/`facturas`/`moneda`/`tipo`/`papelera`/`pagina`/`limite` → `{filas, total, paginas}`. `tipo`=`venta`\|`compra`\|`desconocido` (pestañas de la página Facturas). Cada fila trae `id/numero/fecha/emisor/cliente/tipo/subtotal/iva/total/moneda`. Lo usan la página Facturas y la paginación de tablas del chat |
 | GET | `/:id` | detalle completo (cabecera + `lineas[]`) para el editor |
 | PATCH | `/:id` | **edición manual** `{numero?,fecha?,emisor?,emisorNif?,cliente?,clienteNif?,tipo?,moneda?,subtotal?,iva?,total?,lineas?}` — corrige lo que la IA sacó mal y **regenera** el resumen individual + los agregados |

@@ -397,7 +397,9 @@ docker-compose.override.yml ollama + adminer (solo en local)
   reales en vez de inventarlos), `GET /` (listado paginado y filtrable — `?tipo=venta|compra|desconocido`
   para las pestañas de la página Facturas y `?...` para la paginación de tablas del chat),
   `GET /:id` (detalle con líneas), `PATCH /:id` (**edición manual**: corrige
-  emisor/cliente/tipo/importes/líneas y regenera los resúmenes)
+  emisor/cliente/tipo/importes/líneas y regenera los resúmenes), `POST /reclasificar`
+  (re-aplica venta/compra a lo ya escaneado con el CIF/nombre actual de la empresa,
+  sin re-escanear — para cuando se fija el CIF después de escanear)
 - `GET /health`: estado de la API y conexión a BD
 
 ## Tests

@@ -26,4 +26,10 @@ export class FacturasService {
   actualizar(id: string, datos: Partial<FacturaDetalle>): Observable<FacturaDetalle> {
     return this.http.patch<FacturaDetalle>(`${this.base}/${id}`, datos);
   }
+
+  // Re-aplica venta/compra a las facturas ya escaneadas con el CIF/nombre actual
+  // de la empresa (sin re-escanear). Útil tras fijar/corregir el CIF.
+  reclasificar(): Observable<{ actualizadas: number; total: number }> {
+    return this.http.post<{ actualizadas: number; total: number }>(`${this.base}/reclasificar`, {});
+  }
 }
