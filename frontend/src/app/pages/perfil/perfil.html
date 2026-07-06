@@ -72,4 +72,28 @@
         <span class="muted">Miembro desde:</span>
         {{ auth.usuario()?.creadoEn ? (auth.usuario()?.creadoEn | date: 'dd/MM/yyyy') : '—' }}
       </p>
+
+      <!-- CIF de la empresa (solo admin): ancla para clasificar facturas venta/compra -->
+      @if (esAdmin) {
+        <div class="field">
+          <label for="empNif">CIF/NIF de la empresa</label>
+          <div class="row" style="align-items: flex-end; gap: 12px; flex-wrap: wrap;">
+            <input
+              id="empNif"
+              class="input"
+              type="text"
+              [(ngModel)]="nifEdit"
+              placeholder="B12345678"
+              style="flex: 1 1 220px;"
+            />
+            <button
+              class="btn btn-primary"
+              (click)="guardarNif()"
+              [disabled]="guardandoNif() || nifEdit.trim() === (empresaNif() ?? '')"
+            >
+              {{ guardandoNif() ? 'Guardando…' : 'Guardar' }}
+            </button>
+          </div>
+        </div>
+      }
     </div>

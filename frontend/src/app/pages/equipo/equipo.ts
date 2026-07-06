@@ -90,11 +90,6 @@ export class EquipoPage {
 
   protected nombreCapacidad = (c: string) => this.CAP_LABELS[c] ?? c;
 
-  // ---- CIF de la empresa (ancla venta/compra de facturas) ----
-  protected empresaNif = signal<string | null>(null);
-  protected nifEdit = '';
-  protected guardandoNif = signal(false);
-
   constructor() {
     this.cargar();
   }
@@ -106,35 +101,16 @@ export class EquipoPage {
       roles: this.svc.listarRoles(),
       capacidades: this.svc.listarCapacidades(),
       compartidas: this.compartidoSvc.listarAdmin(),
-      empresa: this.svc.obtenerEmpresa(),
     }).subscribe({
       next: (r) => {
         this.miembros.set(r.miembros);
         this.roles.set(r.roles);
         this.capacidades.set(r.capacidades);
         this.compartidas.set(r.compartidas);
-        this.empresaNif.set(r.empresa.nif);
-        this.nifEdit = r.empresa.nif ?? '';
         this.cargando.set(false);
       },
       error: (err) => {
         this.cargando.set(false);
-        this.toast.error(mensajeError(err));
-      },
-    });
-  }
-
-  guardarNif() {
-    this.guardandoNif.set(true);
-    this.svc.actualizarEmpresa({ nif: this.nifEdit.trim() }).subscribe({
-      next: (e) => {
-        this.guardandoNif.set(false);
-        this.empresaNif.set(e.nif);
-        this.nifEdit = e.nif ?? '';
-        this.toast.exito('CIF de la empresa actualizado');
-      },
-      error: (err) => {
-        this.guardandoNif.set(false);
         this.toast.error(mensajeError(err));
       },
     });

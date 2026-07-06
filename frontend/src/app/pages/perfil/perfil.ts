@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
 import { ThemeService } from '../../core/theme.service';
+import { EquipoService } from '../../core/equipo.service';
 import { mensajeError } from '../../shared/errores';
 
 @Component({
@@ -16,10 +17,46 @@ export class PerfilPage {
   protected auth = inject(AuthService);
   protected theme = inject(ThemeService);
   private toast = inject(ToastService);
+  private equipo = inject(EquipoService);
 
   protected nombre = this.auth.usuario()?.nombre ?? '';
   protected password = '';
   protected subiendo = signal(false);
+
+  // CIF de la empresa (ancla venta/compra de facturas). Solo admin: el endpoint
+  // /api/equipo/empresa es soloAdmin; el superadmin no tiene empresa.
+  protected esAdmin = this.auth.usuario()?.rol === 'admin';
+  protected empresaNif = signal<string | null>(null);
+  protected nifEdit = '';
+  protected guardandoNif = signal(false);
+
+  constructor() {
+    if (this.esAdmin) {
+      this.equipo.obtenerEmpresa().subscribe({
+        next: (e) => {
+          this.empresaNif.set(e.nif);
+          this.nifEdit = e.nif ?? '';
+        },
+        error: (err) => this.toast.error(mensajeError(err)),
+      });
+    }
+  }
+
+  guardarNif() {
+    this.guardandoNif.set(true);
+    this.equipo.actualizarEmpresa({ nif: this.nifEdit.trim() }).subscribe({
+      next: (e) => {
+        this.guardandoNif.set(false);
+        this.empresaNif.set(e.nif);
+        this.nifEdit = e.nif ?? '';
+        this.toast.exito('CIF de la empresa actualizado');
+      },
+      error: (err) => {
+        this.guardandoNif.set(false);
+        this.toast.error(mensajeError(err));
+      },
+    });
+  }
 
   protected inicial(): string {
     const u = this.auth.usuario();
