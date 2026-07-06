@@ -76,9 +76,53 @@
 .paginacion {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
+  gap: 12px;
   margin-top: 16px;
+  padding: 12px 8px 6px;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  color: var(--muted);
+
+  .spacer { flex: 1; }
+  .pag-size,
+  .pag-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  select,
+  input {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 8px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  select { cursor: pointer; }
+  input {
+    width: 40px;
+    text-align: center;
+    cursor: text;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input:hover,
+  select:hover { border-color: var(--green); }
+  input:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--green);
+    box-shadow: 0 0 0 2px var(--green-soft);
+  }
 }
 
 /* --- Modal editor --- */

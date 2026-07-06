@@ -32,6 +32,9 @@ export class FacturasPage {
   protected pagina = signal(1);
   protected cargando = signal(false);
 
+  protected readonly OPCIONES_TAMANO = [10, 20, 50, 100];
+  protected tamanoPagina = signal(20);
+
   // Editor
   protected form = signal<FacturaDetalle | null>(null);
   protected guardando = signal(false);
@@ -51,6 +54,22 @@ export class FacturasPage {
   irPagina(p: number) {
     if (p < 1 || p > this.paginas() || p === this.pagina()) return;
     this.pagina.set(p);
+    this.cargar();
+  }
+
+  // Saltar a una página escrita a mano (1-based). Acota a [1, totalPaginas]; ignora
+  // texto no numérico o valores < 1.
+  irAPaginaEscrita(valor: string | number) {
+    const n = Math.trunc(Number(valor));
+    if (!Number.isFinite(n) || n < 1) return;
+    this.irPagina(Math.min(n, this.paginas()));
+  }
+
+  // Cambiar el nº de filas por página: vuelve a la primera para no quedar en una
+  // página que ya no existe con el nuevo tamaño.
+  cambiarTamano(valor: number) {
+    this.tamanoPagina.set(valor);
+    this.pagina.set(1);
     this.cargar();
   }
 
@@ -76,7 +95,7 @@ export class FacturasPage {
   cargar() {
     this.cargando.set(true);
     const tipo = this.pestana() === 'todas' ? undefined : (this.pestana() as TipoFactura);
-    this.svc.listar({ tipo, pagina: this.pagina(), limite: 20 }).subscribe({
+    this.svc.listar({ tipo, pagina: this.pagina(), limite: this.tamanoPagina() }).subscribe({
       next: (r) => {
         this.filas.set(r.filas);
         this.total.set(r.total);

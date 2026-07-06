@@ -54,11 +54,32 @@
     </table>
   </div>
 
-  @if (paginas() > 1) {
+  @if (total() > 0) {
     <div class="paginacion">
-      <button class="btn btn-outline btn-sm" [disabled]="pagina() <= 1" (click)="irPagina(pagina() - 1)">‹ Anterior</button>
-      <span class="muted">Página {{ pagina() }} de {{ paginas() }} · {{ total() }} factura(s)</span>
-      <button class="btn btn-outline btn-sm" [disabled]="pagina() >= paginas()" (click)="irPagina(pagina() + 1)">Siguiente ›</button>
+      <label class="pag-size">
+        Por página:
+        <select [ngModel]="tamanoPagina()" (ngModelChange)="cambiarTamano($event)">
+          @for (n of OPCIONES_TAMANO; track n) {
+            <option [ngValue]="n">{{ n }}</option>
+          }
+        </select>
+      </label>
+      <span class="spacer"></span>
+      <span class="muted">{{ total() }} factura(s)</span>
+      <button class="btn btn-outline btn-sm" [disabled]="pagina() <= 1" (click)="irPagina(pagina() - 1)">←</button>
+      <span class="pag-jump">
+        Página
+        <input
+          type="number"
+          min="1"
+          [max]="paginas()"
+          [value]="pagina()"
+          (change)="irAPaginaEscrita($any($event.target).value)"
+          (keyup.enter)="irAPaginaEscrita($any($event.target).value)"
+        />
+        de {{ paginas() }}
+      </span>
+      <button class="btn btn-outline btn-sm" [disabled]="pagina() >= paginas()" (click)="irPagina(pagina() + 1)">→</button>
     </div>
   }
 }
