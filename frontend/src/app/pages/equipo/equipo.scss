@@ -116,14 +116,6 @@
         accent-color: var(--green);
         cursor: pointer;
       }
-      // Roles funcionales deshabilitados al editar un admin (no aplican).
-      .chip.disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .chip.disabled input {
-        cursor: not-allowed;
-      }
       .modal-ancho {
         max-width: 760px;
         width: 100%;

@@ -253,28 +253,29 @@
                 autocomplete="new-password"
               />
             </div>
-            <div class="field">
-              <label for="mRolCuenta">Tipo de cuenta</label>
-              <select id="mRolCuenta" class="input" name="mRolCuenta" [(ngModel)]="mRolCuenta" [disabled]="mEditandoAdmin()">
-                <option value="miembro">Miembro</option>
-                <option value="admin">Administrador</option>
-              </select>
-            </div>
-
-            <p class="seccion">Roles funcionales</p>
-            @if (roles().length === 0) {
-              <p class="muted">No hay roles aún. Créalos en la pestaña «Roles».</p>
-            } @else {
-              <div class="chips">
-                @for (r of roles(); track r.id) {
-                  <label class="chip" [class.on]="mRolesSel().has(r.id)" [class.disabled]="mEditandoAdmin()">
-                    <input type="checkbox" [checked]="mRolesSel().has(r.id)" [disabled]="mEditandoAdmin()" (change)="toggleRolMiembro(r.id)" />
-                    {{ r.nombre }}
-                  </label>
-                }
+            <!-- Tipo de cuenta y roles funcionales no aplican a un admin (ya tiene
+                 todas las capacidades): al editar un admin se ocultan por completo. -->
+            @if (!mEditandoAdmin()) {
+              <div class="field">
+                <label for="mRolCuenta">Tipo de cuenta</label>
+                <select id="mRolCuenta" class="input" name="mRolCuenta" [(ngModel)]="mRolCuenta">
+                  <option value="miembro">Miembro</option>
+                  <option value="admin">Administrador</option>
+                </select>
               </div>
-              @if (mEditandoAdmin()) {
-                <p class="muted">Un administrador ya tiene todas las capacidades; los roles funcionales no aplican.</p>
+
+              <p class="seccion">Roles funcionales</p>
+              @if (roles().length === 0) {
+                <p class="muted">No hay roles aún. Créalos en la pestaña «Roles».</p>
+              } @else {
+                <div class="chips">
+                  @for (r of roles(); track r.id) {
+                    <label class="chip" [class.on]="mRolesSel().has(r.id)">
+                      <input type="checkbox" [checked]="mRolesSel().has(r.id)" (change)="toggleRolMiembro(r.id)" />
+                      {{ r.nombre }}
+                    </label>
+                  }
+                </div>
               }
             }
 
