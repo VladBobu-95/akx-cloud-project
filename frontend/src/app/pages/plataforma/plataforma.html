@@ -80,7 +80,7 @@
             </div>
             <div class="field">
               <label for="nAdminPassword">Contraseña</label>
-              <input id="nAdminPassword" class="input" type="password" name="nAdminPassword" [(ngModel)]="nAdminPassword" placeholder="Mínimo 8 caracteres" required autocomplete="new-password" />
+              <app-password-input id="nAdminPassword" name="nAdminPassword" [(ngModel)]="nAdminPassword" placeholder="Mínimo 8 caracteres" [required]="true" autocomplete="new-password" />
             </div>
 
             <div class="row" style="justify-content: flex-end; margin-top: 16px;">

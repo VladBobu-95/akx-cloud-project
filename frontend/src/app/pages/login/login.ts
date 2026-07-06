@@ -3,10 +3,11 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../../core/auth.service';
 import { mensajeError } from '../../shared/errores';
+import { PasswordInputComponent } from '../../shared/password-input.component';
 
 @Component({
   selector: 'app-login',
-  imports: [FormsModule],
+  imports: [FormsModule, PasswordInputComponent],
   templateUrl: './login.html',
   styleUrl: './login.scss',
 })
@@ -16,7 +17,6 @@ export class Login {
 
   protected cargando = signal(false);
   protected error = signal<string | null>(null);
-  protected verPassword = signal(false);
   protected email = '';
   protected password = '';
 

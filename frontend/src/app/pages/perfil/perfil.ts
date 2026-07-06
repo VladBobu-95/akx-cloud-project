@@ -6,10 +6,11 @@ import { ToastService } from '../../core/toast.service';
 import { ThemeService } from '../../core/theme.service';
 import { EquipoService } from '../../core/equipo.service';
 import { mensajeError } from '../../shared/errores';
+import { PasswordInputComponent } from '../../shared/password-input.component';
 
 @Component({
   selector: 'app-perfil',
-  imports: [FormsModule, DatePipe],
+  imports: [FormsModule, DatePipe, PasswordInputComponent],
   templateUrl: './perfil.html',
   styleUrl: './perfil.scss',
 })

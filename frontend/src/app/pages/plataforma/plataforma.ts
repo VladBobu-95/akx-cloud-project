@@ -5,10 +5,11 @@ import { PlataformaService } from '../../core/plataforma.service';
 import { ToastService } from '../../core/toast.service';
 import { Empresa } from '../../core/models';
 import { mensajeError } from '../../shared/errores';
+import { PasswordInputComponent } from '../../shared/password-input.component';
 
 @Component({
   selector: 'app-plataforma',
-  imports: [DatePipe, FormsModule],
+  imports: [DatePipe, FormsModule, PasswordInputComponent],
   templateUrl: './plataforma.html',
   styleUrl: './plataforma.scss',
 })
