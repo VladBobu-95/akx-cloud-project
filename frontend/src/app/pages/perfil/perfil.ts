@@ -35,7 +35,6 @@ export class PerfilPage {
       this.equipo.obtenerEmpresa().subscribe({
         next: (e) => {
           this.empresaNif.set(e.nif);
-          this.nifEdit = e.nif ?? '';
         },
         error: (err) => this.toast.error(mensajeError(err)),
       });
