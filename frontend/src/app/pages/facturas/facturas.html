@@ -1,0 +1,156 @@
+<div class="head">
+  <h1>Facturas</h1>
+  <p class="muted">Revisa y corrige las facturas escaneadas. Lo que edites aquí actualiza la analítica y los resúmenes.</p>
+</div>
+
+<div class="toggle">
+  @for (p of PESTANAS; track p.id) {
+    <button [class.active]="pestana() === p.id" (click)="cambiarPestana(p.id)">{{ p.etiqueta }}</button>
+  }
+</div>
+
+@if (cargando()) {
+  <div class="card empty">Cargando…</div>
+} @else if (filas().length === 0) {
+  <div class="card empty">
+    <div class="icon">🧾</div>
+    @if (pestana() === 'desconocido') {
+      No hay facturas sin clasificar. 🎉
+    } @else {
+      No hay facturas aquí todavía. Sube un PDF o imagen de factura en <a routerLink="/archivos">Mis archivos</a> y se escaneará sola.
+    }
+  </div>
+} @else {
+  <div class="card list">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Nº</th>
+          <th>Fecha</th>
+          <th>Emisor</th>
+          <th>Cliente</th>
+          <th>Tipo</th>
+          <th class="num">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (f of filas(); track f.id) {
+          <tr class="fila" (click)="abrirEditar(f)" title="Editar factura">
+            <td>{{ f.numero || '—' }}</td>
+            <td>{{ fecha(f.fecha) }}</td>
+            <td class="ell">{{ f.emisor || '—' }}</td>
+            <td class="ell">{{ f.cliente || '—' }}</td>
+            <td><span class="badge" [class]="'t-' + f.tipo">{{ etiquetaTipo(f.tipo) }}</span></td>
+            <td class="num">{{ dinero(f.total, f.moneda) }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+
+  @if (paginas() > 1) {
+    <div class="paginacion">
+      <button class="btn btn-outline btn-sm" [disabled]="pagina() <= 1" (click)="irPagina(pagina() - 1)">‹ Anterior</button>
+      <span class="muted">Página {{ pagina() }} de {{ paginas() }} · {{ total() }} factura(s)</span>
+      <button class="btn btn-outline btn-sm" [disabled]="pagina() >= paginas()" (click)="irPagina(pagina() + 1)">Siguiente ›</button>
+    </div>
+  }
+}
+
+<!-- Modal editar factura -->
+@if (form(); as f) {
+  <div class="modal-backdrop" (click)="cerrarEditor()">
+    <div class="card modal modal-lg" (click)="$event.stopPropagation()">
+      <h2>Editar factura</h2>
+      @if (f.archivoNombre) { <p class="muted">{{ f.archivoNombre }}</p> }
+
+      <div class="grid">
+        <div class="field">
+          <label>Nº de factura</label>
+          <input class="input" type="text" [(ngModel)]="f.numero" name="numero" />
+        </div>
+        <div class="field">
+          <label>Fecha</label>
+          <input class="input" type="date" [(ngModel)]="f.fecha" name="fecha" />
+        </div>
+        <div class="field">
+          <label>Tipo</label>
+          <select class="input" [(ngModel)]="f.tipo" name="tipo">
+            <option value="venta">Venta (yo emito)</option>
+            <option value="compra">Compra (yo recibo)</option>
+            <option value="desconocido">Sin clasificar</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Moneda (ISO)</label>
+          <input class="input" type="text" [(ngModel)]="f.moneda" name="moneda" placeholder="EUR" />
+        </div>
+        <div class="field">
+          <label>Emisor</label>
+          <input class="input" type="text" [(ngModel)]="f.emisor" name="emisor" />
+        </div>
+        <div class="field">
+          <label>CIF emisor</label>
+          <input class="input" type="text" [(ngModel)]="f.emisorNif" name="emisorNif" />
+        </div>
+        <div class="field">
+          <label>Cliente</label>
+          <input class="input" type="text" [(ngModel)]="f.cliente" name="cliente" />
+        </div>
+        <div class="field">
+          <label>CIF cliente</label>
+          <input class="input" type="text" [(ngModel)]="f.clienteNif" name="clienteNif" />
+        </div>
+      </div>
+
+      <div class="lineas">
+        <div class="lineas-head">
+          <h3>Líneas</h3>
+          <button type="button" class="btn btn-outline btn-sm" (click)="addLinea()">+ Añadir línea</button>
+        </div>
+        @if (f.lineas.length === 0) {
+          <p class="muted">Sin líneas.</p>
+        } @else {
+          <table class="table lineas-tabla">
+            <thead>
+              <tr><th>Descripción</th><th>Cant.</th><th>Precio</th><th>Total</th><th></th></tr>
+            </thead>
+            <tbody>
+              @for (l of f.lineas; track $index) {
+                <tr>
+                  <td><input class="input" type="text" [(ngModel)]="l.descripcion" [name]="'ld' + $index" /></td>
+                  <td><input class="input num" type="number" step="any" [(ngModel)]="l.cantidad" [name]="'lc' + $index" /></td>
+                  <td><input class="input num" type="number" step="any" [(ngModel)]="l.precioUnit" [name]="'lp' + $index" /></td>
+                  <td><input class="input num" type="number" step="any" [(ngModel)]="l.total" [name]="'lt' + $index" /></td>
+                  <td><button type="button" class="btn btn-ghost btn-sm" (click)="quitarLinea($index)" title="Quitar">✕</button></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+
+      <div class="grid totales">
+        <div class="field">
+          <label>Subtotal</label>
+          <input class="input num" type="number" step="any" [(ngModel)]="f.subtotal" name="subtotal" />
+        </div>
+        <div class="field">
+          <label>IVA</label>
+          <input class="input num" type="number" step="any" [(ngModel)]="f.iva" name="iva" />
+        </div>
+        <div class="field">
+          <label>Total</label>
+          <input class="input num" type="number" step="any" [(ngModel)]="f.total" name="total" />
+        </div>
+      </div>
+
+      <div class="acciones">
+        <button type="button" class="btn btn-ghost" (click)="cerrarEditor()">Cancelar</button>
+        <button type="button" class="btn btn-primary" [disabled]="guardando()" (click)="guardar()">
+          {{ guardando() ? 'Guardando…' : 'Guardar cambios' }}
+        </button>
+      </div>
+    </div>
+  </div>
+}

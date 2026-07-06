@@ -24,6 +24,11 @@ export const routes: Routes = [
           import('./pages/archivos/archivos').then((m) => m.ArchivosPage),
       },
       {
+        path: 'facturas',
+        loadComponent: () =>
+          import('./pages/facturas/facturas').then((m) => m.FacturasPage),
+      },
+      {
         path: 'papelera',
         loadComponent: () =>
           import('./pages/papelera/papelera').then((m) => m.PapeleraPage),

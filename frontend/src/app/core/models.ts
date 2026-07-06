@@ -93,3 +93,53 @@ export interface ResultadoBusqueda {
   fragmento: string;
   score: number;
 }
+
+export type TipoFactura = 'venta' | 'compra' | 'desconocido';
+
+// Fila del listado de la página de Facturas.
+export interface FilaFactura {
+  id: string;
+  archivoId: string | null;
+  archivoNombre: string | null;
+  numero: string;
+  fecha: string;
+  emisor: string;
+  cliente: string;
+  tipo: TipoFactura;
+  subtotal: number;
+  iva: number;
+  total: number;
+  moneda: string;
+}
+
+export interface ListaFacturas {
+  filas: FilaFactura[];
+  total: number;
+  paginas: number;
+}
+
+export interface LineaFactura {
+  descripcion: string;
+  cantidad: number;
+  precioUnit: number;
+  total: number;
+}
+
+// Detalle completo de una factura (para el editor).
+export interface FacturaDetalle {
+  id: string;
+  archivoId: string | null;
+  archivoNombre: string | null;
+  numero: string;
+  fecha: string | null;
+  emisor: string;
+  emisorNif: string;
+  cliente: string;
+  clienteNif: string;
+  tipo: TipoFactura;
+  moneda: string;
+  subtotal: number;
+  iva: number;
+  total: number;
+  lineas: LineaFactura[];
+}

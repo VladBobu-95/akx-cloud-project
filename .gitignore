@@ -1,6 +1,10 @@
 # Secretos — NUNCA commitear
 .env
 
+# Override local de docker-compose (añade ollama + adminer). Solo para desarrollo;
+# en el servidor NO se usa (se borra). Cada máquina tiene el suyo, no se commitea.
+docker-compose.override.yml
+
 # Dependencias
 node_modules/
 backend/node_modules/

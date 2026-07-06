@@ -132,6 +132,14 @@ acumulan y se devuelven al frontend (las "✓"). Medidas de fiabilidad:
   modelo a veces "comprobaba" la existencia de un archivo escaneándolo con OCR
   (lento, y podía tirar el proceso en servidores sin GPU), o devolvía contenido de
   facturas no relacionado.
+- **Analítica de facturas ventas vs. compras**: cada factura se clasifica como venta
+  (la empresa emite) o compra (recibe), y las consultas se separan. Ventas:
+  "cuánto he facturado / vendido", "qué vendí más", "mi mejor cliente" →
+  `totales_facturas`/`ventas_top`/`clientes_top`. Compras: "cuánto he gastado",
+  "qué he comprado más", "mis proveedores / a quién le compro más" →
+  `totales_compras`/`compras_top`/`proveedores_top`. Los resúmenes agregados
+  (`resumen-ventas.md` y `resumen-compras.md`) también están separados. Todo agrupa
+  por moneda (nunca suma divisas distintas).
 - **Verbos con pronombre pegado**: "borra todo" funcionaba pero "bórralo todo" no
   (el pronombre enclítico desplaza la tilde y rompe el límite de palabra). Todos los
   verbos de los pre-flights anteriores se comparan ahora sobre el mensaje sin tildes
@@ -384,9 +392,12 @@ docker-compose.override.yml ollama + adminer (solo en local)
 - **Carpetas** (`/api/archivos/carpetas`) 🔒: crear/listar/mover/eliminar
 - **Chat** (`/api/chat`) 🔒: conversación con el asistente → `{respuesta, acciones[], archivo?: {id, nombre}}`
 - **Facturas** (`/api/facturas`) 🔒: `POST /escanear` (responde **202** y encola el
-  escaneo en segundo plano — OCR + extracción de datos; el estado final se ve en la
-  columna "Estado", y marca `no_factura` si no hay datos reales en vez de inventarlos),
-  `GET /` (listado paginado y filtrable, lo usa la paginación de tablas del chat)
+  escaneo en segundo plano — OCR + extracción de datos + **clasificación venta/compra**;
+  el estado final se ve en la columna "Estado", y marca `no_factura` si no hay datos
+  reales en vez de inventarlos), `GET /` (listado paginado y filtrable — `?tipo=venta|compra|desconocido`
+  para las pestañas de la página Facturas y `?...` para la paginación de tablas del chat),
+  `GET /:id` (detalle con líneas), `PATCH /:id` (**edición manual**: corrige
+  emisor/cliente/tipo/importes/líneas y regenera los resúmenes)
 - `GET /health`: estado de la API y conexión a BD
 
 ## Tests
@@ -398,7 +409,9 @@ cd backend && npm test     # Jest + Supertest contra una BD de test aislada (clo
 Requiere Postgres y MinIO levantados; la BD de test se crea sola (usa `synchronize`).
 Cubren auth, archivos, deduplicación, cap de backlog, confirmación de vaciar papelera,
 validación de avatar y reconciliación/retención; la detección de intenciones del chat
-(`chat.deteccion`) se testea de forma pura (sin BD ni Ollama).
+(`chat.deteccion`) y las **heurísticas de facturas** (`facturas.heuristicas`:
+clasificación venta/compra, anclaje emisor/cliente por "Registro Mercantil", CIF,
+idioma) se testean de forma pura (sin BD ni Ollama).
 
 ## Despliegue (servidor, acceso por IP, todo en Docker)
 

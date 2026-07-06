@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { AppDataSource } from "../config/database";
 import { env } from "../config/env";
 import { Archivo } from "../entities/Archivo";
@@ -43,7 +44,7 @@ const leerContenidoFactura = (archivo: Archivo, pista?: string): string => {
 };
 
 // --- Extracción estructurada con la IA ---
-interface DatosFactura {
+export interface DatosFactura {
   numero?: string;
   archivoNombre?: string;
   fecha?: string;
@@ -317,6 +318,17 @@ const mismaEmpresa = (a: string, b: string): boolean => {
   return corto.every((t) => setLargo.has(t));
 };
 
+// ¿Dos nombres comparten algún token distintivo (≥4 letras)? Más laxo que
+// mismaEmpresa: sirve para detectar que emisor y cliente son "el mismo" pese a
+// una lectura OCR ligeramente distinta —p. ej. el modelo saca emisor "AKX Studio"
+// y cliente "ARX Studio" (K↔R del logo): comparten "studio"—. No casa por un
+// token corto/genérico (evita falsos positivos con "S.L."/"the").
+const compartenTokenDistintivo = (a: string, b: string): boolean => {
+  if (!a || !b) return false;
+  const ta = new Set(a.split(" ").filter((t) => t.length >= 4));
+  return b.split(" ").some((t) => t.length >= 4 && ta.has(t));
+};
+
 // Localiza la empresa emisora (nombre + NIF) por la línea legal del pie: la razón
 // social suele ir justo ANTES de "… inscrita en el Registro Mercantil …", con su
 // NIF a continuación ("… NIF B39540760"). Busca un nombre con sufijo societario en
@@ -345,18 +357,16 @@ const emisorPorRegistroMercantil = (
 };
 
 // Corrige emisor/cliente si están invertidos o el emisor está duplicado/ausente,
-// anclando en la empresa de la línea "Registro Mercantil". No lanza nunca.
-// Devuelve `true` si INVIRTIÓ emisor↔cliente: en ese caso, qué NIF pertenece a
-// quién es menos fiable, así que el llamador NO auto-aprende el CIF de la empresa
-// a partir de esta factura (ver escanearFactura).
-const reconciliarPartes = (datos: DatosFactura, contenido: string): boolean => {
+// anclando en la empresa de la línea "Registro Mercantil". No lanza nunca. Muta
+// `datos` in situ (nombre y NIF de emisor/cliente). Exportada para tests.
+export const reconciliarPartes = (datos: DatosFactura, contenido: string): void => {
   const reg = emisorPorRegistroMercantil(contenido);
   const nReg = normalizarNombreEmpresa(reg?.nombre);
-  if (!nReg) return false; // sin ancla fiable, no tocamos la salida del modelo
+  if (!nReg) return; // sin ancla fiable, no tocamos la salida del modelo
   const nEmisor = normalizarNombreEmpresa(datos.emisor);
   const nCliente = normalizarNombreEmpresa(datos.cliente);
 
-  if (nEmisor && mismaEmpresa(nEmisor, nReg)) return false; // ya es correcto
+  if (nEmisor && mismaEmpresa(nEmisor, nReg)) return; // ya es correcto
 
   if (nCliente && mismaEmpresa(nCliente, nReg)) {
     // El modelo puso el emisor real como cliente → invertidos: se intercambian
@@ -364,7 +374,7 @@ const reconciliarPartes = (datos: DatosFactura, contenido: string): boolean => {
     // del emisor, así que la señal es inequívoca.
     [datos.emisor, datos.cliente] = [datos.cliente, datos.emisor];
     [datos.emisorNif, datos.clienteNif] = [datos.clienteNif, datos.emisorNif];
-    return true;
+    return;
   }
 
   // Emisor ausente o duplicado con el cliente (típico de una factura de la luz: el
@@ -372,11 +382,13 @@ const reconciliarPartes = (datos: DatosFactura, contenido: string): boolean => {
   // Se fija con el nombre + NIF del pie legal. El emisorNif del modelo era en
   // realidad del cliente, así que se sustituye por el del registro (o se borra si
   // no lo hay) para no dejar el CIF del cliente como si fuera el del emisor.
-  if (!nEmisor || (nCliente && mismaEmpresa(nEmisor, nCliente))) {
+  // `compartenTokenDistintivo` cubre el caso en que el OCR leyó emisor y cliente
+  // con una pequeña diferencia ("AKX Studio" vs "ARX Studio") y mismaEmpresa no
+  // los ve iguales — sin él, el emisor real (Repsol) no se ancla en esas lecturas.
+  if (!nEmisor || (nCliente && (mismaEmpresa(nEmisor, nCliente) || compartenTokenDistintivo(nEmisor, nCliente)))) {
     datos.emisor = reg!.nombre;
     datos.emisorNif = reg!.nif;
   }
-  return false;
 };
 
 // --- Dirección de la factura: venta vs compra ---
@@ -386,12 +398,30 @@ const reconciliarPartes = (datos: DatosFactura, contenido: string): boolean => {
 const normalizarNif = (s?: string | null): string =>
   (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 
+// ¿Aparece el NIF `nifNorm` (ya normalizado) EN EL TEXTO del documento? Escanea
+// todos los NIF/CIF plausibles del texto y los compara normalizados. Sirve para el
+// caso en que el CIF del tenant está en la factura pero el modelo no lo puso en el
+// campo cliente (típico si el OCR destrozó el nombre del cliente).
+const RE_NIF_GLOBAL = /\b([A-Za-z]-?\d{7,8}|\d{8}-?[A-Za-z])\b/g;
+const contenidoIncluyeNif = (contenido: string, nifNorm: string): boolean => {
+  if (!nifNorm) return false;
+  for (const m of contenido.matchAll(RE_NIF_GLOBAL)) {
+    if (normalizarNif(m[1]) === nifNorm) return true;
+  }
+  return false;
+};
+
 // Decide si la factura es una VENTA (la empresa del propietario es el emisor) o una
 // COMPRA (es el cliente), anclando primero en el CIF de la empresa (fiable) y, si no
-// se conoce, en el parecido de nombre. Cuando resuelve por nombre y la empresa aún
-// no tiene CIF guardado, propone aprenderlo (nifAprendido) del lado del tenant.
-type Direccion = { tipo: "venta" | "compra" | "desconocido"; nifAprendido?: string };
-const resolverDireccion = (datos: DatosFactura, empresa?: Empresa | null): Direccion => {
+// se conoce, en el parecido de nombre. El CIF de la empresa lo aprende por separado
+// intentarAprenderCifEmpresa (por corroboración), no aquí.
+type Direccion = "venta" | "compra" | "desconocido";
+// Exportada para tests (unidad, sin BD ni IA).
+export const resolverDireccion = (
+  datos: DatosFactura,
+  empresa?: Empresa | null,
+  contenido = "",
+): Direccion => {
   const empresaNif = normalizarNif(empresa?.nif);
   const emisorNif = normalizarNif(datos.emisorNif);
   const clienteNif = normalizarNif(datos.clienteNif);
@@ -402,29 +432,63 @@ const resolverDireccion = (datos: DatosFactura, empresa?: Empresa | null): Direc
   // fuera de ambas analíticas en vez de contar como una venta falsa.
   const nEmi = normalizarNombreEmpresa(datos.emisor);
   const nCli = normalizarNombreEmpresa(datos.cliente);
-  if (nEmi && nCli && mismaEmpresa(nEmi, nCli)) return { tipo: "desconocido" };
+  if (nEmi && nCli && mismaEmpresa(nEmi, nCli)) return "desconocido";
 
   // 1. Por CIF (inequívoco) si lo conocemos.
   if (empresaNif) {
-    if (emisorNif && emisorNif === empresaNif) return { tipo: "venta" };
-    if (clienteNif && clienteNif === empresaNif) return { tipo: "compra" };
+    if (emisorNif && emisorNif === empresaNif) return "venta";
+    if (clienteNif && clienteNif === empresaNif) return "compra";
+    // El CIF del tenant está en el texto (aunque el modelo no lo capturara en el
+    // campo cliente) y el emisor es OTRA empresa → el tenant es el cliente → compra.
+    if (emisorNif && emisorNif !== empresaNif && contenidoIncluyeNif(contenido, empresaNif)) {
+      return "compra";
+    }
   }
 
   // 2. Por nombre contra empresa.nombre. Solo si casa EXACTAMENTE uno de los dos
   //    lados (si casan ambos o ninguno, es ambiguo → desconocido).
   const nEmpresa = normalizarNombreEmpresa(empresa?.nombre);
   if (nEmpresa) {
-    const emisorEsEmpresa = mismaEmpresa(nEmpresa, normalizarNombreEmpresa(datos.emisor));
-    const clienteEsEmpresa = mismaEmpresa(nEmpresa, normalizarNombreEmpresa(datos.cliente));
-    if (emisorEsEmpresa && !clienteEsEmpresa) {
-      return { tipo: "venta", nifAprendido: !empresaNif ? datos.emisorNif?.trim() || undefined : undefined };
-    }
-    if (clienteEsEmpresa && !emisorEsEmpresa) {
-      return { tipo: "compra", nifAprendido: !empresaNif ? datos.clienteNif?.trim() || undefined : undefined };
-    }
+    const emisorEsEmpresa = mismaEmpresa(nEmpresa, nEmi);
+    const clienteEsEmpresa = mismaEmpresa(nEmpresa, nCli);
+    if (emisorEsEmpresa && !clienteEsEmpresa) return "venta";
+    if (clienteEsEmpresa && !emisorEsEmpresa) return "compra";
   }
 
-  return { tipo: "desconocido" };
+  return "desconocido";
+};
+
+// Aprende el CIF de la empresa por CORROBORACIÓN: mira el NIF del lado del tenant
+// en sus facturas ya clasificadas (clienteNif en compras, emisorNif en ventas) y
+// fija empresa.nif cuando uno se repite en ≥2 facturas. Así un NIF mal leído en una
+// sola factura (p. ej. una devolución con un NIF raro en la cabecera) no se cuela, y
+// no hace falta descartar los "swaps" (el CIF bueno acaba ganando por repetición).
+// Best-effort: se llama tras guardar cada factura si la empresa aún no tiene CIF.
+const MIN_CORROBORACION_CIF = 2;
+const intentarAprenderCifEmpresa = async (empresaId: string): Promise<void> => {
+  const repo = AppDataSource.getRepository(Empresa);
+  const empresa = await repo.findOneBy({ id: empresaId });
+  if (!empresa || empresa.nif) return; // ya lo tiene, o no existe
+  const filas: { nif: string; n: number }[] = await AppDataSource.query(
+    `SELECT nif, COUNT(*)::int AS n FROM (
+       SELECT UPPER(REGEXP_REPLACE(COALESCE(
+                CASE WHEN f."tipo" = 'compra' THEN f."clienteNif"
+                     WHEN f."tipo" = 'venta'  THEN f."emisorNif" END, ''),
+                '[^A-Za-z0-9]', '', 'g')) AS nif
+       FROM "facturas" f
+       JOIN "usuarios" u ON u."id" = f."propietarioId"
+       WHERE u."empresaId" = $1
+     ) t
+     WHERE nif <> ''
+     GROUP BY nif
+     ORDER BY n DESC
+     LIMIT 1`,
+    [empresaId],
+  );
+  const top = filas[0];
+  if (top && Number(top.n) >= MIN_CORROBORACION_CIF) {
+    await repo.update(empresaId, { nif: top.nif });
+  }
 };
 
 // Símbolos/nombres de moneda más comunes → código ISO 4217. La IA ya devuelve
@@ -778,8 +842,7 @@ export const escanearFactura = async (
     // Corrige emisor/cliente si el modelo los invirtió o duplicó, anclando en la
     // línea legal "Registro Mercantil" del documento (ver reconciliarPartes). Va
     // antes de la guarda para que la identificación (emisor) se evalúe ya corregida.
-    // Si hubo swap, no auto-aprenderemos el CIF de esta factura (menos fiable).
-    const partesInvertidas = reconciliarPartes(datos, contenido);
+    reconciliarPartes(datos, contenido);
 
     // ¿Parece una factura real? Exige TANTO un importe real (no solo líneas con
     // descripción: el modelo puede inventarse precios para algo que no es una
@@ -805,7 +868,7 @@ export const escanearFactura = async (
     // + (fecha o emisor)— para no abrir la puerta a que cualquier PDF con un
     // número suelto cuele como factura de 0 €.
     const señalFuerteFactura =
-      /\bfactura\b/i.test(contenido) &&
+      /\b(?:factura|invoice|rebut)\b/i.test(contenido) &&
       !!datos.numero?.trim() &&
       (!!datos.fecha?.trim() || !!datos.emisor?.trim());
     if ((!tieneImportes && !señalFuerteFactura) || !tieneIdentificacion) {
@@ -860,19 +923,10 @@ export const escanearFactura = async (
     conciliarImportes(datos);
 
     // Clasifica la factura como venta/compra anclando en la empresa del propietario
-    // (ver resolverDireccion). Si resuelve por NOMBRE y la empresa aún no tiene CIF
-    // guardado, lo auto-aprende (una sola vez) del lado del tenant, para que a
-    // partir de la siguiente factura la clasificación sea por CIF (inequívoca).
+    // (ver resolverDireccion). El aprendizaje del CIF de la empresa va aparte, por
+    // corroboración, DESPUÉS de guardar (intentarAprenderCifEmpresa).
     const empresa = archivo.propietario.empresa ?? null;
-    const direccion = resolverDireccion(datos, empresa);
-    if (direccion.nifAprendido && empresa && !empresa.nif && !partesInvertidas) {
-      empresa.nif = direccion.nifAprendido;
-      await AppDataSource.getRepository(Empresa)
-        .update(empresa.id, { nif: direccion.nifAprendido })
-        .catch((err) =>
-          console.error("[facturas] no se pudo auto-aprender el CIF de la empresa:", err),
-        );
-    }
+    const direccion = resolverDireccion(datos, empresa, contenido);
 
     const facturaRepo = AppDataSource.getRepository(Factura);
     // Si ya se había escaneado este archivo, reemplazamos su factura (y sus líneas por CASCADE).
@@ -891,7 +945,7 @@ export const escanearFactura = async (
       emisorNif: datos.emisorNif ?? null,
       cliente: datos.cliente,
       clienteNif: datos.clienteNif ?? null,
-      tipo: direccion.tipo,
+      tipo: direccion,
       moneda: normalizarMoneda(datos.moneda),
       subtotal: String(datos.subtotal ?? 0),
       iva: String(datos.iva ?? 0),
@@ -908,6 +962,14 @@ export const escanearFactura = async (
     });
     const guardada = await facturaRepo.save(factura); // cascade guarda las líneas
     await archivoRepo.update(archivo.id, { estadoEscaneo: "escaneada" });
+
+    // Aprende el CIF de la empresa por corroboración (≥2 facturas con el mismo NIF
+    // del lado del tenant). Best-effort: un fallo aquí no rompe el escaneo.
+    if (empresa && !empresa.nif) {
+      await intentarAprenderCifEmpresa(empresa.id).catch((err) =>
+        console.error("[facturas] no se pudo aprender el CIF de la empresa (no crítico):", err),
+      );
+    }
 
     // Resumen por factura + regenerar el resumen global de ventas.
     // Si falla la creación de los .md (p. ej. MinIO), logueamos pero no abortamos:
@@ -1121,11 +1183,11 @@ export type FiltroFacturas = {
   // "cuánto he facturado en yenes". Se compara contra f."moneda" (que se guarda
   // siempre normalizada a ISO en mayúsculas, ver normalizarMoneda).
   moneda?: string;
-  // Dirección: "venta" (la empresa es el emisor) o "compra" (es el cliente). La
-  // analítica de ventas la fija a "venta" y la de compras a "compra", para que un
-  // proveedor no aparezca nunca como cliente ni al revés. Sin este filtro, cuenta
-  // todas (incl. las "desconocido" que no se pudieron clasificar).
-  tipo?: "venta" | "compra";
+  // Dirección: "venta" (la empresa es el emisor), "compra" (es el cliente) o
+  // "desconocido" (no clasificada). La analítica de ventas la fija a "venta" y la
+  // de compras a "compra"; la página de Facturas la usa además con "desconocido"
+  // para la pestaña "Sin clasificar". Sin este filtro, cuenta todas.
+  tipo?: "venta" | "compra" | "desconocido";
 }
 
 // Construye las condiciones WHERE y los parámetros posicionales a partir del filtro.
@@ -1321,10 +1383,16 @@ export const totalesFacturado = async (
 };
 
 export type FilaFactura = {
+  id: string;
   archivoId: string | null;
   archivoNombre: string | null;
   numero: string;
   fecha: string;
+  emisor: string;
+  cliente: string;
+  tipo: "venta" | "compra" | "desconocido";
+  subtotal: number;
+  iva: number;
   total: number;
   moneda: string;
 };
@@ -1356,30 +1424,54 @@ export const listarFacturas = async (
     `SELECT COUNT(*)::int AS total FROM "facturas" f LEFT JOIN "archivos" a ON a."id" = f."archivoId" WHERE ${filtroWhere}`,
     params,
   );
-  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string; moneda: string }[] =
-    await AppDataSource.query(
-      `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
-              f."fecha"::text AS fecha, f."total" AS total, f."moneda" AS moneda
-       FROM "facturas" f
-       LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-       WHERE ${filtroWhere}
-       ORDER BY f."fecha" DESC
-       LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
-      params,
-    );
+  const filas: FilaRaw[] = await AppDataSource.query(
+    `SELECT f."id" AS id, a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
+            f."fecha"::text AS fecha, f."emisor" AS emisor, f."cliente" AS cliente, f."tipo" AS tipo,
+            f."subtotal" AS subtotal, f."iva" AS iva, f."total" AS total, f."moneda" AS moneda
+     FROM "facturas" f
+     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+     WHERE ${filtroWhere}
+     ORDER BY f."fecha" DESC NULLS LAST, f."creadoEn" DESC
+     LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
+    params,
+  );
   return {
-    filas: filas.map((r) => ({
-      archivoId: r.archivoid,
-      archivoNombre: r.archivonombre,
-      numero: r.numero,
-      fecha: r.fecha,
-      total: Number(r.total),
-      moneda: r.moneda || "EUR",
-    })),
+    filas: filas.map(aFilaFactura),
     total: Number(total),
     paginas: Math.max(1, Math.ceil(Number(total) / limite)),
   };
 };
+
+// Fila cruda de las consultas de listado y su mapeo a FilaFactura (compartido por
+// listarFacturas y listarFacturasPapelera).
+type FilaRaw = {
+  id: string;
+  archivoid: string | null;
+  archivonombre: string | null;
+  numero: string | null;
+  fecha: string | null;
+  emisor: string | null;
+  cliente: string | null;
+  tipo: "venta" | "compra" | "desconocido";
+  subtotal: string;
+  iva: string;
+  total: string;
+  moneda: string;
+};
+const aFilaFactura = (r: FilaRaw): FilaFactura => ({
+  id: r.id,
+  archivoId: r.archivoid,
+  archivoNombre: r.archivonombre,
+  numero: r.numero ?? "",
+  fecha: r.fecha ?? "",
+  emisor: r.emisor ?? "",
+  cliente: r.cliente ?? "",
+  tipo: r.tipo,
+  subtotal: Number(r.subtotal),
+  iva: Number(r.iva),
+  total: Number(r.total),
+  moneda: r.moneda || "EUR",
+});
 
 // Lista las facturas cuyo archivo está en la papelera (soft-deleted) — lo
 // inverso de listarFacturas/construirFiltro, que las excluyen siempre. Para
@@ -1395,29 +1487,166 @@ export const listarFacturasPapelera = async (
      WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL`,
     [usuarioId],
   );
-  const filas: { archivoid: string | null; archivonombre: string | null; numero: string; fecha: string; total: string; moneda: string }[] =
-    await AppDataSource.query(
-      `SELECT a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
-              f."fecha"::text AS fecha, f."total" AS total, f."moneda" AS moneda
-       FROM "facturas" f
-       JOIN "archivos" a ON a."id" = f."archivoId"
-       WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL
-       ORDER BY a."eliminadoEn" DESC
-       LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
-      [usuarioId],
-    );
+  const filas: FilaRaw[] = await AppDataSource.query(
+    `SELECT f."id" AS id, a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
+            f."fecha"::text AS fecha, f."emisor" AS emisor, f."cliente" AS cliente, f."tipo" AS tipo,
+            f."subtotal" AS subtotal, f."iva" AS iva, f."total" AS total, f."moneda" AS moneda
+     FROM "facturas" f
+     JOIN "archivos" a ON a."id" = f."archivoId"
+     WHERE f."propietarioId" = $1 AND a."eliminadoEn" IS NOT NULL
+     ORDER BY a."eliminadoEn" DESC
+     LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
+    [usuarioId],
+  );
   return {
-    filas: filas.map((r) => ({
-      archivoId: r.archivoid,
-      archivoNombre: r.archivonombre,
-      numero: r.numero,
-      fecha: r.fecha,
-      total: Number(r.total),
-      moneda: r.moneda || "EUR",
-    })),
+    filas: filas.map(aFilaFactura),
     total: Number(total),
     paginas: Math.max(1, Math.ceil(Number(total) / limite)),
   };
+};
+
+// --- Detalle y edición manual de una factura (página "Facturas") ---
+// El modelo pequeño siempre falla algún campo; la edición manual es la red de
+// seguridad para corregir emisor/cliente/tipo/importes/líneas. Al guardar se
+// regeneran el resumen individual y los agregados (ventas/compras).
+export type LineaDetalle = { descripcion: string; cantidad: number; precioUnit: number; total: number };
+export type FacturaDetalle = {
+  id: string;
+  archivoId: string | null;
+  archivoNombre: string | null;
+  numero: string;
+  fecha: string | null;
+  emisor: string;
+  emisorNif: string;
+  cliente: string;
+  clienteNif: string;
+  tipo: "venta" | "compra" | "desconocido";
+  moneda: string;
+  subtotal: number;
+  iva: number;
+  total: number;
+  lineas: LineaDetalle[];
+};
+
+export const obtenerFacturaDetalle = async (
+  usuarioId: string,
+  facturaId: string,
+): Promise<FacturaDetalle> => {
+  const f = await AppDataSource.getRepository(Factura).findOne({
+    where: { id: facturaId, propietario: { id: usuarioId } },
+    relations: { lineas: true, archivo: true },
+  });
+  if (!f) throw new AppError(404, "Factura no encontrada");
+  return {
+    id: f.id,
+    archivoId: f.archivo?.id ?? null,
+    archivoNombre: f.archivo?.nombre ?? null,
+    numero: f.numero ?? "",
+    fecha: f.fecha ?? null,
+    emisor: f.emisor ?? "",
+    emisorNif: f.emisorNif ?? "",
+    cliente: f.cliente ?? "",
+    clienteNif: f.clienteNif ?? "",
+    tipo: f.tipo,
+    moneda: f.moneda,
+    subtotal: Number(f.subtotal),
+    iva: Number(f.iva),
+    total: Number(f.total),
+    lineas: (f.lineas ?? []).map((l) => ({
+      descripcion: l.descripcion,
+      cantidad: Number(l.cantidad),
+      precioUnit: Number(l.precioUnit),
+      total: Number(l.total),
+    })),
+  };
+};
+
+export const schemaActualizarFactura = z.object({
+  numero: z.string().trim().optional(),
+  fecha: z.string().trim().nullable().optional(),
+  emisor: z.string().trim().optional(),
+  emisorNif: z.string().trim().optional(),
+  cliente: z.string().trim().optional(),
+  clienteNif: z.string().trim().optional(),
+  tipo: z.enum(["venta", "compra", "desconocido"]).optional(),
+  moneda: z.string().trim().optional(),
+  subtotal: z.number().optional(),
+  iva: z.number().optional(),
+  total: z.number().optional(),
+  lineas: z
+    .array(
+      z.object({
+        descripcion: z.string(),
+        cantidad: z.number().optional(),
+        precioUnit: z.number().optional(),
+        total: z.number().optional(),
+      }),
+    )
+    .optional(),
+});
+
+export const actualizarFactura = async (
+  usuarioId: string,
+  facturaId: string,
+  datos: z.infer<typeof schemaActualizarFactura>,
+): Promise<FacturaDetalle> => {
+  const facturaRepo = AppDataSource.getRepository(Factura);
+  const factura = await facturaRepo.findOne({
+    where: { id: facturaId, propietario: { id: usuarioId } },
+    relations: { archivo: true },
+  });
+  if (!factura) throw new AppError(404, "Factura no encontrada");
+
+  const patch: Partial<Factura> = {};
+  if (datos.numero !== undefined) patch.numero = datos.numero;
+  if (datos.fecha !== undefined) patch.fecha = datos.fecha ? normalizarFecha(datos.fecha) : null;
+  if (datos.emisor !== undefined) patch.emisor = datos.emisor;
+  if (datos.emisorNif !== undefined) patch.emisorNif = datos.emisorNif || null;
+  if (datos.cliente !== undefined) patch.cliente = datos.cliente;
+  if (datos.clienteNif !== undefined) patch.clienteNif = datos.clienteNif || null;
+  if (datos.tipo !== undefined) patch.tipo = datos.tipo;
+  if (datos.moneda !== undefined) patch.moneda = normalizarMoneda(datos.moneda);
+  if (datos.subtotal !== undefined) patch.subtotal = String(datos.subtotal);
+  if (datos.iva !== undefined) patch.iva = String(datos.iva);
+  if (datos.total !== undefined) patch.total = String(datos.total);
+  if (Object.keys(patch).length) await facturaRepo.update(facturaId, patch);
+
+  // Líneas: se reemplazan enteras (borrar + insertar) para no arrastrar huérfanas.
+  if (datos.lineas !== undefined) {
+    const lineaRepo = AppDataSource.getRepository(LineaFactura);
+    await lineaRepo.delete({ factura: { id: facturaId } });
+    if (datos.lineas.length) {
+      await lineaRepo.insert(
+        datos.lineas.map((l) => ({
+          descripcion: l.descripcion,
+          cantidad: String(l.cantidad ?? 0),
+          precioUnit: String(l.precioUnit ?? 0),
+          total: String(l.total ?? 0),
+          factura: { id: facturaId } as Factura,
+        })),
+      );
+    }
+  }
+
+  // Regenera el resumen individual y los agregados con los datos ya corregidos.
+  try {
+    if (factura.archivo) {
+      const { resumen } = await obtenerFactura(usuarioId, factura.archivo.id, factura.archivo.nombre);
+      if (resumen) {
+        await reemplazarResumenDeArchivoSerie(
+          usuarioId,
+          factura.archivo.id,
+          nombreResumenFactura(factura.archivo.nombre, factura.archivo.id),
+          resumen,
+        );
+      }
+    }
+    await regenerarResumenesFacturasSerie(usuarioId);
+  } catch (err) {
+    console.error("[facturas] Error al regenerar resúmenes tras editar (no crítico):", err);
+  }
+
+  return obtenerFacturaDetalle(usuarioId, facturaId);
 };
 
 // Ranking de clientes por gasto total. orden 'desc' = quién más gastó (defecto);

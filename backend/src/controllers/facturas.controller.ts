@@ -3,6 +3,9 @@ import {
   encolarEscaneoManual,
   listarFacturas,
   listarFacturasPapelera,
+  obtenerFacturaDetalle,
+  actualizarFactura,
+  schemaActualizarFactura,
   type FiltroFacturas,
 } from "../services/facturas.service";
 import { AppError } from "../utils/errors";
@@ -53,7 +56,38 @@ export const ctrlListarFacturas = async (
     if (typeof req.query.facturas === "string" && req.query.facturas) {
       filtro.facturas = req.query.facturas.split(",").map((s) => s.trim()).filter(Boolean);
     }
+    // La página de Facturas filtra por pestaña: venta | compra | desconocido.
+    if (req.query.tipo === "venta" || req.query.tipo === "compra" || req.query.tipo === "desconocido") {
+      filtro.tipo = req.query.tipo;
+    }
     res.json(await listarFacturas(req.usuario!.id, filtro, { pagina, limite }));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/facturas/:id — detalle completo (con líneas) para el editor.
+export const ctrlObtenerFactura = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    res.json(await obtenerFacturaDetalle(req.usuario!.id, String(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PATCH /api/facturas/:id — edición manual (corregir emisor/cliente/tipo/importes/líneas).
+export const ctrlActualizarFactura = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const datos = schemaActualizarFactura.parse(req.body);
+    res.json(await actualizarFactura(req.usuario!.id, String(req.params.id), datos));
   } catch (error) {
     next(error);
   }

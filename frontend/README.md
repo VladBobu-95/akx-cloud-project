@@ -27,7 +27,9 @@ Login (JWT en localStorage)
   → Shell (navbar, protegido por guard)
       ├─ Inicio   → Chat con el asistente IA
       ├─ Archivos → subir, carpetas, mover, renombrar, papelera, búsqueda por contenido
+      ├─ Facturas → tabla venta/compra/sin clasificar + editor de la factura escaneada
       ├─ Papelera → restaurar / borrar definitivo / vaciar
+      ├─ Equipo   → (admin) miembros, roles y CIF de la empresa
       └─ Perfil   → nombre, avatar, contraseña
 ```
 
@@ -86,6 +88,16 @@ mano). El progreso se ve en la columna **"Estado"**, refrescada por polling: `sp
 abre un modal con un textarea que se guarda vía `PATCH /api/archivos/:id/descripcion` y se
 reindexa, para que una foto (o cualquier archivo) sea encontrable en el buscador por una
 descripción escrita a mano.
+
+### Facturas (`pages/facturas`)
+Tabla de las facturas escaneadas con pestañas **Todas / Ventas / Compras / Sin
+clasificar** (filtro `?tipo=` server-side) y paginación. Cada fila muestra nº, fecha,
+emisor, cliente, un badge de tipo y el total con su moneda; al hacer clic se abre el
+**editor** (`GET`/`PATCH /api/facturas/:id`): corrige emisor/cliente/tipo/importes y
+añade o quita líneas. Es la red de seguridad ante los fallos de extracción del modelo
+pequeño, y la pestaña "Sin clasificar" es donde se rescatan las facturas que no se
+pudieron clasificar como venta o compra. Al guardar, el backend regenera los resúmenes
+y la analítica.
 
 ### Perfil (`pages/perfil`)
 Editar nombre, avatar y contraseña. El avatar se procesa en el cliente: se recorta a

@@ -157,8 +157,20 @@ export const pareceFacturaConImportes = (texto: string): boolean => {
   if (/[€$]\s*\d|\d\s*[€$]|\b\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\b/.test(t)) return true;
   // Sin importe explícito, solo cuentan términos INEQUÍVOCOS de factura (no
   // "total"/"precio"/"cantidad", que salen en descripciones de fotos cualesquiera).
-  return /\bfactura\b|\biva\b|\bsubtotal\b|\bbase imponible\b|\brecibo\b/.test(t);
+  // Se incluyen las variantes en catalán ("base imposable", "rebut") e inglés
+  // ("invoice", "vat"), para no dejar fuera una factura en esas lenguas que no
+  // traiga un importe con formato monetario claro.
+  return /\bfactura\b|\binvoice\b|\biva\b|\bvat\b|\bsubtotal\b|\bbase imponible\b|\bbase imposable\b|\brecibo\b|\brebut\b/.test(t);
 };
+
+// ¿El texto trae la línea legal del emisor ("… inscrita en el Registro Mercantil …",
+// también catalán "Registre" / gallego "Rexistro")? Si está, el emisor ya vive en
+// la capa de texto y NO hace falta OCR-ear el membrete (que solo añadiría ruido).
+// Misma expresión que en facturas.service.ts (reconciliarPartes); se duplica aquí
+// porque facturas importa de extraccion, no al revés (evita un ciclo).
+const RE_REGISTRO_MERCANTIL_TXT = /(?:inscrit[ao]\b[^\n]{0,40}?)?re[gx]istr[eo]\s+mercantil/i;
+export const tieneRegistroMercantil = (texto: string): boolean =>
+  RE_REGISTRO_MERCANTIL_TXT.test(texto ?? "");
 
 // ¿Lo que sacaron granite/deepseek se queda corto para ser un documento real?
 // OJO: NO es solo "pocas palabras", ni basta con buscar una frase concreta EN
@@ -203,22 +215,32 @@ const pareceResultadoPobre = (texto: string): boolean => {
 // fallan (texto impreso, buen contraste). Al revés, es peor que ellos con fotos o
 // fondos complejos — por eso va el último, no el primero, y solo se usa su
 // resultado si de verdad aporta más que lo que ya había (ver ocrImagen).
-// Datos de idioma de Tesseract VENDORIZADOS (backend/tessdata/spa.traineddata,
-// copiado al contenedor por el Dockerfile). Sin langPath, createWorker("spa")
-// DESCARGA spa.traineddata de un CDN la primera vez: en dev/casa (con internet)
-// tardaba ~0,5s, pero en el servidor SIN salida a internet esa descarga se
-// COLGABA hasta agotar el timeout —y ahora se dispara por cada página de cada PDF
-// de factura—, dejando el archivo "colgado en procesando". Con langPath local +
-// cacheMethod "none" carga el fichero del disco y NUNCA toca la red. gzip:false
-// porque el .traineddata vendorizado va sin comprimir. Se resuelve contra cwd,
-// que es backend/ en dev (npm run dev) y /app en el contenedor (WORKDIR /app):
-// en ambos casos, <cwd>/tessdata.
+// Datos de idioma de Tesseract VENDORIZADOS (backend/tessdata/<lang>.traineddata,
+// copiados al contenedor por el Dockerfile). Sin langPath, createWorker DESCARGA
+// el .traineddata de un CDN la primera vez: en dev/casa (con internet) tardaba
+// ~0,5s, pero en el servidor SIN salida a internet esa descarga se COLGABA hasta
+// agotar el timeout —y se dispara por cada página de cada PDF de factura—, dejando
+// el archivo "colgado en procesando". Con langPath local + cacheMethod "none"
+// carga los ficheros del disco y NUNCA toca la red. gzip:false porque los
+// .traineddata vendorizados van sin comprimir. Se resuelve contra cwd, que es
+// backend/ en dev (npm run dev) y /app en el contenedor (WORKDIR /app): en ambos
+// casos, <cwd>/tessdata.
 const TESSDATA_DIR = path.join(process.cwd(), "tessdata");
+
+// Idiomas de OCR: castellano PRIMERO (idioma dominante de las facturas, Tesseract
+// lo usa como primario) + catalán e inglés. Cubre facturas escaneadas/fotos en
+// las lenguas más habituales (una factura de la luz en catalán, o una de un
+// proveedor extranjero en inglés) sin que el OCR pierda letras/palabras por leerlo
+// solo con datos de español. Cada idioma añade un .traineddata en tessdata/ y algo
+// de coste por pasada; spa+cat+eng es el equilibrio (añadir glg/eus es cambiar
+// esta cadena + vendorizar su fichero). Para PDFs con capa de texto no interviene
+// (eso lo lee pdf-parse); esto solo afecta al OCR de imágenes/escaneos.
+const IDIOMAS_OCR = "spa+cat+eng";
 
 let workerTesseract: Promise<Worker> | null = null;
 const obtenerWorkerTesseract = (): Promise<Worker> => {
   if (!workerTesseract)
-    workerTesseract = createWorker("spa", OEM.LSTM_ONLY, {
+    workerTesseract = createWorker(IDIOMAS_OCR, OEM.LSTM_ONLY, {
       langPath: TESSDATA_DIR,
       cachePath: TESSDATA_DIR,
       cacheMethod: "none",
@@ -514,11 +536,19 @@ export const extraerTexto = async (
         // combinamos con la capa de texto:
         //  - PDF SIN texto (factura escaneada): OCR de las primeras páginas para
         //    recuperar TODO el contenido (antes de esto no se indexaba nada).
-        //  - PDF que parece factura pero SÍ trae texto: OCR solo de la 1ª página
-        //    —donde está el membrete/logo— para completar el emisor sin duplicar
-        //    innecesariamente el resto del documento.
+        //  - PDF que parece factura, trae texto, pero el emisor NO está en él: OCR
+        //    solo de la 1ª página —donde está el membrete/logo— para completar el
+        //    emisor sin duplicar el resto del documento.
+        // CLAVE: si el texto YA trae la línea legal del emisor ("… Registro/Registre
+        // Mercantil …"), el emisor ya está en la capa de texto y el OCR del membrete
+        // solo METE RUIDO (visto: leer el logo "AKX" como "ARX", que luego confunde
+        // la extracción de cliente y su clasificación venta/compra). En ese caso NO
+        // se hace OCR de página: el texto limpio basta. TRAZA (emisor solo en la
+        // imagen del pie; su línea de registro no está en la capa de texto) sí lo
+        // dispara y sigue recuperando su emisor.
         let ocrTexto = "";
-        if (!textoPdf || pareceFacturaConImportes(textoPdf)) {
+        const necesitaMembrete = pareceFacturaConImportes(textoPdf) && !tieneRegistroMercantil(textoPdf);
+        if (!textoPdf || necesitaMembrete) {
           ocrTexto = await ocrPaginasPdf(parser, textoPdf ? 1 : MAX_PAGINAS_OCR_PDF);
         }
         return limpiar([textoPdf, ocrTexto].filter(Boolean).join("\n\n"));

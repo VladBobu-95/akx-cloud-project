@@ -30,7 +30,7 @@ akx-cloud-project/
 | Objetos | MinIO (S3-compatible) |
 | IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5-coder:7b`/`3b` en máquinas pequeñas |
 | IA embeddings | Ollama — `bge-m3` (1024 dims) |
-| Visión/OCR | Cascada granite3.2-vision → deepseek-ocr → Tesseract.js (ver `NOTAS.md`) |
+| Visión/OCR | Cascada granite3.2-vision → deepseek-ocr → Tesseract.js `spa+cat+eng` (ver `NOTAS.md`) |
 | Extracción | pdf-parse v2 (PDF), mammoth (DOCX) |
 | Auth / Validación | JWT + bcrypt / Zod |
 | Frontend | Angular 22 (signals, standalone), SCSS, marked v18 |
@@ -123,7 +123,7 @@ services/
   compartido.service.ts  carpetas compartidas por rol: CRUD admin, acceso por empresa+roles, subir/listar/descargar/borrar (almacenamiento único, dedup por hash)
   chat.service.ts        chatbot IA (ver abajo + NOTAS.md)
   extraccion.service.ts  texto de PDF/DOCX/txt + cascada OCR de imágenes
-  facturas.service.ts    escaneo, auto-escaneo, analítica filtrable, listados paginados
+  facturas.service.ts    escaneo, auto-escaneo, clasificación venta/compra (CIF/nombre), edición manual, analítica filtrable, listados paginados
   rag.service.ts         embeddings bge-m3, indexación, búsqueda semántica
 ```
 
@@ -142,14 +142,15 @@ Todas requieren `Authorization: Bearer <token>` salvo `/api/auth/*`.
 | Método | Ruta | Notas |
 |---|---|---|
 | GET | `/empresas` | lista de empresas + `usuariosCount` |
-| POST | `/empresas` | `{nombre, admin:{email,password,nombre}}` → crea empresa + su primer admin (transacción) |
-| PATCH | `/empresas/:id` | `{nombre?, estado?}` — `estado` = `activa`\|`suspendida` |
+| POST | `/empresas` | `{nombre, nif?, admin:{email,password,nombre}}` → crea empresa + su primer admin (transacción) |
+| PATCH | `/empresas/:id` | `{nombre?, nif?, estado?}` — `estado` = `activa`\|`suspendida`; `nif` = CIF (ancla venta/compra) |
 | DELETE | `/empresas/:id` | borra empresa (CASCADE a usuarios y su contenido en BD) |
 
 ### `/api/equipo` 🔒 admin (scoped a su empresa)
 | Método | Ruta | Notas |
 |---|---|---|
 | GET | `/capacidades` | vocabulario fijo de capacidades (para los toggles) |
+| GET/PATCH | `/empresa` | datos de la propia empresa (`{id,nombre,nif}`) / editar `{nif?}` — el CIF ancla venta/compra (se auto-aprende al escanear; editable aquí) |
 | GET/POST | `/usuarios` | listar miembros / crear `{nombre,email,password,rol,rolesIds[]}` (`rol`=`miembro`\|`admin`) |
 | PATCH/DELETE | `/usuarios/:id` | editar (incl. `password?`, `rolesIds?`) / eliminar (no a uno mismo) |
 | GET | `/usuarios/:id/archivos` | archivos del miembro (paginado) → `{archivos,total,paginas}` |
@@ -203,12 +204,14 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | Método | Ruta | Notas |
 |---|---|---|
 | POST | `/escanear` | `{archivoId, pista?}` — **asíncrono** (202): valida, marca `pendiente`, encola en background; resultado vía polling de la columna "Estado" |
-| GET | `/` | listado paginado — query `cliente`/`emisor`/`carpeta`/`desde`/`hasta`/`facturas`/`papelera`/`pagina`/`limite` → `{filas, total, paginas}`. Lo usa la paginación de tablas del chat |
+| GET | `/` | listado paginado — query `cliente`/`emisor`/`carpeta`/`desde`/`hasta`/`facturas`/`moneda`/`tipo`/`papelera`/`pagina`/`limite` → `{filas, total, paginas}`. `tipo`=`venta`\|`compra`\|`desconocido` (pestañas de la página Facturas). Cada fila trae `id/numero/fecha/emisor/cliente/tipo/subtotal/iva/total/moneda`. Lo usan la página Facturas y la paginación de tablas del chat |
+| GET | `/:id` | detalle completo (cabecera + `lineas[]`) para el editor |
+| PATCH | `/:id` | **edición manual** `{numero?,fecha?,emisor?,emisorNif?,cliente?,clienteNif?,tipo?,moneda?,subtotal?,iva?,total?,lineas?}` — corrige lo que la IA sacó mal y **regenera** el resumen individual + los agregados |
 
 ---
 
 ## Schema de BD
-- **empresas** (tenant): `id`, `nombre`, `estado` (`activa`|`suspendida`, default `activa`), `creadoEn`. `OneToMany` usuarios.
+- **empresas** (tenant): `id`, `nombre`, `nif` (CIF/NIF, nullable — ancla para clasificar facturas como venta/compra; se **auto-aprende** por corroboración y es editable), `estado` (`activa`|`suspendida`, default `activa`), `creadoEn`. `OneToMany` usuarios.
 - **roles** (funcionales, por empresa): `id`, `nombre`, `capacidades` (`text[]` del vocabulario fijo `config/capacidades.ts`), `empresaId` (FK CASCADE), `creadoEn`. Único `(empresaId, nombre)`. N:N con usuarios vía **usuario_roles** (`usuarioId`,`rolId`, ambos CASCADE).
 - **carpetas_compartidas** (Fase 3): `id`, `nombre`, `empresaId` (FK CASCADE), `creadoEn`. Único `(empresaId, nombre)`. N:N con roles vía **carpeta_compartida_roles** (`carpetaCompartidaId`,`rolId`). Acceso = empresa + roles (no propietario). Borrarla CASCADE a sus archivos y subcarpetas.
 - **carpeta_compartida_carpetas**: `id`, `ruta` (canónica dentro de la carpeta compartida), `carpetaCompartidaId` (FK CASCADE), `creadaEn`. Único `(carpetaCompartidaId, ruta)`. Persiste las subcarpetas explícitas (incl. vacías) del explorador compartido, equivalente a `carpetas` para el espacio personal.
@@ -217,7 +220,7 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 - **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
 - **tareas** (cola durable): `id`, `tipo` (`indexar`|`autoescanear`), `archivoId`/`usuarioId` CASCADE, `estado` (`pendiente`|`en_proceso`|`ok`|`error`), `prioridad`, `intentos`/`maxIntentos`, `disponibleEn` (backoff), `pista`, `error`. La procesa el worker (`tareas.service.ts`), que relee los bytes de MinIO → sobrevive a reinicios, reintenta y limita la concurrencia hacia Ollama (sustituye a las colas en memoria).
 - **chat_pendientes**: `usuarioId` PK, `tipo` (`aclaracion`|`valor`|`confirmacion`), `payload` jsonb, `expiraEn`. Estado conversacional del chat fuera de memoria (aclaraciones, valores que faltan, y confirmación de operaciones masivas irreversibles como vaciar la papelera).
-- **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `cliente`, `moneda` (código ISO 4217, default `EUR`; la IA la extrae de la factura), `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade. Analítica y resúmenes (totales, ventas_top, clientes_top, resumen-ventas.md) **agrupan por moneda** — nunca se suman divisas distintas.
+- **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `emisorNif`, `cliente`, `clienteNif`, `tipo` (`venta`|`compra`|`desconocido`, default `desconocido` — ver "Facturas: venta/compra" abajo), `moneda` (código ISO 4217, default `EUR`; la IA la extrae de la factura), `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade. La analítica se **separa por tipo**: ventas (`ventas_top`/`clientes_top`/`totales_facturas`/`resumen-ventas.md`) vs compras (`compras_top`/`proveedores_top`/`totales_compras`/`resumen-compras.md`); todo **agrupa por moneda** — nunca se suman divisas distintas.
 - **lineas_factura**: `descripcion`, `cantidad`, `precioUnit`, `total`.
 - **fragmentos** (RAG): `archivoId`, `propietarioId`, `carpetaCompartidaId` (nullable — set en fragmentos de archivos compartidos, para que la búsqueda incluya lo compartido accesible), `indice`, `texto`, `embedding vector(1024)`.
 
@@ -230,25 +233,37 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 4. **Listados paginados** (`tablaFacturas`/`tablaArchivos`/`tablaCarpetas`): ver `NOTAS.md`.
 5. **Consciente del rol (RBAC, Fase 3)**: al inicio calcula `capacidadesDe(usuarioId)` (admin/superadmin = todas). El mapa `TOOL_CAPACIDAD` marca qué capacidad exige cada tool (`facturas`, `busqueda`); las demás (gestión básica de archivos personales) están **siempre** disponibles. Se aplica en tres sitios: (a) `ejecutarTool` rechaza una tool sin capacidad, (b) se filtran las `toolsPermitidas` que ve el modelo, (c) los pre-flights de facturas se gatean con `puedeFacturas`. Tras los pre-flights, un guard determinista corta con "no está disponible para tu rol" si la petición sigue siendo de datos de facturas y falta la capacidad (en vez de delegar en el modelo). Enforzado en CÓDIGO, no en el prompt.
 
-**Tools:** buscar/copiar/mover/renombrar/eliminar/crear archivo, crear/listar/eliminar/vaciar/mover/renombrar/copiar carpeta, borrar_todo/_todas_carpetas/_todos_archivos, listar_papelera, restaurar_archivo/_todo, borrar_permanente, vaciar_papelera, leer_archivo, estadisticas, buscar_semantica, escanear_factura/_todas, obtener_factura, ventas_top, totales_facturas, clientes_top.
+**Tools:** buscar/copiar/mover/renombrar/eliminar/crear archivo, crear/listar/eliminar/vaciar/mover/renombrar/copiar carpeta, borrar_todo/_todas_carpetas/_todos_archivos, listar_papelera, restaurar_archivo/_todo, borrar_permanente, vaciar_papelera, leer_archivo, estadisticas, buscar_semantica, escanear_factura/_todas, obtener_factura, ventas_top, totales_facturas, clientes_top, **compras_top, totales_compras, proveedores_top** (compras). Pre-flights de compras: "resumen de compras/gastos", "cuánto he gastado", "mis proveedores".
 
 ## OCR y RAG — resumen
 - **OCR imágenes** (`extraccion.service.ts`): cascada de 3 pasadas (granite → deepseek si parece factura → Tesseract si los VLM se quedan cortos), normalizando a PNG primero. Detalle completo en `NOTAS.md`.
+- **Tesseract multi-idioma**: `IDIOMAS_OCR = "spa+cat+eng"` (traineddata vendorizados en `backend/tessdata/`, copiados por el Dockerfile) — para facturas escaneadas/fotos en catalán/inglés, no solo castellano. Ampliar = editar la cadena + añadir el `.traineddata`.
+- **OCR de página en PDFs con texto** (rescate del membrete): solo se rasteriza+OCR-ea la 1ª página si el texto `pareceFacturaConImportes` **y NO** trae ya la línea "Registro/Registre/Rexistro Mercantil" (`tieneRegistroMercantil`). Si el emisor ya está en la capa de texto (ej. factura de la luz), el OCR solo añadiría ruido (leer "AKX"→"ARX"); se salta.
 - **RAG** (`rag.service.ts`): al subir → extrae texto → chunks de **1000 chars / solape 150** → embeddings **bge-m3 (1024)** → tabla `fragmentos`. Búsqueda híbrida (coseno `<=>` OR `ILIKE`), `MIN_SCORE = 0.50`, un fragmento por archivo.
 - **Auto-escaneo de facturas al subir**: `ctrlSubir` dispara `autoEscanearArchivo` en background; solo persiste si parece factura (`soloSiFactura`).
+
+## Facturas: venta/compra + CIF (`facturas.service.ts`)
+El sistema cataloga **ventas** (la empresa es el emisor) y **compras** (es el cliente). Todo determinista, en `escanearFactura`:
+1. **Extracción IA** de emisor/cliente/**NIF de cada parte**/importes/líneas (prompt + JSON schema; el modelo pequeño confunde emisor↔cliente, de ahí los pasos siguientes).
+2. **`reconciliarPartes`**: ancla el **emisor** en la razón social de la línea legal "…Registro Mercantil…" del pie (también catalán "Registre"/gallego "Rexistro", y extrae su NIF). Corrige inversiones (cliente = empresa del registro → swap) y duplicados (emisor==cliente → lo fija con el del pie), tolerando ruido OCR de nombres (`compartenTokenDistintivo`: "AKX"≈"ARX").
+3. **`resolverDireccion`** (venta/compra/desconocido): por **CIF** de la empresa si se conoce (== emisorNif→venta, == clienteNif→compra); si el CIF del tenant aparece en el **texto** y el emisor es otro→compra; si no, por **parecido de nombre** contra `empresa.nombre`; `emisor==cliente`→desconocido.
+4. **Auto-CIF por corroboración** (`intentarAprenderCifEmpresa`): fija `empresa.nif` cuando el mismo NIF del lado del tenant aparece en **≥2 facturas** (un NIF mal leído una vez no se cuela). Editable por el admin en `/api/equipo/empresa`.
+- **Desconocido** = no se pudo clasificar (queda fuera de ambas analíticas). Se resuelve editándola en la página **Facturas** (pestaña "Sin clasificar").
+- Heurísticas cubiertas por **tests** (`backend/tests/facturas.heuristicas.test.ts`, puros, sin BD/IA).
 
 ---
 
 ## Estructura frontend (`frontend/src/app/`)
 ```
-core/    archivos/auth/chat/compartido/theme/toast .service.ts, auth.guard, auth.interceptor (JWT), models.ts
+core/    archivos/auth/chat/compartido/facturas/equipo/plataforma/theme/toast .service.ts, auth.guard, auth.interceptor (JWT), models.ts
 layout/  shell (navbar)
-pages/   login, inicio (chat), archivos (explorador + toggle Personales/Compartido → compartido.ts), papelera, perfil, equipo (admin: miembros/roles/compartido), plataforma (superadmin)   [cada uno .ts/.html/.scss]
+pages/   login, inicio (chat), archivos (explorador + toggle Personales/Compartido → compartido.ts), facturas (tabla venta/compra/sin clasificar + editor), papelera, perfil, equipo (admin: miembros/roles/compartido + CIF), plataforma (superadmin)   [cada uno .ts/.html/.scss]
 shared/  file-size.pipe, toasts.component, errores.ts (mensajeError)
 app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), styles.scss (tema)
 ```
 - **Estado con signals** (sin NgRx). Standalone components. Markdown del bot con `marked` (`breaks: true`).
 - **archivos.ts**: árbol de carpetas en cliente (carga todos los archivos), drag&drop con eventos `pointer`, menú contextual, selección múltiple, columna "Estado" (polling 3s), paginación en cliente.
+- **facturas.ts**: tabla de facturas escaneadas con pestañas (Todas/Ventas/Compras/**Sin clasificar**), paginación server-side y **modal de edición** (corregir emisor/cliente/tipo/importes/líneas → `PATCH /api/facturas/:id`). Es la red de seguridad ante los fallos de extracción del modelo pequeño.
 - **chat**: historial en signal + localStorage (`akx_chat`); se resetea al cambiar de sesión (`ChatService.reset()` desde `AuthService`) para no filtrarse entre usuarios.
 - **Tema** (`styles.scss`): `--green #16a34a`, `--green-dark`, `--green-soft`, `--bg/--surface/--text/--muted/--border/--danger`, `--radius 12px`. Modo oscuro: `body.dark`.
 
@@ -262,7 +277,7 @@ app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), style
 - **No editar a mano en el servidor**: cambios en local → commit → push → `git pull`.
 
 ## Limitaciones conocidas (resumen)
-- Modelo pequeño (3b/7b): function calling poco fiable (de ahí los pre-flights) y mezcla campos al extraer facturas. Detalle y resto de limitaciones en `NOTAS.md`.
+- Modelo pequeño (3b/7b): function calling poco fiable (de ahí los pre-flights) y mezcla campos al extraer facturas — mitigado con `reconciliarPartes`/`resolverDireccion` y la **edición manual** en la página Facturas. Detalle y resto de limitaciones en `NOTAS.md`.
 - Tipos permitidos: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máx 50 MB. Subida: 1 archivo/petición (paralelas en el front).
 - **Carpetas compartidas / chat por rol (Fase 3):**
   - La gestión básica de archivos personales en el chat **siempre** está disponible; `facturas`/`busqueda` se gatean. Un miembro **sin ningún rol** no tiene capacidades → el chat le limita facturas/búsqueda (el admin debería darle un rol).

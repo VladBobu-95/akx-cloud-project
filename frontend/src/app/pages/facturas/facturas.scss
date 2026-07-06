@@ -1,0 +1,115 @@
+.head {
+  margin-bottom: 16px;
+  h1 { margin: 0 0 4px; }
+  p { margin: 0; }
+}
+
+.toggle {
+  display: inline-flex;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+
+  button {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    padding: 7px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+
+    &.active {
+      background: var(--green);
+      color: #fff;
+    }
+    &:hover:not(.active) { color: var(--text); }
+  }
+}
+
+.list { padding: 0; overflow: hidden; }
+
+.table {
+  th.num, td.num { text-align: right; white-space: nowrap; }
+  td.ell {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  tr.fila { cursor: pointer; }
+  tr.fila:hover { background: var(--green-soft); }
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &.t-venta { background: #dcfce7; color: #166534; }
+  &.t-compra { background: #dbeafe; color: #1e40af; }
+  &.t-desconocido { background: #fef3c7; color: #92400e; }
+}
+
+:host-context(body.dark) {
+  .badge.t-venta { background: rgba(22, 163, 74, 0.25); color: #86efac; }
+  .badge.t-compra { background: rgba(37, 99, 235, 0.25); color: #93c5fd; }
+  .badge.t-desconocido { background: rgba(202, 138, 4, 0.25); color: #fde68a; }
+}
+
+.paginacion {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+/* --- Modal editor --- */
+.modal-lg { max-width: 760px; width: 100%; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.grid.totales { grid-template-columns: 1fr 1fr 1fr; margin-top: 12px; }
+
+.field { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.field label { font-size: 0.82rem; color: var(--muted); font-weight: 500; }
+.input.num { text-align: right; }
+
+.lineas { margin-top: 18px; }
+.lineas-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  h3 { margin: 0; font-size: 1rem; }
+}
+.lineas-tabla {
+  th, td { padding: 4px; }
+  .input { padding: 6px 8px; font-size: 0.88rem; }
+  td:nth-child(2) .input,
+  td:nth-child(3) .input,
+  td:nth-child(4) .input { width: 90px; }
+}
+
+.acciones {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+@media (max-width: 640px) {
+  .grid, .grid.totales { grid-template-columns: 1fr; }
+}
