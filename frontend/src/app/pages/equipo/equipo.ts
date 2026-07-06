@@ -74,6 +74,7 @@ export class EquipoPage {
   protected mNombre = '';
   protected mEmail = '';
   protected mPassword = '';
+  protected mMostrarPassword = signal(false);
   protected mRolCuenta: 'miembro' | 'admin' = 'miembro';
   protected mRolesSel = signal<Set<string>>(new Set());
 
@@ -122,6 +123,7 @@ export class EquipoPage {
     this.mNombre = '';
     this.mEmail = '';
     this.mPassword = '';
+    this.mMostrarPassword.set(false);
     this.mRolCuenta = 'miembro';
     this.mRolesSel.set(new Set());
     this.mMostrar.set(true);
@@ -132,6 +134,7 @@ export class EquipoPage {
     this.mNombre = m.nombre ?? '';
     this.mEmail = m.email;
     this.mPassword = '';
+    this.mMostrarPassword.set(false);
     this.mRolCuenta = m.rol;
     this.mRolesSel.set(new Set(m.roles.map((r) => r.id)));
     this.mMostrar.set(true);

@@ -120,3 +120,29 @@
         max-width: 760px;
         width: 100%;
       }
+      .input-pass {
+        position: relative;
+      }
+      .input-pass .input {
+        padding-right: 42px;
+      }
+      .input-pass .input::-ms-reveal,
+      .input-pass .input::-ms-clear {
+        display: none;
+      }
+      .ojo {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--muted);
+        padding: 4px;
+        display: flex;
+        align-items: center;
+      }
+      .ojo:hover {
+        color: var(--text);
+      }
