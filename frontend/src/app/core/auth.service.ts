@@ -34,10 +34,15 @@ export class AuthService {
     return this.usuario()?.rol === 'superadmin';
   }
 
-  // Capacidades funcionales del usuario. admin/superadmin las tienen todas (el
-  // backend ya las expande), así que estos helpers valen para todos los roles.
+  // Capacidades funcionales del usuario. admin/superadmin tienen SIEMPRE acceso a
+  // todo, sin depender del array `capacidades` (espejo de capacidadesDe en el
+  // backend): así un admin nunca pierde el chat aunque su `usuario` cacheado sea
+  // antiguo (sin capacidades) o el refresco del perfil aún no haya llegado.
   tieneCapacidad(cap: string): boolean {
-    return this.usuario()?.capacidades?.includes(cap) ?? false;
+    const u = this.usuario();
+    if (!u) return false;
+    if (u.rol === 'admin' || u.rol === 'superadmin') return true;
+    return u.capacidades?.includes(cap) ?? false;
   }
 
   // ¿Puede usar el chatbot? Gobierna el enlace de navegación, la ruta /inicio y

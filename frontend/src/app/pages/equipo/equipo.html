@@ -255,7 +255,7 @@
             </div>
             <div class="field">
               <label for="mRolCuenta">Tipo de cuenta</label>
-              <select id="mRolCuenta" class="input" name="mRolCuenta" [(ngModel)]="mRolCuenta">
+              <select id="mRolCuenta" class="input" name="mRolCuenta" [(ngModel)]="mRolCuenta" [disabled]="mEditandoAdmin()">
                 <option value="miembro">Miembro</option>
                 <option value="admin">Administrador</option>
               </select>
@@ -267,12 +267,15 @@
             } @else {
               <div class="chips">
                 @for (r of roles(); track r.id) {
-                  <label class="chip" [class.on]="mRolesSel().has(r.id)">
-                    <input type="checkbox" [checked]="mRolesSel().has(r.id)" (change)="toggleRolMiembro(r.id)" />
+                  <label class="chip" [class.on]="mRolesSel().has(r.id)" [class.disabled]="mEditandoAdmin()">
+                    <input type="checkbox" [checked]="mRolesSel().has(r.id)" [disabled]="mEditandoAdmin()" (change)="toggleRolMiembro(r.id)" />
                     {{ r.nombre }}
                   </label>
                 }
               </div>
+              @if (mEditandoAdmin()) {
+                <p class="muted">Un administrador ya tiene todas las capacidades; los roles funcionales no aplican.</p>
+              }
             }
 
             <div class="row" style="justify-content: flex-end; margin-top: 16px;">

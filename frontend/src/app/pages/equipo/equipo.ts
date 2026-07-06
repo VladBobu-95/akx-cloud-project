@@ -77,6 +77,11 @@ export class EquipoPage {
   protected mPassword = '';
   protected mRolCuenta: 'miembro' | 'admin' = 'miembro';
   protected mRolesSel = signal<Set<string>>(new Set());
+  // Al editar a un ADMIN de empresa se deshabilitan «Tipo de cuenta» y «Roles
+  // funcionales»: un admin ya tiene TODAS las capacidades, así que asignarle roles
+  // funcionales no cambia nada, y su tipo de cuenta no se altera desde aquí. Se fija
+  // al abrir el editor (no se deriva de mRolCuenta en vivo, que sí cambia al crear).
+  protected mEditandoAdmin = signal(false);
 
   // ---- Modal rol ----
   protected rMostrar = signal(false);
@@ -125,6 +130,7 @@ export class EquipoPage {
     this.mPassword = '';
     this.mRolCuenta = 'miembro';
     this.mRolesSel.set(new Set());
+    this.mEditandoAdmin.set(false);
     this.mMostrar.set(true);
   }
 
@@ -135,6 +141,7 @@ export class EquipoPage {
     this.mPassword = '';
     this.mRolCuenta = m.rol;
     this.mRolesSel.set(new Set(m.roles.map((r) => r.id)));
+    this.mEditandoAdmin.set(m.rol === 'admin');
     this.mMostrar.set(true);
   }
 
