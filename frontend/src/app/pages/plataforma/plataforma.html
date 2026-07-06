@@ -120,18 +120,32 @@
       </div>
     }
 
-    <!-- Modal: confirmar borrado -->
+    <!-- Modal: confirmar borrado (3 pasos) -->
     @if (confirmacion(); as c) {
       <div class="modal-backdrop">
         <div class="card modal" (click)="$event.stopPropagation()">
-          <h2>Borrar empresa</h2>
-          <p class="muted" style="margin-bottom: 16px;">
-            Borrar "{{ c.empresa.nombre }}" eliminará también sus usuarios y todos sus
-            archivos. Esta acción no se puede deshacer.
-          </p>
+          <h2>Borrar empresa ({{ c.paso }}/3)</h2>
+          @if (c.paso === 1) {
+            <p class="muted" style="margin-bottom: 16px;">
+              Borrar "{{ c.empresa.nombre }}" eliminará también sus usuarios y todos sus
+              archivos. Esta acción no se puede deshacer.
+            </p>
+          } @else if (c.paso === 2) {
+            <p class="muted" style="margin-bottom: 16px;">
+              ¿Seguro? Se perderán <strong>todos</strong> los archivos y datos de
+              "{{ c.empresa.nombre }}" de forma permanente.
+            </p>
+          } @else {
+            <p class="muted" style="margin-bottom: 16px;">
+              Última confirmación: al pulsar "Borrar definitivamente" la empresa
+              "{{ c.empresa.nombre }}" se eliminará ya mismo y no habrá vuelta atrás.
+            </p>
+          }
           <div class="row" style="justify-content: flex-end;">
             <button class="btn btn-ghost" (click)="confirmacion.set(null)">Cancelar</button>
-            <button class="btn btn-danger" (click)="ejecutarEliminar()">Borrar</button>
+            <button class="btn btn-danger" (click)="confirmarPaso()">
+              {{ c.paso < 3 ? 'Continuar' : 'Borrar definitivamente' }}
+            </button>
           </div>
         </div>
       </div>

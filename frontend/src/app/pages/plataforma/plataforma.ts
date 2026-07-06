@@ -34,8 +34,8 @@ export class PlataformaPage {
   protected eNombre = '';
   protected eNif = '';
 
-  // Confirmación de borrado (acción destructiva).
-  protected confirmacion = signal<{ empresa: Empresa } | null>(null);
+  // Confirmación de borrado (acción destructiva, irreversible): 3 pasos.
+  protected confirmacion = signal<{ empresa: Empresa; paso: number } | null>(null);
 
   constructor() {
     this.cargar();
@@ -129,15 +129,19 @@ export class PlataformaPage {
     });
   }
 
-  // --- Borrar ---
+  // --- Borrar (3 confirmaciones antes de ejecutar) ---
   pedirEliminar(empresa: Empresa) {
-    this.confirmacion.set({ empresa });
+    this.confirmacion.set({ empresa, paso: 1 });
   }
 
-  ejecutarEliminar() {
+  confirmarPaso() {
     const c = this.confirmacion();
-    this.confirmacion.set(null);
     if (!c) return;
+    if (c.paso < 3) {
+      this.confirmacion.set({ empresa: c.empresa, paso: c.paso + 1 });
+      return;
+    }
+    this.confirmacion.set(null);
     this.svc.eliminarEmpresa(c.empresa.id).subscribe({
       next: () => {
         this.toast.exito('Empresa eliminada');
