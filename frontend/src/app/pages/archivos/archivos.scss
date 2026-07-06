@@ -27,13 +27,16 @@
         background: var(--green-soft);
         color: var(--green-dark);
       }
-      /* Al arrastrar desde Compartido, "Personales" se resalta como zona de drop
-         (clases globales que pone el explorador durante el arrastre). */
-      :host-context(body.arrastrando-archivo) .ambito-toggle.modo-compartido button[data-drop-personal] {
+      /* Al arrastrar, el botón del OTRO espacio (el inactivo) se resalta como zona
+         de drop para MOVER allí: desde Personales → "Compartido"; desde Compartido →
+         "Personales". Clases globales que pone el explorador durante el arrastre. */
+      :host-context(body.arrastrando-archivo) .ambito-toggle button[data-drop-personal]:not(.active),
+      :host-context(body.arrastrando-archivo) .ambito-toggle button[data-drop-compartido]:not(.active) {
         outline: 2px dashed var(--green);
         outline-offset: 2px;
       }
-      :host-context(body.sobre-personal) .ambito-toggle.modo-compartido button[data-drop-personal] {
+      :host-context(body.sobre-externo) .ambito-toggle button[data-drop-personal]:not(.active),
+      :host-context(body.sobre-externo) .ambito-toggle button[data-drop-compartido]:not(.active) {
         background: var(--green);
         color: #fff;
       }

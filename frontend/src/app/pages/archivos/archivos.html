@@ -6,16 +6,22 @@
         </div>
       </div>
 
-      <!-- Toggle Personales / Compartido. El botón "Personales" es además zona de
-           drop: arrastrando desde Compartido se sueltan ahí para copiar a personal
-           ([data-drop-personal] lo detecta el explorador). -->
+      <!-- Toggle Personales / Compartido. Cada botón es además zona de drop del OTRO
+           espacio: arrastrando se sueltan ahí para MOVER (los detecta el explorador
+           por [data-drop-personal] / [data-drop-compartido]). -->
       <div class="ambito-toggle" [class.modo-compartido]="ambito() === 'compartido'">
         <button data-drop-personal [class.active]="ambito() === 'personal'" (click)="ambito.set('personal')">Personales</button>
-        <button [class.active]="ambito() === 'compartido'" (click)="ambito.set('compartido')">Compartido</button>
+        <button data-drop-compartido [class.active]="ambito() === 'compartido'" (click)="ambito.set('compartido')">Compartido</button>
       </div>
 
       @if (ambito() === 'personal') {
-        <app-explorador [datos]="svc" [opciones]="opcionesPersonal" (totalCambio)="total.set($event)" />
+        <app-explorador
+          [datos]="svc"
+          [opciones]="opcionesPersonal()"
+          (totalCambio)="total.set($event)"
+          (moverAExterno)="exportarACompartido($event, 'mover')"
+          (copiarAExterno)="exportarACompartido($event, 'copiar')"
+        />
       } @else {
         <app-compartido />
       }

@@ -8,6 +8,7 @@ import { CarpetaCompartidaCarpeta } from "../entities/CarpetaCompartidaCarpeta";
 import { Rol } from "../entities/Rol";
 import { Usuario } from "../entities/Usuario";
 import { Archivo } from "../entities/Archivo";
+import { Factura } from "../entities/Factura";
 import { EventoCompartido, AccionCompartida } from "../entities/EventoCompartido";
 import { minioClient } from "../config/minio";
 import { env } from "../config/env";
@@ -26,6 +27,7 @@ const ccCarpetaRepo = () => AppDataSource.getRepository(CarpetaCompartidaCarpeta
 const rolRepo = () => AppDataSource.getRepository(Rol);
 const usuarioRepo = () => AppDataSource.getRepository(Usuario);
 const archivoRepo = () => AppDataSource.getRepository(Archivo);
+const facturaRepo = () => AppDataSource.getRepository(Factura);
 const eventoRepo = () => AppDataSource.getRepository(EventoCompartido);
 
 // Registra una acción en el historial de una carpeta compartida. Guarda el nombre
@@ -692,6 +694,221 @@ export const copiarCompartidoAPersonal = async (
     objeto: original.nombre,
     ruta: original.carpeta,
     detalle: carpetaFinal === "/" ? "a Mis archivos" : `a Mis archivos ${carpetaFinal}`,
+  });
+
+  return { archivo: guardado, duplicado: false };
+};
+
+// ===================== MOVER/COPIAR ENTRE PERSONAL ↔ COMPARTIDO =====================
+// Mover es DESTRUCTIVO en el espacio origen (almacenamiento único): al mover un
+// compartido a personal desaparece del compartido para TODOS los del rol; al mover
+// un personal a compartido deja de ser tuyo personal. Copiar deja el original.
+
+// Carga un archivo PERSONAL vivo del usuario (no compartido, no en papelera).
+const cargarPersonalPropio = async (archivoId: string, usuarioId: string): Promise<Archivo> => {
+  const archivo = await archivoRepo().findOne({
+    where: {
+      id: archivoId,
+      propietario: { id: usuarioId },
+      carpetaCompartidaId: IsNull(),
+      eliminadoEn: IsNull(),
+    },
+  });
+  if (!archivo) throw new AppError(404, "Archivo personal no encontrado");
+  return archivo;
+};
+
+// MOVER personal → compartido: reasigna el archivo en sitio (misma claveMinio, no se
+// copia el binario). Sale de la analítica personal (se borran sus filas Factura) y
+// sus fragmentos RAG pasan al espacio compartido.
+export const moverPersonalACompartido = async (
+  archivoId: string,
+  usuarioId: string,
+  carpetaCompartidaId: string,
+  carpetaDestino?: string,
+): Promise<{ archivo: Archivo; duplicado: boolean }> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  const archivo = await cargarPersonalPropio(archivoId, usuarioId);
+
+  // Dedup por (carpeta compartida, hash): si ese contenido ya está en el compartido,
+  // "mover" = quitarlo de personal y quedarnos con el existente.
+  if (archivo.hashSha256) {
+    const existente = await buscarCompartidoPorHash(carpetaCompartidaId, archivo.hashSha256);
+    if (existente) {
+      await facturaRepo().delete({ archivo: { id: archivo.id } });
+      await minioClient.removeObject(env.MINIO_BUCKET, archivo.claveMinio).catch(() => {});
+      await archivoRepo().delete(archivo.id); // fragmentos personales por CASCADE
+      await registrarEvento(carpetaCompartidaId, usuarioId, "subir", {
+        objeto: existente.nombre,
+        ruta: existente.carpeta,
+        detalle: "movido desde Mis archivos (ya existía)",
+      });
+      return { archivo: existente, duplicado: true };
+    }
+  }
+
+  // Las facturas compartidas no entran en la analítica personal (queries en vivo).
+  await facturaRepo().delete({ archivo: { id: archivo.id } });
+
+  const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  archivo.carpetaCompartidaId = carpetaCompartidaId;
+  archivo.carpeta = carpetaFinal;
+  const guardado = await archivoRepo().save(archivo);
+
+  // Reasignar los fragmentos RAG al espacio compartido (búsqueda por rol).
+  await AppDataSource.query(
+    `UPDATE "fragmentos" SET "carpetaCompartidaId" = $1 WHERE "archivoId" = $2`,
+    [carpetaCompartidaId, archivo.id],
+  ).catch((err) => console.error(`[mover] fragmentos de "${archivo.nombre}":`, err));
+
+  if (carpetaFinal !== "/") {
+    await crearSubcarpetaCompartida(usuarioId, carpetaCompartidaId, carpetaFinal, false).catch(() => {});
+  }
+
+  await registrarEvento(carpetaCompartidaId, usuarioId, "subir", {
+    objeto: guardado.nombre,
+    ruta: carpetaFinal,
+    detalle: "movido desde Mis archivos",
+  });
+
+  return { archivo: guardado, duplicado: false };
+};
+
+// MOVER compartido → personal: reasigna el archivo en sitio (misma claveMinio). Deja
+// de estar en el compartido para todos. Se auto-escanea como factura personal.
+export const moverCompartidoAPersonal = async (
+  archivoId: string,
+  usuarioId: string,
+  carpetaDestino?: string,
+): Promise<{ archivo: Archivo; duplicado: boolean }> => {
+  const original = await cargarCompartidoConAcceso(archivoId, usuarioId);
+  const ccOrigen = original.carpetaCompartidaId!;
+  const rutaAntes = original.carpeta;
+
+  // Dedup por hash contra tus archivos personales vivos.
+  if (original.hashSha256) {
+    const yaExiste = await archivoRepo().findOne({
+      where: {
+        propietario: { id: usuarioId },
+        hashSha256: original.hashSha256,
+        eliminadoEn: IsNull(),
+        carpetaCompartidaId: IsNull(),
+      },
+    });
+    if (yaExiste) {
+      // Ya lo tienes en personal → "mover" = quitarlo del compartido (afecta a todos).
+      await minioClient.removeObject(env.MINIO_BUCKET, original.claveMinio).catch(() => {});
+      await archivoRepo().delete(original.id); // fragmentos compartidos por CASCADE
+      await registrarEvento(ccOrigen, usuarioId, "eliminar", {
+        objeto: original.nombre,
+        ruta: rutaAntes,
+        detalle: "movido a Mis archivos (ya lo tenías)",
+      });
+      return { archivo: yaExiste, duplicado: true };
+    }
+  }
+
+  const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  original.carpetaCompartidaId = null;
+  original.carpeta = carpetaFinal;
+  original.propietario = { id: usuarioId } as Usuario;
+  const guardado = await archivoRepo().save(original);
+
+  await AppDataSource.query(
+    `UPDATE "fragmentos" SET "carpetaCompartidaId" = NULL, "propietarioId" = $1 WHERE "archivoId" = $2`,
+    [usuarioId, original.id],
+  ).catch((err) => console.error(`[mover] fragmentos de "${original.nombre}":`, err));
+
+  if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal).catch(() => {});
+
+  // Auto-escaneo "como si fuera mía" (la analítica de facturas es personal).
+  if (esArchivoFactura(guardado)) {
+    await marcarPendiente(guardado);
+    await encolarTarea({
+      tipo: "autoescanear",
+      archivoId: guardado.id,
+      usuarioId,
+      prioridad: /^image\//.test(guardado.mimeType) ? P_IMG_SCAN : P_ALTA,
+    });
+  }
+
+  await registrarEvento(ccOrigen, usuarioId, "eliminar", {
+    objeto: guardado.nombre,
+    ruta: rutaAntes,
+    detalle: carpetaFinal === "/" ? "movido a Mis archivos" : `movido a Mis archivos ${carpetaFinal}`,
+  });
+
+  return { archivo: guardado, duplicado: false };
+};
+
+// COPIAR personal → compartido: duplica el binario a una clave nueva del compartido.
+// El original personal permanece. Reutiliza texto + fragmentos RAG ya calculados.
+export const copiarPersonalACompartido = async (
+  archivoId: string,
+  usuarioId: string,
+  carpetaCompartidaId: string,
+  carpetaDestino?: string,
+): Promise<{ archivo: Archivo; duplicado: boolean }> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  const original = await cargarPersonalPropio(archivoId, usuarioId);
+
+  // Dedup por (carpeta compartida, hash): si ya está, devolvemos el existente.
+  if (original.hashSha256) {
+    const existente = await buscarCompartidoPorHash(carpetaCompartidaId, original.hashSha256);
+    if (existente) return { archivo: existente, duplicado: true };
+  }
+
+  const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  const carpetaLimpia = carpetaFinal === "/" ? "raiz" : carpetaFinal.slice(1);
+  const nuevaClave = `compartido/${carpetaCompartidaId}/${carpetaLimpia}/${randomUUID()}`;
+
+  await minioClient.copyObject(
+    env.MINIO_BUCKET,
+    nuevaClave,
+    `/${env.MINIO_BUCKET}/${original.claveMinio}`,
+  );
+
+  const copia = archivoRepo().create({
+    nombre: original.nombre, // nombre EXACTO (dedup por hash cubre las repeticiones)
+    carpeta: carpetaFinal,
+    mimeType: original.mimeType,
+    tamanoBytes: original.tamanoBytes,
+    claveMinio: nuevaClave,
+    hashSha256: original.hashSha256,
+    textoExtraido: original.textoExtraido,
+    propietario: { id: usuarioId } as Usuario, // autor/auditoría
+    carpetaCompartidaId,
+    estadoIndexado: "indexado", // reutilizamos texto + fragmentos ya calculados
+    indexadoEn: new Date(),
+  });
+
+  let guardado: Archivo;
+  try {
+    guardado = await archivoRepo().save(copia);
+  } catch (err) {
+    await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
+    throw err;
+  }
+
+  // Fragmentos RAG copiados al espacio compartido (reutiliza embeddings).
+  try {
+    await AppDataSource.query(
+      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
+       SELECT $1, $2, $3, "indice", "texto", "embedding" FROM "fragmentos" WHERE "archivoId" = $4`,
+      [guardado.id, usuarioId, carpetaCompartidaId, original.id],
+    );
+  } catch (errFrag) {
+    console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
+  }
+
+  if (carpetaFinal !== "/") {
+    await crearSubcarpetaCompartida(usuarioId, carpetaCompartidaId, carpetaFinal, false).catch(() => {});
+  }
+
+  await registrarEvento(carpetaCompartidaId, usuarioId, "copiar", {
+    objeto: guardado.nombre,
+    ruta: carpetaFinal,
+    detalle: "desde Mis archivos",
   });
 
   return { archivo: guardado, duplicado: false };

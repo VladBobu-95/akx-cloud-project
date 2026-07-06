@@ -56,8 +56,10 @@ export class ExploradorComponent implements OnInit {
   @Input({ required: true }) opciones!: OpcionesExplorador;
   // Emite el nº total de archivos cargados (para que el contenedor lo muestre).
   @Output() totalCambio = new EventEmitter<number>();
-  // Copiar elementos a un destino EXTERNO (ej. Compartido → Mis archivos). El
-  // contenedor (compartido.ts) recibe la petición ya resuelta y hace las llamadas.
+  // Mover / copiar elementos a un espacio EXTERNO (personal ↔ compartido). El
+  // contenedor recibe la petición ya resuelta (con el destinoId) y hace las llamadas.
+  // El arrastre y "Mover a…" emiten `moverAExterno`; "Copiar en…" emite `copiarAExterno`.
+  @Output() moverAExterno = new EventEmitter<PeticionExportar>();
   @Output() copiarAExterno = new EventEmitter<PeticionExportar>();
 
   private toast = inject(ToastService);
@@ -115,8 +117,11 @@ export class ExploradorComponent implements OnInit {
   protected ghostPos = signal<{ x: number; y: number }>({ x: 0, y: 0 });
   // Destino actual bajo el puntero: ruta de carpeta, o '..' (mover al padre).
   protected destinoHover = signal<string | null>(null);
-  // true mientras el puntero está sobre un destino EXTERNO (botón [data-drop-personal]).
-  protected sobrePersonal = signal(false);
+  // true mientras el puntero está sobre la zona de drop del espacio EXTERNO.
+  protected sobreExterno = signal(false);
+  // Selector que se abre al soltar sobre el espacio externo cuando hay VARIOS
+  // destinos posibles (personal → compartido: hay que elegir qué carpeta compartida).
+  protected dropExternoModal = signal<{ items: ItemArrastre[] } | null>(null);
   // Etiqueta del "ghost": el nombre si es un solo elemento, o "N elementos" si son varios.
   protected etiquetaArrastre = computed(() => {
     const a = this.arrastrando();
@@ -232,6 +237,12 @@ export class ExploradorComponent implements OnInit {
   }
 
   ngOnInit() {
+    this.cargar();
+  }
+
+  // Recarga pública: la usa el contenedor tras mover elementos a/desde otro espacio
+  // (el origen ya no los tiene y hay que reflejarlo).
+  recargar() {
     this.cargar();
   }
 
@@ -703,6 +714,14 @@ export class ExploradorComponent implements OnInit {
     if (mv.tipo === 'archivo') this.moverArchivo(mv.ref, destino);
     else this.moverCarpeta(mv.ref, destino);
   }
+  // "Mover a…" hacia un espacio externo: MUEVE (el original desaparece del origen).
+  confirmarMoverExterno(destinoId: string | null, ruta: string) {
+    const mv = this.moverModal();
+    this.moverModal.set(null);
+    if (!mv) return;
+    const nombre = mv.tipo === 'archivo' ? this.archivoPorId(mv.ref)?.nombre ?? '' : this.nombreHoja(mv.ref);
+    this.emitirExportacion([{ tipo: mv.tipo, ref: mv.ref, nombre }], destinoId, ruta, 'mover');
+  }
 
   // --- Copiar en… (copia a un destino elegido; el original permanece) ---
   accionCopiarEn(id: string) {
@@ -717,16 +736,20 @@ export class ExploradorComponent implements OnInit {
       .sort((a, b) => a.localeCompare(b))
       .map((r) => ({ ruta: r, etiqueta: r === '/' ? this.opciones.etiquetaRaiz : r }));
   }
-  // Destinos EXTERNOS (solo si hay destinoExterno, p. ej. compartido → Mis archivos):
-  // la raíz del espacio externo y sus subcarpetas.
-  destinosExternos(): { ruta: string; etiqueta: string }[] {
+  // Destinos EXTERNOS (solo si hay destinoExterno): por cada espacio externo (una o
+  // varias carpetas compartidas, o Mis archivos) su raíz + sus subcarpetas. Cada
+  // entrada lleva el `destinoId` del espacio (ccId, o null para Mis archivos).
+  destinosExternos(): { destinoId: string | null; ruta: string; etiqueta: string }[] {
     const ext = this.opciones.destinoExterno;
     if (!ext) return [];
-    const destinos = [{ ruta: '/', etiqueta: ext.etiqueta }];
-    for (const r of ext.carpetas ?? []) {
-      destinos.push({ ruta: r, etiqueta: `${ext.etiqueta} › ${r.replace(/^\//, '')}` });
+    const out: { destinoId: string | null; ruta: string; etiqueta: string }[] = [];
+    for (const d of ext.destinos) {
+      out.push({ destinoId: d.id, ruta: '/', etiqueta: d.etiqueta });
+      for (const r of d.carpetas ?? []) {
+        out.push({ destinoId: d.id, ruta: r, etiqueta: `${d.etiqueta} › ${r.replace(/^\//, '')}` });
+      }
     }
-    return destinos;
+    return out;
   }
   confirmarCopiarEn(destino: string) {
     const ce = this.copiarEnModal();
@@ -742,12 +765,13 @@ export class ExploradorComponent implements OnInit {
       error: (err) => this.toast.error(mensajeError(err)),
     });
   }
-  confirmarCopiarEnExterno(destino: string) {
+  // "Copiar en…" hacia un espacio externo: COPIA (el original permanece).
+  confirmarCopiarEnExterno(destinoId: string | null, ruta: string) {
     const ce = this.copiarEnModal();
     this.copiarEnModal.set(null);
     if (!ce) return;
     const nombre = this.archivoPorId(ce.ref)?.nombre ?? '';
-    this.emitirExportacion([{ tipo: 'archivo', ref: ce.ref, nombre }], destino);
+    this.emitirExportacion([{ tipo: 'archivo', ref: ce.ref, nombre }], destinoId, ruta, 'copiar');
   }
 
   // --- Arrastre propio (eventos de puntero) ---
@@ -792,15 +816,16 @@ export class ExploradorComponent implements OnInit {
     }
   }
 
-  // Si el explorador tiene un destino externo (Compartido), detecta cuándo el puntero
-  // está sobre el botón [data-drop-personal] para soltar allí (exportar a personal).
+  // Si el explorador tiene un espacio externo, detecta cuándo el puntero está sobre su
+  // zona de drop (el botón [dropAttr]) para soltar allí (MOVER al otro espacio).
   private detectarDestinoExterno(ev: PointerEvent) {
-    if (!this.opciones.destinoExterno) return;
+    const ext = this.opciones.destinoExterno;
+    if (!ext) return;
     const el = document.elementFromPoint(ev.clientX, ev.clientY);
-    const sobre = !!el?.closest('[data-drop-personal]');
-    if (sobre !== this.sobrePersonal()) {
-      this.sobrePersonal.set(sobre);
-      document.body.classList.toggle('sobre-personal', sobre);
+    const sobre = !!el?.closest(`[${ext.dropAttr}]`);
+    if (sobre !== this.sobreExterno()) {
+      this.sobreExterno.set(sobre);
+      document.body.classList.toggle('sobre-externo', sobre);
     }
   }
 
@@ -827,12 +852,12 @@ export class ExploradorComponent implements OnInit {
     const a = this.arrastrando();
     const p = this.pendiente;
     const dh = this.destinoHover();
-    const sobrePersonal = this.sobrePersonal();
+    const sobreExterno = this.sobreExterno();
     this.finArrastre();
     if (a) {
-      // ¿Soltado sobre "Personal" (destino externo)? → exportar en vez de mover.
-      if (sobrePersonal && this.opciones.destinoExterno) {
-        this.emitirExportacion(a.items);
+      // ¿Soltado sobre la zona del espacio externo? → MOVER al otro espacio.
+      if (sobreExterno && this.opciones.destinoExterno) {
+        this.soltarEnExterno(a.items);
         return;
       }
       // Era un arrastre normal: mover al destino resuelto.
@@ -864,10 +889,28 @@ export class ExploradorComponent implements OnInit {
     this.pendiente = null;
     this.arrastrando.set(null);
     this.destinoHover.set(null);
-    this.sobrePersonal.set(false);
+    this.sobreExterno.set(false);
     document.body.classList.remove('agarrando');
     document.body.classList.remove('arrastrando-archivo');
-    document.body.classList.remove('sobre-personal');
+    document.body.classList.remove('sobre-externo');
+  }
+
+  // Soltado sobre el espacio externo (MOVER). Si hay un único destino posible
+  // (compartido → Mis archivos), se mueve a su raíz directamente; si hay varios
+  // (personal → varias carpetas compartidas), se abre un selector para elegir.
+  private soltarEnExterno(items: ItemArrastre[]) {
+    const destinos = this.opciones.destinoExterno!.destinos;
+    if (destinos.length === 1) {
+      this.emitirExportacion(items, destinos[0].id, '/', 'mover');
+    } else if (destinos.length > 1) {
+      this.dropExternoModal.set({ items });
+    }
+  }
+  // El usuario eligió a qué espacio externo mover (desde el selector del arrastre).
+  confirmarDropExterno(destinoId: string | null) {
+    const d = this.dropExternoModal();
+    this.dropExternoModal.set(null);
+    if (d) this.emitirExportacion(d.items, destinoId, '/', 'mover');
   }
 
   private moverArchivo(id: string, destino: string) {
@@ -902,11 +945,28 @@ export class ExploradorComponent implements OnInit {
     });
   }
 
-  // --- Exportar a un destino externo (Compartido → Mis archivos) ---
-  private emitirExportacion(items: ItemArrastre[], baseExterna = '/') {
-    const peticion = this.construirExportacion(items, baseExterna);
+  // --- Mover/copiar a un espacio externo (personal ↔ compartido) ---
+  // `modo` decide qué output se emite: 'mover' (arrastre y "Mover a…") o 'copiar'
+  // ("Copiar en…"). `destinoId` = ccId o null (Mis archivos); `baseExterna` = carpeta.
+  private emitirExportacion(
+    items: ItemArrastre[],
+    destinoId: string | null,
+    baseExterna: string,
+    modo: 'mover' | 'copiar',
+  ) {
+    const peticion = this.construirExportacion(items, destinoId, baseExterna);
     if (peticion.archivos.length === 0 && peticion.carpetasVacias.length === 0) return;
-    this.copiarAExterno.emit(peticion);
+    (modo === 'mover' ? this.moverAExterno : this.copiarAExterno).emit(peticion);
+    // Al MOVER una carpeta a otro espacio, su metadata de origen debe desaparecer
+    // (sus archivos ya se reasignan en el backend). Si el move fallara, la carpeta
+    // reaparece igualmente porque se deriva de las rutas de esos archivos.
+    if (modo === 'mover') {
+      for (const it of items) {
+        if (it.tipo !== 'carpeta') continue;
+        this.carpetas.update((v) => v.filter((c) => c.ruta !== it.ref && !c.ruta.startsWith(it.ref + '/')));
+        this.datos.eliminarCarpetaApi(it.ref).subscribe({ error: () => {} });
+      }
+    }
     this.limpiarSeleccion();
   }
 
@@ -914,7 +974,11 @@ export class ExploradorComponent implements OnInit {
   // archivos sueltos van a la raíz ("/"); una carpeta se recrea en la raíz
   // conservando su subárbol (archivos y subcarpetas vacías). Misma lógica de remap
   // que copiarCarpeta, pero hacia otro espacio.
-  private construirExportacion(items: ItemArrastre[], baseExterna = '/'): PeticionExportar {
+  private construirExportacion(
+    items: ItemArrastre[],
+    destinoId: string | null,
+    baseExterna = '/',
+  ): PeticionExportar {
     // Prefijo de la carpeta destino en el espacio externo ('' si es la raíz, o
     // p. ej. '/facturas' para copiar dentro de esa subcarpeta de Mis archivos).
     const raiz = this.normalizar(baseExterna);
@@ -937,19 +1001,7 @@ export class ExploradorComponent implements OnInit {
         if (c.ruta.startsWith(ruta + '/')) vacias.add(base + c.ruta.slice(ruta.length));
       }
     }
-    return { archivos, carpetasVacias: [...vacias] };
-  }
-
-  // Copiar a destino externo desde el menú contextual (un solo elemento).
-  accionCopiarAExterno(tipo: 'archivo' | 'carpeta', ref: string) {
-    this.cerrarMenu();
-    const nombre = tipo === 'archivo' ? this.archivoPorId(ref)?.nombre ?? '' : this.nombreHoja(ref);
-    this.emitirExportacion([{ tipo, ref, nombre }]);
-  }
-
-  // Copiar a destino externo la selección múltiple (barra bulk).
-  protected ejecutarCopiarAExterno() {
-    this.emitirExportacion(this.itemsDesdeClaves([...this.seleccionados()]));
+    return { destinoId, archivos, carpetasVacias: [...vacias] };
   }
 
   protected moverCarpeta(origen: string, destinoPadre: string) {
@@ -1213,6 +1265,12 @@ export class ExploradorComponent implements OnInit {
     } else {
       this.limpiarSeleccion();
     }
+  }
+
+  // Mover la selección a un espacio externo (MUEVE al otro espacio).
+  protected confirmarBulkMoverExterno(destinoId: string | null, ruta: string) {
+    this.bulkMoverModal.set(false);
+    this.emitirExportacion(this.itemsDesdeClaves([...this.seleccionados()]), destinoId, ruta, 'mover');
   }
 
   // Archivos cuyo carpeta es `ruta` o está dentro de su subárbol.

@@ -21,6 +21,9 @@ import {
   actualizarArchivoCompartido,
   copiarArchivoCompartido,
   copiarCompartidoAPersonal,
+  moverCompartidoAPersonal,
+  moverPersonalACompartido,
+  copiarPersonalACompartido,
   prepararDescargaCarpetaCompartida,
   schemaCrearCarpetaCompartida,
   schemaActualizarCarpetaCompartida,
@@ -259,6 +262,61 @@ export const ctrlCopiarAPersonal = async (req: Request, res: Response, next: Nex
     const { archivo, duplicado } = await copiarCompartidoAPersonal(
       String(req.params.archivoId),
       req.usuario!.id,
+      carpeta,
+    );
+    res.status(duplicado ? 200 : 201).json({ ...archivo, duplicado });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /archivo/:archivoId/mover-a-personal  { carpeta? }
+// MUEVE el archivo compartido al espacio personal (desaparece del compartido para
+// todos los del rol). duplicado=true si ya lo tenías en personal (dedup por hash).
+export const ctrlMoverAPersonal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const carpeta = req.body?.carpeta !== undefined ? String(req.body.carpeta) : undefined;
+    const { archivo, duplicado } = await moverCompartidoAPersonal(
+      String(req.params.archivoId),
+      req.usuario!.id,
+      carpeta,
+    );
+    res.status(200).json({ ...archivo, duplicado });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /:id/mover-desde-personal  { archivoId, carpeta? }
+// MUEVE un archivo personal a esta carpeta compartida (deja de ser personal).
+export const ctrlMoverDesdePersonal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const archivoId = String(req.body?.archivoId ?? "");
+    if (!archivoId) throw new AppError(400, "Falta el archivoId");
+    const carpeta = req.body?.carpeta !== undefined ? String(req.body.carpeta) : undefined;
+    const { archivo, duplicado } = await moverPersonalACompartido(
+      archivoId,
+      req.usuario!.id,
+      String(req.params.id),
+      carpeta,
+    );
+    res.status(200).json({ ...archivo, duplicado });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /:id/copiar-desde-personal  { archivoId, carpeta? }
+// COPIA un archivo personal a esta carpeta compartida (el original permanece).
+export const ctrlCopiarDesdePersonal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const archivoId = String(req.body?.archivoId ?? "");
+    if (!archivoId) throw new AppError(400, "Falta el archivoId");
+    const carpeta = req.body?.carpeta !== undefined ? String(req.body.carpeta) : undefined;
+    const { archivo, duplicado } = await copiarPersonalACompartido(
+      archivoId,
+      req.usuario!.id,
+      String(req.params.id),
       carpeta,
     );
     res.status(duplicado ? 200 : 201).json({ ...archivo, duplicado });

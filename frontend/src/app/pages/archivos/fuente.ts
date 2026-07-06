@@ -47,18 +47,26 @@ export interface OpcionesExplorador {
   // compartido se usa "actualizadoEn". Afecta también a la fecha de las carpetas
   // (min de subida vs. max de última actualización de su contenido).
   campoFecha?: 'subidoEn' | 'actualizadoEn';
-  // Si está presente, marca el botón [data-drop-personal] como zona de drop para
-  // exportar (arrastrar) fuera del explorador y añade el destino externo a "Copiar
-  // en…" (hoy: de una carpeta compartida al espacio personal). `carpetas` son las
-  // subcarpetas del espacio externo donde también se puede copiar. Ausente en el
-  // explorador personal.
-  destinoExterno?: { etiqueta: string; carpetas?: string[] };
+  // Si está presente, habilita mover/copiar hacia OTRO espacio (personal ↔ compartido):
+  //  - marca el botón `[dropAttr]` como zona de drop del arrastre (el drag MUEVE);
+  //  - añade los `destinos` a "Mover a…" (mueve) y a "Copiar en…" (copia).
+  // `etiqueta` es el nombre del espacio para el "ghost" del arrastre. Cada destino
+  // tiene un `id` (ccId al ir a compartido; null = Mis archivos) y opcionalmente sus
+  // `carpetas` (subcarpetas donde también se puede soltar). Ausente en el caso sin
+  // espacio externo.
+  destinoExterno?: {
+    etiqueta: string;
+    dropAttr: string;
+    destinos: { id: string | null; etiqueta: string; carpetas?: string[] }[];
+  };
 }
 
-// Petición de exportación que emite el explorador cuando el usuario copia elementos a
-// un destino EXTERNO (p. ej. Compartido → Mis archivos). Ya trae calculadas las rutas
-// destino (relativas a la raíz del destino) para cada archivo y las subcarpetas vacías.
+// Petición de mover/copiar que emite el explorador cuando el usuario lleva elementos a
+// un destino EXTERNO (personal ↔ compartido). Ya trae calculadas las rutas destino
+// (relativas a la raíz del destino) para cada archivo y las subcarpetas vacías, más el
+// `destinoId` del espacio elegido (ccId, o null para Mis archivos).
 export interface PeticionExportar {
+  destinoId: string | null;
   archivos: { id: string; carpetaDestino: string }[];
   carpetasVacias: string[];
 }

@@ -21,6 +21,9 @@ import {
   ctrlActualizarArchivo,
   ctrlCopiarArchivo,
   ctrlCopiarAPersonal,
+  ctrlMoverAPersonal,
+  ctrlMoverDesdePersonal,
+  ctrlCopiarDesdePersonal,
   ctrlDescargarCarpetaZip,
 } from "../controllers/compartido.controller";
 import { AppError } from "../utils/errors";
@@ -53,6 +56,7 @@ router.get("/archivo/:archivoId/descargar", ctrlDescargar);
 router.patch("/archivo/:archivoId", ctrlActualizarArchivo);
 router.post("/archivo/:archivoId/copiar", ctrlCopiarArchivo);
 router.post("/archivo/:archivoId/copiar-a-personal", ctrlCopiarAPersonal);
+router.post("/archivo/:archivoId/mover-a-personal", ctrlMoverAPersonal);
 router.delete("/archivo/:archivoId", ctrlEliminarArchivo);
 
 // --- Uso (cualquier miembro con acceso) ---
@@ -64,6 +68,8 @@ router.post("/:id/carpetas", ctrlCrearSubcarpeta);
 router.patch("/:id/carpetas", ctrlReubicarSubcarpeta);
 router.delete("/:id/carpetas", ctrlEliminarSubcarpeta);
 router.get("/:id/archivos", ctrlListarArchivos);
+router.post("/:id/mover-desde-personal", ctrlMoverDesdePersonal);
+router.post("/:id/copiar-desde-personal", ctrlCopiarDesdePersonal);
 router.post("/:id/subir", limitadorSubida, limiteBacklogUsuario, upload.single("archivo"), ctrlSubir);
 
 export default router;

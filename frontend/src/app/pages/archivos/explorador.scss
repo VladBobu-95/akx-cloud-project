@@ -19,8 +19,8 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      /* Resalte del ghost cuando se va a soltar sobre "Personal" (exportar). */
-      .ghost.hacia-personal {
+      /* Resalte del ghost cuando se va a soltar sobre el espacio externo (mover). */
+      .ghost.hacia-externo {
         background: var(--green);
         box-shadow: 0 0 0 2px #fff, var(--shadow);
       }

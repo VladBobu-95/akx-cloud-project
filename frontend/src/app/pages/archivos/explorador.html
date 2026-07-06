@@ -82,9 +82,6 @@
           <span class="bulk-count">{{ numSeleccionados() }} seleccionado(s)</span>
           <button class="btn btn-outline btn-sm" (click)="ejecutarCopiarSeleccion()">📋 Copiar</button>
           <button class="btn btn-outline btn-sm" (click)="abrirBulkMover()">📂 Mover a…</button>
-          @if (opciones.destinoExterno; as ext) {
-            <button class="btn btn-outline btn-sm" (click)="ejecutarCopiarAExterno()">⬇️ Copiar a {{ ext.etiqueta }}</button>
-          }
           <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
           <span class="spacer"></span>
           <button class="btn btn-ghost btn-sm" (click)="limpiarSeleccion()">✕ Cancelar</button>
@@ -239,9 +236,6 @@
           <button (click)="cerrarMenu(); copiarCarpeta(m.ref)">📋 Copiar</button>
           <button (click)="cerrarMenu(); abrirRenombrarCarpeta(m.ref)">✏️ Renombrar</button>
           <button (click)="accionMoverA('carpeta', m.ref)">📂 Mover a…</button>
-          @if (opciones.destinoExterno; as ext) {
-            <button (click)="accionCopiarAExterno('carpeta', m.ref)">⬇️ Copiar a {{ ext.etiqueta }}</button>
-          }
           <button class="peligro" (click)="cerrarMenu(); pedirBorrarCarpeta(m.ref)">🗑️ Borrar</button>
         }
       </div>
@@ -326,6 +320,14 @@
               <p class="muted">No hay otras carpetas disponibles.</p>
             }
           </div>
+          @if (destinosExternos().length) {
+            <p class="muted" style="margin: 12px 0 8px;">Mover a otro espacio:</p>
+            <div class="destinos">
+              @for (d of destinosExternos(); track d.destinoId + d.ruta) {
+                <button class="destino-item" (click)="confirmarMoverExterno(d.destinoId, d.ruta)">📤 {{ d.etiqueta }}</button>
+              }
+            </div>
+          }
           <div class="row" style="justify-content: flex-end; margin-top: 8px;">
             <button class="btn btn-ghost" (click)="moverModal.set(null)">Cancelar</button>
           </div>
@@ -347,8 +349,8 @@
           @if (destinosExternos().length) {
             <p class="muted" style="margin: 12px 0 8px;">Copiar a otro espacio:</p>
             <div class="destinos">
-              @for (d of destinosExternos(); track d.ruta) {
-                <button class="destino-item" (click)="confirmarCopiarEnExterno(d.ruta)">📥 {{ d.etiqueta }}</button>
+              @for (d of destinosExternos(); track d.destinoId + d.ruta) {
+                <button class="destino-item" (click)="confirmarCopiarEnExterno(d.destinoId, d.ruta)">📥 {{ d.etiqueta }}</button>
               }
             </div>
           }
@@ -430,6 +432,14 @@
               <p class="muted">No hay carpetas disponibles.</p>
             }
           </div>
+          @if (destinosExternos().length) {
+            <p class="muted" style="margin: 12px 0 8px;">Mover a otro espacio:</p>
+            <div class="destinos">
+              @for (d of destinosExternos(); track d.destinoId + d.ruta) {
+                <button class="destino-item" (click)="confirmarBulkMoverExterno(d.destinoId, d.ruta)">📤 {{ d.etiqueta }}</button>
+              }
+            </div>
+          }
           <div class="row" style="justify-content: flex-end; margin-top: 8px;">
             <button class="btn btn-ghost" (click)="bulkMoverModal.set(false)">Cancelar</button>
           </div>
@@ -437,10 +447,31 @@
       </div>
     }
 
+    <!-- Selector de espacio externo al soltar el arrastre (personal → varias
+         carpetas compartidas): elegir a cuál mover. -->
+    @if (dropExternoModal(); as dm) {
+      <div class="modal-backdrop">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Mover a {{ opciones.destinoExterno?.etiqueta }}</h2>
+          <p class="muted" style="margin-bottom: 10px;">Elige la carpeta de destino:</p>
+          <div class="destinos">
+            @for (d of opciones.destinoExterno?.destinos ?? []; track d.id) {
+              <button class="destino-item" (click)="confirmarDropExterno(d.id)">📁 {{ d.etiqueta }}</button>
+            } @empty {
+              <p class="muted">No hay destinos disponibles.</p>
+            }
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="dropExternoModal.set(null)">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    }
+
     <!-- Etiqueta flotante mientras se arrastra -->
     @if (arrastrando(); as ar) {
-      <div class="ghost" [class.hacia-personal]="sobrePersonal()" [style.left.px]="ghostPos().x + 14" [style.top.px]="ghostPos().y + 14">
+      <div class="ghost" [class.hacia-externo]="sobreExterno()" [style.left.px]="ghostPos().x + 14" [style.top.px]="ghostPos().y + 14">
         {{ ar.items.length === 1 ? (ar.items[0].tipo === 'carpeta' ? '📁' : '📄') : '🗂️' }} {{ etiquetaArrastre() }}
-        @if (sobrePersonal()) { <span class="destino-hint">→ copiar a {{ opciones.destinoExterno?.etiqueta }}</span> }
+        @if (sobreExterno()) { <span class="destino-hint">→ mover a {{ opciones.destinoExterno?.etiqueta }}</span> }
       </div>
     }

@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { Observable, of, throwError, forkJoin, map, catchError } from 'rxjs';
 import { CompartidoService, CarpetaCompartidaAccesible } from '../../core/compartido.service';
@@ -105,7 +105,8 @@ class FuenteCompartida implements FuenteArchivos {
         [datos]="fuente()!"
         [opciones]="opciones()!"
         (totalCambio)="total.set($event)"
-        (copiarAExterno)="copiarAPersonal($event)"
+        (moverAExterno)="exportarAPersonal($event, 'mover')"
+        (copiarAExterno)="exportarAPersonal($event, 'copiar')"
       />
     }
   `,
@@ -133,6 +134,10 @@ export class CompartidoComponent {
   private svc = inject(CompartidoService);
   private archivos = inject(ArchivosService);
   private toast = inject(ToastService);
+
+  // Referencia al explorador para poder recargarlo tras un MOVER (el original sale
+  // del compartido). En 'copiar' no hace falta: el original permanece.
+  private explorador = viewChild(ExploradorComponent);
 
   protected carpetas = signal<CarpetaCompartidaAccesible[]>([]);
   protected carpeta = signal<{ id: string; nombre: string } | null>(null);
@@ -171,8 +176,13 @@ export class CompartidoComponent {
       mostrarEstado: false, // el estado de indexado no aporta al usuario en compartido
       etiquetaFecha: 'Última actualización',
       campoFecha: 'actualizadoEn', // mostrar la última modificación, no la subida
-      // copiar/arrastrar a personal (raíz + subcarpetas concretas en "Copiar en…")
-      destinoExterno: { etiqueta: 'Mis archivos', carpetas: this.carpetasPersonales() },
+      // Mover (arrastre / "Mover a…") y copiar ("Copiar en…") al espacio personal.
+      // Un único destino: Mis archivos (id null) + sus subcarpetas.
+      destinoExterno: {
+        etiqueta: 'Mis archivos',
+        dropAttr: 'data-drop-personal',
+        destinos: [{ id: null, etiqueta: 'Mis archivos', carpetas: this.carpetasPersonales() }],
+      },
     });
     this.carpeta.set(c);
   }
@@ -183,11 +193,12 @@ export class CompartidoComponent {
     this.opciones.set(null);
   }
 
-  // Copiar archivos/carpetas compartidos al espacio PERSONAL (menú, bulk o arrastre
-  // sobre "Personales"). El original permanece en compartido. Cada archivo se copia
-  // con su ruta destino ya resuelta por el explorador; las subcarpetas vacías se
-  // recrean explícitamente. Dedup por hash en el backend (campo `duplicado`).
-  copiarAPersonal(pet: PeticionExportar) {
+  // Mover o copiar archivos/carpetas compartidos al espacio PERSONAL (arrastre sobre
+  // "Personales", o "Mover a…"/"Copiar en…"). En 'mover' el original DESAPARECE del
+  // compartido (afecta a todos los del rol); en 'copiar' permanece. Cada archivo lleva
+  // su ruta destino ya resuelta por el explorador; las subcarpetas vacías se recrean.
+  // Dedup por hash en el backend (campo `duplicado`).
+  exportarAPersonal(pet: PeticionExportar, modo: 'mover' | 'copiar') {
     // Carpetas vacías primero, de menos a más profundas (padres antes que hijas).
     const crearOps = [...pet.carpetasVacias]
       .sort((a, b) => a.length - b.length)
@@ -197,15 +208,19 @@ export class CompartidoComponent {
           catchError(() => of('error' as const)),
         ),
       );
-    const copiaOps = pet.archivos.map((a) =>
-      this.svc.copiarAPersonal(a.id, a.carpetaDestino).pipe(
+    const llamada = (id: string, carpeta: string) =>
+      modo === 'mover' ? this.svc.moverAPersonal(id, carpeta) : this.svc.copiarAPersonal(id, carpeta);
+    const fileOps = pet.archivos.map((a) =>
+      llamada(a.id, a.carpetaDestino).pipe(
         map((res) => (res.duplicado ? ('dup' as const) : ('nuevo' as const))),
         catchError(() => of('error' as const)),
       ),
     );
-    const ops = [...crearOps, ...copiaOps];
+    const ops = [...crearOps, ...fileOps];
     if (ops.length === 0) return;
 
+    const verbo = modo === 'mover' ? 'movido' : 'copiado';
+    const verbos = modo === 'mover' ? 'movidos' : 'copiados';
     forkJoin(ops).subscribe((resultados) => {
       const nuevos = resultados.filter((r) => r === 'nuevo').length;
       const dups = resultados.filter((r) => r === 'dup').length;
@@ -213,18 +228,18 @@ export class CompartidoComponent {
       if (fallidos > 0) {
         this.toast.error(
           nuevos + dups === 0
-            ? 'No se pudo copiar a Mis archivos'
-            : `${nuevos} copiado(s) a Mis archivos, ${fallidos} fallaron`,
+            ? `No se pudo ${modo} a Mis archivos`
+            : `${nuevos} ${verbo}(s) a Mis archivos, ${fallidos} fallaron`,
         );
-        return;
-      }
-      if (nuevos === 0 && dups > 0) {
+      } else if (nuevos === 0 && dups > 0) {
         this.toast.exito(dups === 1 ? 'Ya lo tenías en Mis archivos' : `${dups} ya los tenías en Mis archivos`);
       } else if (dups > 0) {
-        this.toast.exito(`${nuevos} copiado(s) a Mis archivos; ${dups} ya los tenías`);
+        this.toast.exito(`${nuevos} ${verbo}(s) a Mis archivos; ${dups} ya los tenías`);
       } else {
-        this.toast.exito(nuevos === 1 ? 'Copiado a Mis archivos' : `${nuevos} copiados a Mis archivos`);
+        this.toast.exito(nuevos === 1 ? `${verbo[0].toUpperCase()}${verbo.slice(1)} a Mis archivos` : `${nuevos} ${verbos} a Mis archivos`);
       }
+      // Al mover, el explorador de compartido debe refrescar (el original ya no está).
+      if (modo === 'mover') this.explorador()?.recargar();
     });
   }
 }

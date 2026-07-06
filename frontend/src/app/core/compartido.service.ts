@@ -145,6 +145,42 @@ export class CompartidoService {
     );
   }
 
+  // MUEVE un archivo compartido al espacio PERSONAL (desaparece del compartido para
+  // todos los del rol). `duplicado=true` → ya lo tenías en personal (dedup por hash).
+  moverAPersonal(
+    archivoId: string,
+    carpetaDestino: string,
+  ): Observable<Archivo & { duplicado?: boolean }> {
+    return this.http.post<Archivo & { duplicado?: boolean }>(
+      `${this.base}/archivo/${archivoId}/mover-a-personal`,
+      { carpeta: carpetaDestino },
+    );
+  }
+
+  // MUEVE un archivo PERSONAL a una carpeta compartida (deja de ser personal).
+  moverDesdePersonal(
+    carpetaCompartidaId: string,
+    archivoId: string,
+    carpetaDestino: string,
+  ): Observable<Archivo & { duplicado?: boolean }> {
+    return this.http.post<Archivo & { duplicado?: boolean }>(
+      `${this.base}/${carpetaCompartidaId}/mover-desde-personal`,
+      { archivoId, carpeta: carpetaDestino },
+    );
+  }
+
+  // COPIA un archivo PERSONAL a una carpeta compartida (el original permanece).
+  copiarDesdePersonal(
+    carpetaCompartidaId: string,
+    archivoId: string,
+    carpetaDestino: string,
+  ): Observable<Archivo & { duplicado?: boolean }> {
+    return this.http.post<Archivo & { duplicado?: boolean }>(
+      `${this.base}/${carpetaCompartidaId}/copiar-desde-personal`,
+      { archivoId, carpeta: carpetaDestino },
+    );
+  }
+
   // --- Admin: gestión ---
   listarAdmin(): Observable<CarpetaCompartida[]> {
     return this.http.get<CarpetaCompartida[]>(`${this.base}/admin`);

@@ -1,3 +1,6 @@
+- pasame el mejor cliente 
+-quien facturo mas
+- en general hay muhas peticiones de chat que ya no funciona, hay algo que cambio que ya no lee bien
 - en lugar de hacer click en cada casillia para selccionar varios, arrastrar
 - Crear logs para que el admin vea todos los cambios que se han hecho en la carpeta compartida y por quien
 - Prohibir hacer cambios a las carpetas compartidas pero si de lo que hay dentro
