@@ -45,22 +45,24 @@
       </button>
     </div>
 
-    <!-- Contraseña -->
-    <div class="card seccion">
-      <h2>Cambiar contraseña</h2>
-      <div class="field">
-        <input
-          class="input"
-          type="password"
-          [(ngModel)]="password"
-          placeholder="Nueva contraseña (mín. 8)"
-          autocomplete="new-password"
-        />
+    <!-- Contraseña (solo superadmin: no hay nadie que se la pueda cambiar) -->
+    @if (auth.usuario()?.rol === 'superadmin') {
+      <div class="card seccion">
+        <h2>Cambiar contraseña</h2>
+        <div class="field">
+          <input
+            class="input"
+            type="password"
+            [(ngModel)]="password"
+            placeholder="Nueva contraseña (mín. 8)"
+            autocomplete="new-password"
+          />
+        </div>
+        <button class="btn btn-primary" (click)="guardarPassword()" [disabled]="password.length < 8">
+          Cambiar contraseña
+        </button>
       </div>
-      <button class="btn btn-primary" (click)="guardarPassword()" [disabled]="password.length < 8">
-        Cambiar contraseña
-      </button>
-    </div>
+    }
 
     <!-- Info de cuenta -->
     <div class="card seccion">
