@@ -3,23 +3,15 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 32px 24px;
+        padding: 24px;
         background:
           radial-gradient(1200px 500px at 50% -10%, var(--green-soft), transparent), var(--bg);
       }
       .auth-card {
         width: 100%;
-        max-width: 460px;
-        padding: 48px 44px;
+        max-width: 500px;
+        padding: 38px;
         font-size: 1.15rem;
-      }
-      .auth-card form {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-      }
-      .auth-card .field {
-        margin-bottom: 0;
       }
       .auth-card .input {
         padding: 14px 16px;
@@ -29,19 +21,18 @@
         caret-color: var(--green);
       }
       .auth-card .btn {
-        padding: 15px;
+        padding: 14px;
         font-size: 1.05rem;
       }
       .auth-card label {
         font-size: 0.95rem;
-        margin-bottom: 8px;
       }
       .brand {
         text-align: center;
         font-weight: 800;
-        font-size: 2.7rem;
+        font-size: 2.9rem;
         letter-spacing: -0.02em;
-        margin-bottom: 36px;
+        margin-bottom: 24px;
       }
       .brand .green,
       .logo-mark {
@@ -52,17 +43,14 @@
         font-size: 1.3rem;
         font-weight: 700;
         color: var(--text);
-        margin: 0 0 28px;
+        margin: 0 0 22px;
       }
       .full {
         width: 100%;
-        margin-top: 8px;
+        margin-top: 4px;
       }
       .error-msg {
         text-align: center;
         font-size: 0.95rem;
         color: #d33;
-        margin: 0;
       }
-
-      
