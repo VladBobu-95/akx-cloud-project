@@ -5,6 +5,25 @@ import { AppDataSource } from "../config/database";
 import { Usuario } from "../entities/Usuario";
 import { AppError } from "../utils/errors";
 import { env } from "../config/env";
+import { capacidadesDe } from "./equipo.service";
+
+// Perfil público (sin hash) + capacidades funcionales del usuario. El frontend
+// las usa para decidir qué mostrar (p. ej. ocultar el chat si no tiene "chat").
+// admin/superadmin las tienen todas (ver capacidadesDe).
+export type PerfilConCapacidades = Omit<Usuario, "passwordHash"> & { capacidades: string[] };
+const conCapacidades = async (usuario: Usuario): Promise<PerfilConCapacidades> => {
+  const caps = await capacidadesDe(usuario.id);
+  const { passwordHash: _omitido, ...sinHash } = usuario;
+  return { ...sinHash, capacidades: [...caps] };
+};
+
+// Carga el perfil de un usuario (con su empresa) + capacidades. Lo usan GET/PATCH
+// /perfil para que el frontend refresque las capacidades sin re-loguearse.
+export const perfilConCapacidades = async (usuarioId: string): Promise<PerfilConCapacidades> => {
+  const usuario = await repo().findOne({ where: { id: usuarioId }, relations: { empresa: true } });
+  if (!usuario) throw new AppError(404, "Usuario no encontrado");
+  return conCapacidades(usuario);
+};
 
 // Función auxiliar para obtener el repositorio de Usuario.
 // Usamos una función en vez de una constante para evitar problemas
@@ -24,7 +43,7 @@ export const schemaLogin = z.object({
 // --- SERVICIO: LOGIN ---
 export const login = async (
   datos: z.infer<typeof schemaLogin>,
-): Promise<{ usuario: Omit<Usuario, "passwordHash">; token: string }> => {
+): Promise<{ usuario: PerfilConCapacidades; token: string }> => {
   // Buscamos el usuario por email (con su empresa, para comprobar suspensión).
   const usuario = await repo().findOne({
     where: { email: datos.email },
@@ -49,8 +68,7 @@ export const login = async (
 
   const token = generarToken(usuario);
 
-  const { passwordHash: _, ...usuarioSinHash } = usuario;
-  return { usuario: usuarioSinHash, token };
+  return { usuario: await conCapacidades(usuario), token };
 };
 
 // --- ACTUALIZAR PERFIL ---

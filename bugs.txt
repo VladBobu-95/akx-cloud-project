@@ -1,9 +1,4 @@
--facturas de compra 
-Facturas de compra (0)
-Archivo	Fecha	Total	
- facturas de venta 
-Facturas de venta (0)
-Archivo	Fecha	Total	
+
 - pasa imagenes/ pasa las imagenes que tengo 
 - Paginacion registro
 - Prohibir hacer cambios a las carpetas compartidas pero si de lo que hay dentro

@@ -1372,6 +1372,14 @@ export const chatear = async (
   // Se usa para (a) gatear el ejecutor, (b) filtrar las tools que ve el modelo y
   // (c) cortar los pre-flights de facturas. Enforzado en CÓDIGO, no en el prompt.
   const capacidades = await capacidadesDe(usuarioId);
+  // Capacidad MAESTRA: sin "chat" el usuario no puede usar el chatbot en absoluto
+  // (el frontend además le oculta la página). Frontera de seguridad en CÓDIGO:
+  // aunque el admin le quite el acceso con la sesión ya abierta, la siguiente
+  // petición se corta aquí (los tokens viven 7 días; los roles se leen por
+  // petición). admin/superadmin tienen todas las capacidades.
+  if (!capacidades.has("chat")) {
+    throw new AppError(403, "No tienes acceso al chatbot. Habla con el administrador de tu empresa.");
+  }
   const puedeFacturas = capacidades.has("facturas");
   const toolsPermitidas = TOOLS.filter((t) => {
     const cap = TOOL_CAPACIDAD[t.function.name];

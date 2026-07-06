@@ -1,6 +1,6 @@
 <header class="navbar">
   <div class="container nav-inner">
-    <a class="logo" [routerLink]="auth.esSuperadmin() ? '/plataforma' : '/inicio'">
+    <a class="logo" [routerLink]="auth.esSuperadmin() ? '/plataforma' : (auth.puedeChat() ? '/inicio' : '/archivos')">
       <span class="logo-mark">▲</span> AKX <span class="logo-light">Cloud</span>
     </a>
 
@@ -8,7 +8,9 @@
       @if (auth.esSuperadmin()) {
         <a routerLink="/plataforma" routerLinkActive="active">Plataforma</a>
       } @else {
-        <a routerLink="/inicio" routerLinkActive="active">Inicio</a>
+        @if (auth.puedeChat()) {
+          <a routerLink="/inicio" routerLinkActive="active">Inicio</a>
+        }
         <a routerLink="/archivos" routerLinkActive="active">Mis archivos</a>
         <a routerLink="/facturas" routerLinkActive="active">Facturas</a>
         <a routerLink="/papelera" routerLinkActive="active">Papelera</a>

@@ -6,6 +6,10 @@ export interface Usuario {
   rol: 'superadmin' | 'admin' | 'miembro';
   empresaId?: string | null;
   creadoEn?: string;
+  // Capacidades funcionales (unión de las de sus roles; admin/superadmin = todas).
+  // Las devuelve el login y GET /api/auth/perfil. El frontend las usa para ocultar
+  // lo que el rol no puede hacer (p. ej. el chatbot si no tiene "chat").
+  capacidades?: string[];
 }
 
 // Empresa (tenant). La gestiona el superadmin desde el panel de plataforma.

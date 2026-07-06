@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { authGuard } from './core/auth.guard';
 import { superadminGuard } from './core/superadmin.guard';
 import { adminGuard } from './core/admin.guard';
+import { chatGuard } from './core/chat.guard';
 
 export const routes: Routes = [
   {
@@ -17,6 +18,7 @@ export const routes: Routes = [
         path: 'inicio',
         loadComponent: () =>
           import('./pages/inicio/inicio').then((m) => m.InicioPage),
+        canActivate: [chatGuard],
       },
       {
         path: 'archivos',

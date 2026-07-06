@@ -27,8 +27,15 @@ export class Login {
 
     this.auth.login(this.email, this.password).subscribe({
       next: () => {
-        // El superadmin no tiene archivos/chat: va directo a su panel.
-        this.router.navigate([this.auth.esSuperadmin() ? '/plataforma' : '/inicio']);
+        // El superadmin va a su panel; el resto al chat, salvo que no tenga la
+        // capacidad "chat" (entonces a Mis archivos) — así no aterriza en una
+        // página que el guard le rebotaría.
+        const destino = this.auth.esSuperadmin()
+          ? '/plataforma'
+          : this.auth.puedeChat()
+            ? '/inicio'
+            : '/archivos';
+        this.router.navigate([destino]);
       },
       error: (err) => {
         this.cargando.set(false);

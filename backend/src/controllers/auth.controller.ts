@@ -4,6 +4,7 @@ import {
   schemaLogin,
   actualizarPerfil,
   schemaActualizarPerfil,
+  perfilConCapacidades,
 } from "../services/auth.service";
 
 // Los controladores ya no necesitan try/catch propio.
@@ -25,9 +26,20 @@ export const ctrlLogin = async (
 };
 
 // GET /api/auth/perfil  (ruta protegida)
-export const ctrlPerfil = (req: Request, res: Response): void => {
-  // No puede fallar: si llegamos aquí, verificarToken ya validó el token
-  res.json({ usuario: req.usuario });
+// Re-lee el usuario de BD (incluidas sus capacidades funcionales, que pueden
+// haber cambiado tras el login) para que el frontend refresque qué mostrar
+// —p. ej. ocultar el chat si el admin le ha quitado la capacidad "chat"—.
+export const ctrlPerfil = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const usuario = await perfilConCapacidades(req.usuario!.id);
+    res.json({ usuario });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // PATCH /api/auth/perfil
@@ -38,7 +50,8 @@ export const ctrlActualizarPerfil = async (
 ): Promise<void> => {
   try {
     const datos = schemaActualizarPerfil.parse(req.body);
-    const usuario = await actualizarPerfil(req.usuario!.id, datos);
+    await actualizarPerfil(req.usuario!.id, datos);
+    const usuario = await perfilConCapacidades(req.usuario!.id);
     res.json({ usuario });
   } catch (error) {
     next(error);
