@@ -4,12 +4,9 @@ Archivo	Fecha	Total
  facturas de venta 
 Facturas de venta (0)
 Archivo	Fecha	Total	
-- Eladmin pueda cambiar el nombre de la empresa 
 - pasa imagenes/ pasa las imagenes que tengo 
-- en lugar de hacer click en cada casillia para selccionar varios, arrastrar
-- Crear logs para que el admin vea todos los cambios que se han hecho en la carpeta compartida y por quien
+- Paginacion registro
 - Prohibir hacer cambios a las carpetas compartidas pero si de lo que hay dentro
-- En compartido en lugar de que aparezc las carpetas directamente , q salgan en un alista igual que mis archivos
 - He quitado el acceso al chatbot del rol y la persona sigue utilizando el chatbot . Si no hay acceso al chatbot directamente no le tiene que aparecer.
 - Tambien un boton mover a compartido o mover a mis archivos (chatbot tambien)
 - En lugar de miembro Empleado 

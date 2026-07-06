@@ -1836,6 +1836,38 @@ export const chatear = async (
     // tratando este mensaje como una petición nueva.
   }
 
+  // Pre-flight: SALUDOS / cortesía / despedidas (small talk). Un "hola" a secas no
+  // es ninguna acción sobre archivos, así que caía en el bucle del modelo; el
+  // modelo pequeño (coder), ante un saludo, a veces respondía con un JSON de tool
+  // call inválido, que pareceIntentoToolCallInvalido convertía en "No he podido
+  // completar esa acción". Se responde aquí con un texto fijo, sin tocar Ollama.
+  // Solo intercepta si el mensaje ENTERO es el saludo/cortesía (^...$), no una
+  // petición que de paso incluye "hola" ("hola, bórrame X" cae al flujo normal).
+  const saludoNorm = msgSinTildes.replace(/[¡!¿?.,]+/g, " ").replace(/\s+/g, " ").trim();
+  const RE_SALUDO =
+    /^(?:hola+|buenas?|buenos\s+dias|buenas\s+tardes|buenas\s+noches|hey+|ey+|holi+|holis|wenas|saludos)(?:\s+(?:que\s+tal|como\s+(?:estas|va|andas)|buenas?|amigo|crack))?$/;
+  const RE_QUETAL = /^(?:que\s+tal|como\s+(?:estas|va|andas|te\s+va)|todo\s+bien|que\s+cuentas|que\s+pasa)$/;
+  const RE_GRACIAS = /^(?:muchas\s+|mil\s+)?gracias!*$|^ok\s+gracias$|^vale\s+gracias$/;
+  const RE_DESPEDIDA =
+    /^(?:adios|chao|chau|hasta\s+(?:luego|pronto|manana|la\s+vista)|nos\s+vemos)$/;
+  if (saludoNorm && (RE_SALUDO.test(saludoNorm) || RE_QUETAL.test(saludoNorm))) {
+    return {
+      respuesta:
+        "¡Hola! 👋 Soy el asistente de AKX Cloud. Puedo ayudarte a **gestionar tus archivos y carpetas** (buscar, abrir, mover, copiar, renombrar, crear o borrar)" +
+        (puedeFacturas
+          ? " y a **consultar tus facturas** (totales, ventas, compras, o listados por periodo, cliente o carpeta)"
+          : "") +
+        ". ¿Qué necesitas?",
+      acciones,
+    };
+  }
+  if (saludoNorm && RE_GRACIAS.test(saludoNorm)) {
+    return { respuesta: "¡De nada! ¿Necesitas algo más? 🙂", acciones };
+  }
+  if (saludoNorm && RE_DESPEDIDA.test(saludoNorm)) {
+    return { respuesta: "¡Hasta luego! Aquí estaré cuando me necesites. 👋", acciones };
+  }
+
   // Pre-flight: COMANDOS COMPUESTOS ("ábreme X y Y", "crea X y copia Y y borra Z").
   // Los pre-flights de abajo resuelven UNA sola acción y hacen return en cuanto
   // casan, así que un mensaje con varias órdenes encadenadas solo ejecutaba la
@@ -2499,6 +2531,86 @@ export const chatear = async (
     }
     const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
     const titulo = `Facturas con ${partes.join(" ")}`;
+    return {
+      respuesta: listadoFacturasMd(filas, titulo),
+      acciones,
+      tablaFacturas: {
+        titulo,
+        pagina: 1,
+        totalPaginas: paginas,
+        total,
+        limite: 20,
+        filtro,
+        filas: filas.map((f) => ({
+          archivoId: f.archivoId,
+          archivoNombre: f.archivoNombre,
+          fecha: formatearFecha(f.fecha),
+          total: f.total,
+          moneda: f.moneda,
+        })),
+      },
+    };
+  }
+
+  // Pre-flight: LISTADO de facturas por DIRECCIÓN venta/compra ("facturas de
+  // compra", "facturas de venta", "mis compras/ventas", "facturas emitidas/
+  // recibidas"). Sin esto, el listado por cliente de más abajo tomaba
+  // extraerClienteDeFrase("facturas de compra") = "compra" como si fuera el
+  // nombre de un CLIENTE y devolvía "Facturas de compra (0)"; y un "compras"/
+  // "ventas" a secas no encajaba en ningún pre-flight y caía en el bucle del
+  // modelo ("No he podido completar esa acción"). Se resuelve con listarFacturas
+  // + filtro.tipo. Combina periodo y moneda si aparecen ("facturas de compra de
+  // junio en euros"). Va ANTES de los listados por periodo/cliente para ganarles
+  // el "de compra/venta"; los totales/rankings/compras-gasto ya devolvieron arriba.
+  const tipoDireccion: "venta" | "compra" | null =
+    /\bcompras?\b|\bfacturas?\s+recibidas?\b/.test(msgSinTildes)
+      ? "compra"
+      : /\bventas?\b|\bfacturas?\s+emitidas?\b/.test(msgSinTildes)
+        ? "venta"
+        : null;
+  // Es un LISTADO por tipo si menciona "factura(s)", trae un verbo de listar/
+  // abrir, o el mensaje es prácticamente solo la palabra de dirección ("compras",
+  // "mis ventas") — no un ranking/total (esos ya devolvieron) ni una acción.
+  const esListadoTipo =
+    puedeFacturas &&
+    !!tipoDireccion &&
+    !pideTotales &&
+    !esRankingVentas &&
+    !esTotalesCompras &&
+    !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes) &&
+    (contieneFactura(msgSinTildes) ||
+      new RegExp(`\\b(${VERBO_LISTAR}|${VERBO_ABRIR})\\b`).test(msgSinTildes) ||
+      /^(?:(?:las?|los|mis|tus|todas?|todos)\s+)*(?:compras?|ventas?)\s*\??$/.test(msgSinTildes));
+  if (esListadoTipo && tipoDireccion) {
+    const filtro: FiltroFacturas = { tipo: tipoDireccion };
+    const partes: string[] = [tipoDireccion === "compra" ? "de compra" : "de venta"];
+    const rango = detectarRangoPeriodo(msgSinTildes);
+    if (rango) {
+      filtro.desde = rango.desde;
+      filtro.hasta = rango.hasta;
+      partes.push(rango.etiqueta);
+    } else {
+      const { mes, anio } = detectarMesAnio(msgSinTildes);
+      if (mes) {
+        const anioEfectivo = anio ?? new Date().getFullYear();
+        const mm = String(mes).padStart(2, "0");
+        const ultimoDia = new Date(anioEfectivo, mes, 0).getDate();
+        filtro.desde = `${anioEfectivo}-${mm}-01`;
+        filtro.hasta = `${anioEfectivo}-${mm}-${ultimoDia}`;
+        const nombreMes = new Date(anioEfectivo, mes - 1).toLocaleString("es-ES", { month: "long" });
+        partes.push(`de ${nombreMes} ${anioEfectivo}`);
+      } else if (anio) {
+        filtro.desde = `${anio}-01-01`;
+        filtro.hasta = `${anio}-12-31`;
+        partes.push(`de ${anio}`);
+      }
+    }
+    if (monedaDetectada) {
+      filtro.moneda = monedaDetectada;
+      partes.push(`en ${nombreMoneda(monedaDetectada).toLowerCase()}`);
+    }
+    const { filas, total, paginas } = await listarFacturas(usuarioId, filtro, { pagina: 1, limite: 20 });
+    const titulo = `Facturas ${partes.join(" ")}`;
     return {
       respuesta: listadoFacturasMd(filas, titulo),
       acciones,
