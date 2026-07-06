@@ -84,11 +84,21 @@ class FuenteCompartida implements FuenteArchivos {
         </div>
       }
     } @else {
-      <div class="row barra">
-        <button class="btn btn-ghost btn-sm" (click)="volver()">← Compartido</button>
-        <span class="ruta">{{ carpeta()!.nombre }}</span>
-        <span class="spacer"></span>
-        <span class="muted">{{ total() }} archivo(s)</span>
+      <div class="back-bar">
+        <button class="btn-back" (click)="volver()" title="Volver a las carpetas compartidas">
+          <svg
+            width="30"
+            height="30"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+          >
+            <path d="M19 12H5M5 12l7 7M5 12l7-7" />
+          </svg>
+        </button>
+        <span class="back-label">Volver</span>
       </div>
 
       <app-explorador
@@ -107,9 +117,16 @@ class FuenteCompartida implements FuenteArchivos {
     /* Mismos anchos/alineación de columnas que el explorador de Mis archivos. */
     .col-tamano { width: 120px; }
     .col-actualizado { width: 170px; white-space: nowrap; }
-    .barra { align-items: center; gap: 10px; margin-bottom: 12px; }
-    .barra .ruta { font-weight: 700; font-size: 1.05rem; }
-    .barra .spacer { flex: 1; }
+    /* Mismo "Volver" que el explorador de Mis archivos (flecha + etiqueta). */
+    .back-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .btn-back {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 48px; height: 48px;
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--bg); color: var(--green-dark); cursor: pointer;
+    }
+    .btn-back:hover { background: var(--surface); border-color: var(--green); }
+    .back-label { font-weight: 700; font-size: 1.05rem; }
   `],
 })
 export class CompartidoComponent {

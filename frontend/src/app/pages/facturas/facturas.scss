@@ -94,6 +94,10 @@
 .field { display: flex; flex-direction: column; gap: 4px; margin: 0; }
 .field label { font-size: 0.82rem; color: var(--muted); font-weight: 500; }
 .input.num { text-align: right; }
+/* Sin flechas (spinners) para cambiar el número: se edita escribiendo. */
+.input.num::-webkit-outer-spin-button,
+.input.num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.input.num { appearance: textfield; -moz-appearance: textfield; }
 
 .lineas { margin-top: 18px; }
 .lineas-head {
