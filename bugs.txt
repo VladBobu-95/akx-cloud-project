@@ -61,11 +61,6 @@ Archivo	Fecha	Total
 - guardar mensaje del chabot (pensando) 
 - si se borra una carpeta con archivos dentro el archivo va a la papelera pero la carpeta no
 - poder ver la contraseña en crear usuario
-
--escanea todas las facturas 
- Error 504 (supongo pq ya se escanean en segundo plano al subirlas)
-
 - Mirar posibles bug con la carpeta facturas
  
 
-Reconstruyo (para quitar el debug del contenedor), limpio la factura de prueba y dejo la empresa como estaba:

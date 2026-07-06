@@ -241,7 +241,7 @@
             </div>
             <div class="field">
               <label for="mEmail">Email</label>
-              <input id="mEmail" class="input" type="email" name="mEmail" [(ngModel)]="mEmail" required autocomplete="off" />
+              <input id="mEmail" class="input" [type]="verPassword() ? 'text' : 'password'" name="mEmail" [(ngModel)]="mEmail" required autocomplete="off" />
             </div>
             <div class="field">
               <label for="mPassword">Contraseña {{ mEditId() ? '(dejar en blanco para no cambiarla)' : '' }}</label>
