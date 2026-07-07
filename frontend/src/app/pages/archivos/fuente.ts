@@ -12,7 +12,7 @@ export interface FuenteArchivos {
   listarCarpetas(): Observable<{ ruta: string; creada: string }[]>;
   crearCarpetaApi(ruta: string): Observable<unknown>;
   reubicarCarpetaApi(origen: string, destino: string): Observable<unknown>;
-  eliminarCarpetaApi(ruta: string): Observable<unknown>;
+  eliminarCarpetaApi(ruta: string, soloMeta?: boolean): Observable<unknown>;
   subir(file: File, carpeta?: string): Observable<Archivo>;
   descargar(id: string): Observable<Blob>;
   descargarCarpeta(ruta: string): Observable<Blob>;

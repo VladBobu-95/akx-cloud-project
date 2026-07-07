@@ -68,8 +68,13 @@ export class ArchivosService {
   reubicarCarpetaApi(origen: string, destino: string) {
     return this.http.patch<{ ok: boolean }>(`${this.base}/carpetas`, { origen, destino });
   }
-  eliminarCarpetaApi(ruta: string) {
-    return this.http.delete(`${this.base}/carpetas`, { params: new HttpParams().set('ruta', ruta) });
+  // `soloMeta` borra solo la metadata de la carpeta (sin mandar sus archivos a la
+  // papelera): lo usa el mover carpeta personal → compartido, donde los archivos ya
+  // los reasigna el backend.
+  eliminarCarpetaApi(ruta: string, soloMeta = false) {
+    let params = new HttpParams().set('ruta', ruta);
+    if (soloMeta) params = params.set('soloMeta', '1');
+    return this.http.delete(`${this.base}/carpetas`, { params });
   }
 
   // Búsqueda semántica (RAG) por el contenido de los documentos.

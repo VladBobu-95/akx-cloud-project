@@ -22,6 +22,7 @@ import {
 import {
   listarCarpetas,
   crearCarpeta,
+  eliminarCarpeta,
   eliminarCarpetaConContenido,
   moverCarpetaConContenido,
 } from "../services/carpetas.service";
@@ -85,19 +86,25 @@ export const ctrlReubicarCarpeta = async (
   }
 };
 
-// DELETE /api/archivos/carpetas?ruta=/x
+// DELETE /api/archivos/carpetas?ruta=/x[&soloMeta=1]
 // Borra la carpeta Y manda su contenido a la papelera (de forma atómica en el
 // servidor: busca todos los archivos del subárbol en la BD, no depende del cliente).
+// Con `soloMeta=1` borra ÚNICAMENTE la metadata de la carpeta (sus filas Carpeta),
+// sin tocar los archivos: lo usa el mover carpeta personal → compartido, donde los
+// archivos ya los reasigna el backend y NO deben ir a la papelera.
 export const ctrlEliminarCarpeta = async (
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const { borrados } = await eliminarCarpetaConContenido(
-      req.usuario!.id,
-      String(req.query.ruta ?? ""),
-    );
+    const ruta = String(req.query.ruta ?? "");
+    if (req.query.soloMeta === "1" || req.query.soloMeta === "true") {
+      await eliminarCarpeta(req.usuario!.id, ruta);
+      res.json({ borrados: 0 });
+      return;
+    }
+    const { borrados } = await eliminarCarpetaConContenido(req.usuario!.id, ruta);
     res.json({ borrados });
   } catch (error) {
     next(error);

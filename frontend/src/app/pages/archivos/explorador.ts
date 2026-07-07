@@ -958,13 +958,15 @@ export class ExploradorComponent implements OnInit {
     if (peticion.archivos.length === 0 && peticion.carpetasVacias.length === 0) return;
     (modo === 'mover' ? this.moverAExterno : this.copiarAExterno).emit(peticion);
     // Al MOVER una carpeta a otro espacio, su metadata de origen debe desaparecer
-    // (sus archivos ya se reasignan en el backend). Si el move fallara, la carpeta
-    // reaparece igualmente porque se deriva de las rutas de esos archivos.
+    // (sus archivos ya se reasignan en el backend). Se borra SOLO la metadata
+    // (`soloMeta`): un borrado normal mandaría sus archivos a la papelera, que en
+    // paralelo con el move haría que el archivo desapareciera en vez de moverse. Si
+    // el move fallara, la carpeta reaparece igualmente (se deriva de esos archivos).
     if (modo === 'mover') {
       for (const it of items) {
         if (it.tipo !== 'carpeta') continue;
         this.carpetas.update((v) => v.filter((c) => c.ruta !== it.ref && !c.ruta.startsWith(it.ref + '/')));
-        this.datos.eliminarCarpetaApi(it.ref).subscribe({ error: () => {} });
+        this.datos.eliminarCarpetaApi(it.ref, true).subscribe({ error: () => {} });
       }
     }
     this.limpiarSeleccion();
@@ -1043,26 +1045,30 @@ export class ExploradorComponent implements OnInit {
   }
   private borrarCarpeta(ruta: string) {
     const afectados = this.archivosBajo(ruta);
-    const limpiar = () => {
+    // Actualiza el árbol local y, si estábamos dentro de la carpeta borrada, sube al padre.
+    const limpiarLocal = () => {
       this.carpetas.update((v) => v.filter((c) => c.ruta !== ruta && !c.ruta.startsWith(ruta + '/')));
-      this.datos.eliminarCarpetaApi(ruta).subscribe({ error: () => {} });
-      // Si estábamos dentro de la carpeta borrada, subimos al padre.
       const act = this.rutaActual();
       if (act === ruta || act.startsWith(ruta + '/')) this.rutaActual.set(this.padre(ruta));
     };
+    // Borra la metadata de la carpeta y se espera su respuesta antes de refrescar
+    // (si no, el DELETE puede no haber terminado y la carpeta "reaparece" vacía en
+    // Mis archivos aunque sus archivos ya se hayan ido a la papelera).
+    const borrarMetaYRefrescar = () => {
+      limpiarLocal();
+      this.toast.exito(
+        afectados.length > 0 && this.opciones.aPapelera ? 'Carpeta enviada a la papelera' : 'Carpeta borrada',
+      );
+      this.datos.eliminarCarpetaApi(ruta).pipe(catchError(() => of(null))).subscribe(() => this.cargar());
+    };
 
     if (afectados.length === 0) {
-      limpiar();
-      this.toast.exito('Carpeta borrada');
+      borrarMetaYRefrescar();
       return;
     }
 
     forkJoin(afectados.map((a) => this.datos.eliminar(a.id))).subscribe({
-      next: () => {
-        limpiar();
-        this.toast.exito(this.opciones.aPapelera ? 'Carpeta enviada a la papelera' : 'Carpeta borrada');
-        this.cargar();
-      },
+      next: () => borrarMetaYRefrescar(),
       error: (err) => this.toast.error(mensajeError(err)),
     });
   }

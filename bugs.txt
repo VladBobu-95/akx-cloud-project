@@ -1,5 +1,3 @@
-
-- - si se borra una carpeta con archivos dentro el archivo va a la papelera pero la carpeta no
 - pasa imagenes/ pasa las imagenes que tengo 
 - Paginacion registro
 - Prohibir hacer cambios a las carpetas compartidas pero si de lo que hay dentro
