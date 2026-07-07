@@ -33,7 +33,10 @@ export const embeddings = async (
     res = await fetch(`${env.OLLAMA_URL}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: env.OLLAMA_EMBED_MODEL, input }),
+      // keep_alive mantiene bge-m3 cargado entre búsquedas: sin esto Ollama lo
+      // descarga a los 5 min (default) y cada búsqueda en frío paga varios
+      // segundos de recarga del modelo. Es pequeño (~1-2 GB), barato de tener fijo.
+      body: JSON.stringify({ model: env.OLLAMA_EMBED_MODEL, input, keep_alive: "30m" }),
       // Timeout para no colgarse si Ollama no libera VRAM (ver OLLAMA_TIMEOUT_MS).
       signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
     });

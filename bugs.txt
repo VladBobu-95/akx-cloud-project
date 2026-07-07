@@ -1,10 +1,7 @@
 - mover de compartido a otra carpeta compartida
--
 - pasa imagenes/ pasa las imagenes que tengo 
 - Paginacion registro
-- Prohibir hacer cambios a las carpetas compartidas pero si de lo que hay dentro
-- He quitado el acceso al chatbot del rol y la persona sigue utilizando el chatbot . Si no hay acceso al chatbot directamente no le tiene que aparecer.
-- Tambien un boton mover a compartido o mover a mis archivos (chatbot tambien)
+- Un boton mover a compartido o mover a mis archivos (chatbot)
 - En lugar de miembro Empleado 
 - quitar el boton de ver archivos de admin si eres admin
 - acciones en plataforma y equipo esta demasiado a la derecha

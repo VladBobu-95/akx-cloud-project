@@ -334,16 +334,83 @@ export class ExploradorComponent implements OnInit {
     this.resultados.set(null);
     this.ultimaConsulta.set('');
   }
-  // Resalta en `texto` las palabras de la última consulta buscada.
+  // Quita acentos y baja a minúsculas para comparar igual que el backend
+  // (unaccent + ILIKE): "tecnologia" debe casar con "Tecnología".
+  private sinAcentos(s: string): string {
+    return s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+  }
+  private escaparHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  // Palabras de la consulta (>=2 chars), sin acentos, para casar.
+  private palabrasConsulta(): string[] {
+    return [...new Set(this.sinAcentos(this.ultimaConsulta().trim()).split(/\s+/))].filter(
+      (p) => p.length >= 2,
+    );
+  }
+  // Localiza los tramos [inicio,fin) de `texto` que casan con alguna palabra de
+  // la consulta (comparando sin acentos, con posiciones alineadas al original).
+  private tramosCoincidentes(texto: string): Array<[number, number]> {
+    const palabras = this.palabrasConsulta();
+    if (palabras.length === 0) return [];
+    const norm = this.sinAcentos(texto); // NFD-sin-diacríticos conserva 1 char por letra base
+    const tramos: Array<[number, number]> = [];
+    for (const p of palabras) {
+      let i = norm.indexOf(p);
+      while (i !== -1) {
+        tramos.push([i, i + p.length]);
+        i = norm.indexOf(p, i + p.length);
+      }
+    }
+    tramos.sort((a, b) => a[0] - b[0]);
+    // Fusiona solapes para no anidar <mark>.
+    const fusion: Array<[number, number]> = [];
+    for (const t of tramos) {
+      const ult = fusion[fusion.length - 1];
+      if (ult && t[0] <= ult[1]) ult[1] = Math.max(ult[1], t[1]);
+      else fusion.push([t[0], t[1]]);
+    }
+    return fusion;
+  }
+  // Resalta las palabras de la consulta en un texto corto (el nombre del archivo).
   protected resaltar(texto: string): string {
-    const escapado = texto
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-    const palabras = [...new Set(this.ultimaConsulta().trim().split(/\s+/))].filter((p) => p.length >= 3);
-    if (palabras.length === 0) return escapado;
-    const patron = palabras.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-    return escapado.replace(new RegExp(`(${patron})`, 'gi'), '<mark>$1</mark>');
+    const tramos = this.tramosCoincidentes(texto);
+    if (tramos.length === 0) return this.escaparHtml(texto);
+    let html = '';
+    let cursor = 0;
+    for (const [s, e] of tramos) {
+      html += this.escaparHtml(texto.slice(cursor, s));
+      html += '<mark>' + this.escaparHtml(texto.slice(s, e)) + '</mark>';
+      cursor = e;
+    }
+    return html + this.escaparHtml(texto.slice(cursor));
+  }
+  // Devuelve un extracto del fragmento centrado en la primera coincidencia, con
+  // las palabras buscadas resaltadas. Así se ve el trozo de texto donde aparece
+  // la palabra (el fragmento crudo son ~1000 chars y la coincidencia queda oculta).
+  protected fragmentoResaltado(texto: string): string {
+    const tramos = this.tramosCoincidentes(texto);
+    const VENTANA = 260;
+    if (tramos.length === 0) {
+      // Coincidencia solo semántica (sin la palabra literal): muestra el inicio.
+      const corte = texto.slice(0, VENTANA);
+      return this.escaparHtml(corte) + (texto.length > VENTANA ? '…' : '');
+    }
+    const primero = tramos[0][0];
+    const inicio = Math.max(0, primero - 60);
+    const fin = Math.min(texto.length, Math.max(inicio + VENTANA, tramos[0][1] + 60));
+    let html = inicio > 0 ? '…' : '';
+    let cursor = inicio;
+    for (const [s, e] of tramos) {
+      if (e <= inicio || s >= fin) continue;
+      const s2 = Math.max(s, inicio);
+      const e2 = Math.min(e, fin);
+      if (s2 > cursor) html += this.escaparHtml(texto.slice(cursor, s2));
+      html += '<mark>' + this.escaparHtml(texto.slice(s2, e2)) + '</mark>';
+      cursor = e2;
+    }
+    if (cursor < fin) html += this.escaparHtml(texto.slice(cursor, fin));
+    return html + (fin < texto.length ? '…' : '');
   }
   // Lleva a la carpeta donde está el archivo del resultado.
   irAArchivo(carpeta: string) {
