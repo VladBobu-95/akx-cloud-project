@@ -160,6 +160,7 @@ interface FilaFragmento {
   carpeta: string;
   fragmento: string;
   dist: string;
+  literal: boolean; // true si el fragmento contiene literalmente el texto buscado
 }
 
 // Colapsa las filas (varios fragmentos por archivo) a un resultado por archivo,
@@ -204,20 +205,33 @@ const buscarConFiltro = async (
 
   const maxDist = 1 - MIN_SCORE;
   const kw = `%${texto}%`;
+  // Se prioriza la coincidencia LITERAL (`literal DESC`): un fragmento que
+  // contiene la palabra buscada es un acierto seguro y va SIEMPRE primero, aunque
+  // su similitud semántica sea mediocre. Sin esto, los aciertos literales con
+  // `dist` alta caían al fondo del ORDER BY y el `LIMIT` los cortaba antes del
+  // dedup, dejando arriba falsos positivos semánticos (facturas parecidas que no
+  // contienen la palabra). Dentro de cada grupo se ordena por distancia.
   // $1..$4 fijos; los parámetros de acceso van a partir de $5.
   const filas: FilaFragmento[] = await AppDataSource.query(
     `SELECT a."id" AS "archivoId", a."nombre" AS "nombre", a."carpeta" AS "carpeta",
-            f."texto" AS "fragmento", (f."embedding" <=> $1::vector) AS "dist"
+            f."texto" AS "fragmento", (f."embedding" <=> $1::vector) AS "dist",
+            (unaccent(f."texto") ILIKE unaccent($3)) AS "literal"
      FROM "fragmentos" f
      JOIN "archivos" a ON a."id" = f."archivoId"
      WHERE ${filtroAcceso}
        AND a."eliminadoEn" IS NULL
        AND ( (f."embedding" <=> $1::vector) <= $2 OR unaccent(f."texto") ILIKE unaccent($3) )
-     ORDER BY "dist" ASC
+     ORDER BY "literal" DESC, "dist" ASC
      LIMIT $4`,
     [vecLiteral(vec), maxDist, kw, k * 4, ...paramsAcceso],
   );
-  return dedupPorArchivo(filas, k);
+  // Si algún fragmento contiene la palabra buscada, devolvemos SOLO esos: una
+  // búsqueda por palabra concreta ("devolución") no debe mezclar facturas
+  // parecidas que no la contienen. El relleno semántico solo entra cuando NADIE
+  // la contiene literalmente (consultas conceptuales tipo "facturas de transporte",
+  // cuya frase completa casi nunca aparece tal cual → caen a semántico como antes).
+  const relevantes = filas.some((f) => f.literal) ? filas.filter((f) => f.literal) : filas;
+  return dedupPorArchivo(relevantes, k);
 };
 
 // Búsqueda semántica PERSONAL: solo el contenido propio del usuario (fragmentos
