@@ -182,7 +182,7 @@
     <!-- ===================== MODAL REGISTRO DE ACTIVIDAD ===================== -->
     @if (logsCarpeta(); as lc) {
       <div class="modal-backdrop">
-        <div class="card modal modal-ancho" (click)="$event.stopPropagation()">
+        <div class="card modal modal-ancho modal-lista" (click)="$event.stopPropagation()">
           <div class="row" style="justify-content: space-between; align-items: center;">
             <h2 style="margin: 0;">Registro · {{ lc.nombre }}</h2>
             <button class="btn btn-ghost btn-sm" (click)="cerrarLogs()">Cerrar</button>
@@ -194,6 +194,7 @@
           } @else if (logsEventos().length === 0) {
             <div class="empty"><div class="icon">📭</div> Aún no hay actividad en esta carpeta.</div>
           } @else {
+            <div class="lista-scroll">
             <table class="table">
               <thead>
                 <tr>
@@ -217,6 +218,7 @@
                 }
               </tbody>
             </table>
+            </div>
             @if (logsPaginas() > 1) {
               <div class="row" style="justify-content: center; align-items: center; gap: 10px; margin-top: 10px;">
                 <button class="btn btn-outline btn-sm" [disabled]="logsPagina() === 1" (click)="logsAnterior()">←</button>
@@ -326,17 +328,20 @@
     <!-- ===================== ARCHIVOS DE MIEMBRO ===================== -->
     @if (miembroVer(); as m) {
       <div class="modal-backdrop">
-        <div class="card modal modal-ancho" (click)="$event.stopPropagation()">
+        <div class="card modal modal-ancho modal-lista" (click)="$event.stopPropagation()">
           <div class="row">
             <h2>Archivos de {{ m.nombre || m.email }}</h2>
             <span class="spacer"></span>
             <button class="btn btn-ghost btn-sm" (click)="cerrarArchivos()">✕</button>
           </div>
+          <p class="muted" style="margin: 4px 0 12px;">{{ archivosTotal() }} archivo(s)</p>
+
           @if (cargandoArchivos()) {
             <div class="empty">Cargando…</div>
           } @else if (archivosMiembro().length === 0) {
             <div class="empty"><div class="icon">📂</div> Este miembro no tiene archivos.</div>
           } @else {
+            <div class="lista-scroll">
             <table class="table">
               <thead>
                 <tr><th>Nombre</th><th>Carpeta</th><th>Tamaño</th><th>Subido</th></tr>
@@ -352,6 +357,14 @@
                 }
               </tbody>
             </table>
+            </div>
+            @if (archivosPaginas() > 1) {
+              <div class="row" style="justify-content: center; align-items: center; gap: 10px; margin-top: 10px;">
+                <button class="btn btn-outline btn-sm" [disabled]="archivosPagina() === 1" (click)="archivosAnterior()">←</button>
+                <span class="muted">Página {{ archivosPagina() }} de {{ archivosPaginas() }}</span>
+                <button class="btn btn-outline btn-sm" [disabled]="archivosPagina() >= archivosPaginas()" (click)="archivosSiguiente()">→</button>
+              </div>
+            }
           }
         </div>
       </div>

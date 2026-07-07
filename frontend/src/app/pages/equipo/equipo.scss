@@ -120,3 +120,23 @@
         max-width: 760px;
         width: 100%;
       }
+      /* Modales de listado (registro de actividad, archivos de miembro): alto
+         acotado a la pantalla; solo la tabla scrollea, así la cabecera y los
+         botones de paginación quedan siempre visibles (antes crecían sin
+         límite y tapaban la paginación). */
+      .modal-lista {
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 40px);
+      }
+      .modal-lista .lista-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .modal-lista .lista-scroll thead th {
+        position: sticky;
+        top: 0;
+        background: var(--surface);
+        z-index: 1;
+      }

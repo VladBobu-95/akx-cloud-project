@@ -93,6 +93,9 @@ export class EquipoPage {
   protected miembroVer = signal<Miembro | null>(null);
   protected archivosMiembro = signal<Archivo[]>([]);
   protected cargandoArchivos = signal(false);
+  protected archivosPagina = signal(1);
+  protected archivosPaginas = signal(1);
+  protected archivosTotal = signal(0);
 
   protected nombreCapacidad = (c: string) => this.CAP_LABELS[c] ?? c;
 
@@ -378,11 +381,19 @@ export class EquipoPage {
   // ===================== ARCHIVOS DE MIEMBRO =====================
   verArchivos(m: Miembro) {
     this.miembroVer.set(m);
+    this.archivosPagina.set(1);
+    this.cargarArchivosMiembro();
+  }
+
+  cargarArchivosMiembro() {
+    const m = this.miembroVer();
+    if (!m) return;
     this.cargandoArchivos.set(true);
-    this.archivosMiembro.set([]);
-    this.svc.archivosDeMiembro(m.id).subscribe({
+    this.svc.archivosDeMiembro(m.id, undefined, this.archivosPagina(), 20).subscribe({
       next: (r) => {
         this.archivosMiembro.set(r.archivos);
+        this.archivosPaginas.set(r.paginas);
+        this.archivosTotal.set(r.total);
         this.cargandoArchivos.set(false);
       },
       error: (err) => {
@@ -390,6 +401,20 @@ export class EquipoPage {
         this.toast.error(mensajeError(err));
       },
     });
+  }
+
+  archivosAnterior() {
+    if (this.archivosPagina() > 1) {
+      this.archivosPagina.update((p) => p - 1);
+      this.cargarArchivosMiembro();
+    }
+  }
+
+  archivosSiguiente() {
+    if (this.archivosPagina() < this.archivosPaginas()) {
+      this.archivosPagina.update((p) => p + 1);
+      this.cargarArchivosMiembro();
+    }
   }
 
   cerrarArchivos() {
