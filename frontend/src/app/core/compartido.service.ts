@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
-import { Archivo, CarpetaCompartida } from './models';
+import { Archivo, CarpetaCompartida, ResultadoBusqueda } from './models';
 
 // Carpeta compartida accesible + resumen para el listado (tamaño y última actualización).
 export interface CarpetaCompartidaAccesible {
@@ -83,6 +83,13 @@ export class CompartidoService {
   // Todos los archivos de la carpeta compartida (para construir el árbol en cliente).
   listarTodos(carpetaCompartidaId: string): Observable<Archivo[]> {
     return this.http.get<Archivo[]>(`${this.base}/${carpetaCompartidaId}/todos`);
+  }
+
+  // Búsqueda semántica acotada a esta carpeta compartida (solo su contenido).
+  buscarSemantica(carpetaCompartidaId: string, q: string): Observable<ResultadoBusqueda[]> {
+    return this.http.get<ResultadoBusqueda[]>(`${this.base}/${carpetaCompartidaId}/buscar`, {
+      params: new HttpParams().set('q', q),
+    });
   }
 
   listarCarpetas(carpetaCompartidaId: string): Observable<{ ruta: string; creada: string }[]> {

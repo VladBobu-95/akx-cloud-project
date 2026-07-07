@@ -154,49 +154,17 @@ export interface ResultadoSemantico {
   score: number; // 0..1 (mayor = más parecido)
 }
 
-// Búsqueda semántica: convierte la consulta en embedding y devuelve los archivos
-// cuyo contenido más se parece (un fragmento representativo por archivo).
-export const buscarSemantica = async (
-  usuarioId: string,
-  consulta: string,
-  k = 5,
-  compartidasAccesibles: string[] = [],
-): Promise<ResultadoSemantico[]> => {
-  const texto = (consulta ?? "").trim();
-  if (!texto) return [];
+interface FilaFragmento {
+  archivoId: string;
+  nombre: string;
+  carpeta: string;
+  fragmento: string;
+  dist: string;
+}
 
-  const [vec] = await embeddings([texto], "consulta");
-  if (!vec) return [];
-
-  // Búsqueda HÍBRIDA: un fragmento entra si (a) es semánticamente parecido
-  // (distancia coseno por debajo del umbral) O (b) contiene literalmente el texto
-  // buscado (ILIKE). Así una palabra suelta como "pintura" que aparece en la
-  // factura sale aunque su similitud semántica sea media, sin devolver basura.
-  // El ILIKE usa unaccent() en ambos lados (igual que la analítica de facturas)
-  // para que "tecnologia" encuentre "Tecnología" — requiere la extensión
-  // unaccent (migración HabilitarUnaccent).
-  const maxDist = 1 - MIN_SCORE;
-  const kw = `%${texto}%`;
-  const filas: Array<{
-    archivoId: string;
-    nombre: string;
-    carpeta: string;
-    fragmento: string;
-    dist: string;
-  }> = await AppDataSource.query(
-    `SELECT a."id" AS "archivoId", a."nombre" AS "nombre", a."carpeta" AS "carpeta",
-            f."texto" AS "fragmento", (f."embedding" <=> $2::vector) AS "dist"
-     FROM "fragmentos" f
-     JOIN "archivos" a ON a."id" = f."archivoId"
-     WHERE ( (f."propietarioId" = $1 AND f."carpetaCompartidaId" IS NULL)
-             OR f."carpetaCompartidaId" = ANY($6::uuid[]) )
-       AND a."eliminadoEn" IS NULL
-       AND ( (f."embedding" <=> $2::vector) <= $3 OR unaccent(f."texto") ILIKE unaccent($4) )
-     ORDER BY "dist" ASC
-     LIMIT $5`,
-    [usuarioId, vecLiteral(vec), maxDist, kw, k * 4, compartidasAccesibles],
-  );
-
+// Colapsa las filas (varios fragmentos por archivo) a un resultado por archivo,
+// quedándose con el fragmento más parecido (las filas vienen ordenadas por dist).
+const dedupPorArchivo = (filas: FilaFragmento[], k: number): ResultadoSemantico[] => {
   const vistos = new Set<string>();
   const resultados: ResultadoSemantico[] = [];
   for (const f of filas) {
@@ -213,3 +181,65 @@ export const buscarSemantica = async (
   }
   return resultados;
 };
+
+// Búsqueda HÍBRIDA: un fragmento entra si (a) es semánticamente parecido
+// (distancia coseno por debajo del umbral) O (b) contiene literalmente el texto
+// buscado (ILIKE). Así una palabra suelta como "pintura" que aparece en la
+// factura sale aunque su similitud semántica sea media, sin devolver basura.
+// El ILIKE usa unaccent() en ambos lados (igual que la analítica de facturas)
+// para que "tecnologia" encuentre "Tecnología" — requiere la extensión
+// unaccent (migración HabilitarUnaccent). `filtroAcceso` acota el ámbito (solo
+// personal, o una carpeta compartida concreta) y aporta sus parámetros extra.
+const buscarConFiltro = async (
+  consulta: string,
+  k: number,
+  filtroAcceso: string,
+  paramsAcceso: unknown[],
+): Promise<ResultadoSemantico[]> => {
+  const texto = (consulta ?? "").trim();
+  if (!texto) return [];
+
+  const [vec] = await embeddings([texto], "consulta");
+  if (!vec) return [];
+
+  const maxDist = 1 - MIN_SCORE;
+  const kw = `%${texto}%`;
+  // $1..$4 fijos; los parámetros de acceso van a partir de $5.
+  const filas: FilaFragmento[] = await AppDataSource.query(
+    `SELECT a."id" AS "archivoId", a."nombre" AS "nombre", a."carpeta" AS "carpeta",
+            f."texto" AS "fragmento", (f."embedding" <=> $1::vector) AS "dist"
+     FROM "fragmentos" f
+     JOIN "archivos" a ON a."id" = f."archivoId"
+     WHERE ${filtroAcceso}
+       AND a."eliminadoEn" IS NULL
+       AND ( (f."embedding" <=> $1::vector) <= $2 OR unaccent(f."texto") ILIKE unaccent($3) )
+     ORDER BY "dist" ASC
+     LIMIT $4`,
+    [vecLiteral(vec), maxDist, kw, k * 4, ...paramsAcceso],
+  );
+  return dedupPorArchivo(filas, k);
+};
+
+// Búsqueda semántica PERSONAL: solo el contenido propio del usuario (fragmentos
+// sin carpeta compartida). Lo compartido tiene su propio buscador acotado.
+export const buscarSemantica = async (
+  usuarioId: string,
+  consulta: string,
+  k = 5,
+): Promise<ResultadoSemantico[]> =>
+  buscarConFiltro(
+    consulta,
+    k,
+    `(f."propietarioId" = $5 AND f."carpetaCompartidaId" IS NULL)`,
+    [usuarioId],
+  );
+
+// Búsqueda semántica dentro de UNA carpeta compartida (mismo buscador que "Mis
+// archivos" pero acotado a ese espacio). El control de acceso lo hace el llamador
+// (compartido.service.verificarAcceso) antes de invocar esto.
+export const buscarEnCarpetaCompartida = async (
+  carpetaCompartidaId: string,
+  consulta: string,
+  k = 5,
+): Promise<ResultadoSemantico[]> =>
+  buscarConFiltro(consulta, k, `f."carpetaCompartidaId" = $5`, [carpetaCompartidaId]);

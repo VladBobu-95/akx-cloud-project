@@ -14,6 +14,7 @@ import {
   descargarCompartido,
   eliminarCompartido,
   listarTodosCompartidos,
+  buscarEnCompartida,
   listarSubcarpetasCompartidas,
   crearSubcarpetaCompartida,
   eliminarSubcarpetaCompartida,
@@ -175,6 +176,20 @@ export const ctrlEliminarArchivo = async (req: Request, res: Response, next: Nex
 export const ctrlListarTodos = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     res.json(await listarTodosCompartidos(req.usuario!.id, String(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /:id/buscar?q=... → búsqueda semántica dentro de la carpeta compartida.
+export const ctrlBuscar = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const q = typeof req.query.q === "string" ? req.query.q : "";
+    if (!q.trim()) {
+      res.json([]);
+      return;
+    }
+    res.json(await buscarEnCompartida(req.usuario!.id, String(req.params.id), q));
   } catch (error) {
     next(error);
   }

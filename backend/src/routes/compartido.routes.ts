@@ -14,6 +14,7 @@ import {
   ctrlDescargar,
   ctrlEliminarArchivo,
   ctrlListarTodos,
+  ctrlBuscar,
   ctrlListarSubcarpetas,
   ctrlCrearSubcarpeta,
   ctrlReubicarSubcarpeta,
@@ -62,6 +63,7 @@ router.delete("/archivo/:archivoId", ctrlEliminarArchivo);
 // --- Uso (cualquier miembro con acceso) ---
 router.get("/", ctrlAccesibles);
 router.get("/:id/todos", ctrlListarTodos);
+router.get("/:id/buscar", ctrlBuscar);
 router.get("/:id/carpeta/descargar", ctrlDescargarCarpetaZip);
 router.get("/:id/carpetas", ctrlListarSubcarpetas);
 router.post("/:id/carpetas", ctrlCrearSubcarpeta);

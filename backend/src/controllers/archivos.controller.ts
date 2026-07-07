@@ -27,7 +27,6 @@ import {
   moverCarpetaConContenido,
 } from "../services/carpetas.service";
 import { actualizarDescripcionManual, buscarSemantica } from "../services/rag.service";
-import { idsCompartidasAccesibles } from "../services/compartido.service";
 import { marcarPendiente } from "../services/facturas.service";
 import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
@@ -200,9 +199,9 @@ export const ctrlBuscarSemantica = async (
       res.json([]);
       return;
     }
-    // Incluye también lo que el usuario puede ver en carpetas compartidas (por rol).
-    const accesibles = await idsCompartidasAccesibles(req.usuario!.id);
-    const resultados = await buscarSemantica(req.usuario!.id, q, 5, accesibles);
+    // Solo contenido PERSONAL: lo compartido tiene su propio buscador acotado a
+    // cada carpeta compartida (mismo explorador, distinto ámbito).
+    const resultados = await buscarSemantica(req.usuario!.id, q, 5);
     res.json(resultados);
   } catch (error) {
     next(error);

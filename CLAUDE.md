@@ -166,6 +166,7 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | GET | `/` | carpetas compartidas accesibles → `{id,nombre}[]` (admin=todas de su empresa; miembro=las de sus roles) |
 | GET | `/:id/archivos` | query `carpeta` → `{archivos, subcarpetas[]}` (subcarpetas derivadas de las rutas) |
 | GET | `/:id/todos` | **todos** los archivos de la carpeta compartida (para el árbol en cliente, como `listarTodos` personal) |
+| GET | `/:id/buscar` | búsqueda semántica RAG **acotada a esta carpeta compartida** — query `q` (equivalente a `/api/archivos/buscar` pero solo sobre el contenido de este espacio) |
 | GET/POST | `/:id/carpetas` | listar subcarpetas explícitas (incl. vacías) → `{ruta,creada}[]` / crear `{ruta}` |
 | PATCH/DELETE | `/:id/carpetas` | mover/renombrar `{origen,destino}` (con contenido) / borrar `?ruta=` (solo metadata; los archivos los borra el front) |
 | GET | `/:id/carpeta/descargar` | .zip de una subcarpeta — query `ruta` |
@@ -285,7 +286,7 @@ app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), style
 - Tipos permitidos: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máx 50 MB. Subida: 1 archivo/petición (paralelas en el front).
 - **Carpetas compartidas / chat por rol (Fase 3):**
   - La capacidad **`chat`** gobierna el acceso al chatbot entero: sin ella, `POST /api/chat` responde 403 y el front oculta el enlace/ruta `/inicio`. Con ella, la gestión básica de archivos personales está **siempre** disponible; `facturas`/`busqueda` se gatean aparte. Un miembro **sin ningún rol** (o con roles que no incluyen `chat`) **no ve el chatbot** — el admin debe darle un rol con la capacidad `chat`. (Quitar `chat` a un rol surte efecto en la siguiente petición del backend y al recargar el front, sin re-loguear.)
-  - La búsqueda semántica **del chat** (`buscar_semantica`) es personal; la del **buscador REST** de Mis archivos sí incluye lo compartido accesible.
+  - Cada espacio tiene su **propio buscador semántico acotado**: el buscador REST de **Mis archivos** (`/api/archivos/buscar`) busca **solo** contenido personal, y el de **cada carpeta compartida** (`GET /api/compartido/:id/buscar`, mismo `ExploradorComponent`) busca **solo** dentro de esa carpeta. La búsqueda del **chat** (`buscar_semantica`) también es personal.
   - Facturas dentro de carpetas compartidas: se **indexan** (RAG) pero **no** se auto-escanean a la analítica (no se atribuyen a un usuario).
   - Archivos compartidos: **no van a la papelera** (borrado directo, afecta a todos los del rol).
   - El explorador de una carpeta compartida usa el **mismo `ExploradorComponent`** que "Mis archivos" (fuente = adaptador de `CompartidoService`): subcarpetas persistidas (incl. vacías, tabla `carpeta_compartida_carpetas`), mover/renombrar/copiar archivos y carpetas, drag&drop, selección múltiple, paginación y descarga zip. Se desactivan el buscador semántico (personal) y las acciones de IA (describir/escanear); los borrados son definitivos (no papelera).

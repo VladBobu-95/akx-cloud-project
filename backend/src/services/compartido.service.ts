@@ -16,6 +16,7 @@ import { AppError } from "../utils/errors";
 import { calcularHashSha256 } from "./archivos.service";
 import { crearCarpeta } from "./carpetas.service";
 import { esArchivoFactura, marcarPendiente } from "./facturas.service";
+import { buscarEnCarpetaCompartida, ResultadoSemantico } from "./rag.service";
 import { encolarTarea, P_ALTA, P_IMG_SCAN } from "./tareas.service";
 
 // Carpetas compartidas por rol. El admin las crea y decide qué roles acceden; los
@@ -378,6 +379,18 @@ export const listarTodosCompartidos = async (
     where: { carpetaCompartidaId },
     order: { subidoEn: "DESC" },
   });
+};
+
+// Búsqueda semántica acotada a UNA carpeta compartida (mismo buscador que "Mis
+// archivos", pero solo sobre el contenido de ese espacio compartido). Verifica
+// que el usuario tiene acceso antes de buscar.
+export const buscarEnCompartida = async (
+  usuarioId: string,
+  carpetaCompartidaId: string,
+  consulta: string,
+): Promise<ResultadoSemantico[]> => {
+  await verificarAcceso(usuarioId, carpetaCompartidaId);
+  return buscarEnCarpetaCompartida(carpetaCompartidaId, consulta);
 };
 
 // Subcarpetas EXPLÍCITAS persistidas (incluidas las vacías) de una carpeta compartida.

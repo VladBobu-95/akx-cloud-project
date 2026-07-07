@@ -32,15 +32,17 @@ class FuenteCompartida implements FuenteArchivos {
     return this.svc.copiarArchivo(id, datos);
   }
   eliminar(id: string) { return this.svc.eliminarArchivo(id); }
-  // No aplican a compartido (soportaIA=false, soportaBusqueda=false); no se llaman.
+  // No aplican a compartido (soportaIA=false); no se llaman.
   describirArchivo(): Observable<never> {
     return throwError(() => new Error('No disponible en carpetas compartidas'));
   }
   escanearFactura(): Observable<never> {
     return throwError(() => new Error('No disponible en carpetas compartidas'));
   }
-  buscarSemantica(): Observable<ResultadoBusqueda[]> {
-    return of([]);
+  // Búsqueda semántica acotada a ESTA carpeta compartida (mismo buscador que
+  // "Mis archivos", pero solo sobre su contenido).
+  buscarSemantica(q: string): Observable<ResultadoBusqueda[]> {
+    return this.svc.buscarSemantica(this.ccId, q);
   }
 }
 
@@ -170,7 +172,7 @@ export class CompartidoComponent {
     this.fuente.set(new FuenteCompartida(this.svc, c.id));
     this.opciones.set({
       etiquetaRaiz: c.nombre,
-      soportaBusqueda: false, // la búsqueda semántica del chat es personal
+      soportaBusqueda: true, // buscador acotado a esta carpeta compartida (solo su contenido)
       soportaIA: false, // los compartidos se indexan solos; no se escanean a analítica
       aPapelera: false, // los compartidos se borran definitivamente (afecta a todos)
       mostrarEstado: false, // el estado de indexado no aporta al usuario en compartido
