@@ -91,10 +91,10 @@ export class ExploradorComponent implements OnInit {
   protected renombrarModal = signal<{ origen: string } | null>(null);
   protected nombreRenombrar = '';
   protected moverModal = signal<{ tipo: 'archivo' | 'carpeta'; ref: string } | null>(null);
-  // "Copiar en…": selector de destino que COPIA un archivo (el original se queda).
-  // Solo aplica a archivos; el destino puede ser una carpeta del espacio actual o,
-  // si hay destino externo (compartido), Mis archivos y sus subcarpetas.
-  protected copiarEnModal = signal<{ ref: string } | null>(null);
+  // "Copiar en…": selector de destino que COPIA un archivo o una carpeta (el original
+  // se queda). El destino puede ser una carpeta del espacio actual o, si hay destino
+  // externo (compartido), Mis archivos/otra carpeta compartida y sus subcarpetas.
+  protected copiarEnModal = signal<{ tipo: 'archivo' | 'carpeta'; ref: string } | null>(null);
   protected descripcionModal = signal<{ id: string; nombre: string } | null>(null);
   protected textoDescripcion = '';
   protected guardandoDescripcion = signal(false);
@@ -333,6 +333,17 @@ export class ExploradorComponent implements OnInit {
     this.consulta = '';
     this.resultados.set(null);
     this.ultimaConsulta.set('');
+  }
+  // Resalta en `texto` las palabras de la última consulta buscada.
+  protected resaltar(texto: string): string {
+    const escapado = texto
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    const palabras = [...new Set(this.ultimaConsulta().trim().split(/\s+/))].filter((p) => p.length >= 3);
+    if (palabras.length === 0) return escapado;
+    const patron = palabras.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    return escapado.replace(new RegExp(`(${patron})`, 'gi'), '<mark>$1</mark>');
   }
   // Lleva a la carpeta donde está el archivo del resultado.
   irAArchivo(carpeta: string) {
@@ -724,15 +735,22 @@ export class ExploradorComponent implements OnInit {
   }
 
   // --- Copiar en… (copia a un destino elegido; el original permanece) ---
-  accionCopiarEn(id: string) {
+  accionCopiarEn(tipo: 'archivo' | 'carpeta', ref: string) {
     this.cerrarMenu();
-    this.copiarEnModal.set({ ref: id });
+    this.copiarEnModal.set({ tipo, ref });
   }
   // Destinos INTERNOS: cualquier carpeta del espacio actual (incluida la actual, que
   // equivale a duplicar en el sitio). Se ofrecen todas porque copiar no tiene la
-  // restricción de "no a la misma carpeta" que sí tiene mover.
+  // restricción de "no a la misma carpeta" que sí tiene mover. Para una CARPETA se
+  // excluyen ella misma y su subárbol (no se puede copiar dentro de sí misma).
   destinosCopiar(): { ruta: string; etiqueta: string }[] {
-    return [...new Set<string>(['/', ...this.rutasConocidas()])]
+    const ce = this.copiarEnModal();
+    let rutas = [...new Set<string>(['/', ...this.rutasConocidas()])];
+    if (ce?.tipo === 'carpeta') {
+      const origen = ce.ref;
+      rutas = rutas.filter((r) => r !== origen && !r.startsWith(origen + '/'));
+    }
+    return rutas
       .sort((a, b) => a.localeCompare(b))
       .map((r) => ({ ruta: r, etiqueta: r === '/' ? this.opciones.etiquetaRaiz : r }));
   }
@@ -755,6 +773,11 @@ export class ExploradorComponent implements OnInit {
     const ce = this.copiarEnModal();
     this.copiarEnModal.set(null);
     if (!ce) return;
+    // Una carpeta se copia COMO subcarpeta del destino elegido (con su contenido).
+    if (ce.tipo === 'carpeta') {
+      this.copiarCarpetaEn(ce.ref, destino);
+      return;
+    }
     // Sin `nombre`: el backend conserva el nombre original y solo añade "(copia)"
     // si ya existe en el destino (p. ej. al copiar en la misma carpeta).
     this.datos.copiar(ce.ref, { carpeta: destino }).subscribe({
@@ -765,13 +788,14 @@ export class ExploradorComponent implements OnInit {
       error: (err) => this.toast.error(mensajeError(err)),
     });
   }
-  // "Copiar en…" hacia un espacio externo: COPIA (el original permanece).
+  // "Copiar en…" hacia un espacio externo: COPIA (el original permanece). Funciona
+  // igual para archivos y carpetas (construirExportacion expande el subárbol).
   confirmarCopiarEnExterno(destinoId: string | null, ruta: string) {
     const ce = this.copiarEnModal();
     this.copiarEnModal.set(null);
     if (!ce) return;
-    const nombre = this.archivoPorId(ce.ref)?.nombre ?? '';
-    this.emitirExportacion([{ tipo: 'archivo', ref: ce.ref, nombre }], destinoId, ruta, 'copiar');
+    const nombre = ce.tipo === 'archivo' ? this.archivoPorId(ce.ref)?.nombre ?? '' : this.nombreHoja(ce.ref);
+    this.emitirExportacion([{ tipo: ce.tipo, ref: ce.ref, nombre }], destinoId, ruta, 'copiar');
   }
 
   // --- Arrastre propio (eventos de puntero) ---
@@ -1073,21 +1097,39 @@ export class ExploradorComponent implements OnInit {
     });
   }
 
+  // Duplica una carpeta EN EL SITIO (mismo padre, nombre "<nombre> (copia)" único).
   copiarCarpeta(ruta: string) {
-    // Destino: misma carpeta padre, con nombre "<nombre> (copia)" único.
     const base = this.unir(this.padre(ruta), this.nombreHoja(ruta) + ' (copia)');
     let destino = base;
     let n = 2;
     while (this.rutasConocidas().has(destino)) {
       destino = `${base} ${n++}`;
     }
+    this.ejecutarCopiaCarpeta(ruta, destino);
+  }
 
-    const afectados = this.archivosBajo(ruta);
+  // "Copiar en…" una carpeta a un destino elegido: se copia como subcarpeta de
+  // `destinoPadre` conservando el nombre (con sufijo "(copia)" solo si ya existe ahí).
+  private copiarCarpetaEn(origen: string, destinoPadre: string) {
+    let destino = this.unir(destinoPadre, this.nombreHoja(origen));
+    if (this.rutasConocidas().has(destino)) {
+      const base = destino + ' (copia)';
+      destino = base;
+      let n = 2;
+      while (this.rutasConocidas().has(destino)) destino = `${base} ${n++}`;
+    }
+    this.ejecutarCopiaCarpeta(origen, destino);
+  }
+
+  // Copia una carpeta (con su contenido y sus subcarpetas vacías) a la ruta destino
+  // completa (ya calculada como única por quien llama).
+  private ejecutarCopiaCarpeta(origen: string, destino: string) {
+    const afectados = this.archivosBajo(origen);
     const recrearVacias = () => {
       const ahora = new Date().toISOString();
       const remap = this.carpetas()
-        .filter((c) => c.ruta === ruta || c.ruta.startsWith(ruta + '/'))
-        .map((c) => ({ ruta: destino + c.ruta.slice(ruta.length), creada: c.creada }));
+        .filter((c) => c.ruta === origen || c.ruta.startsWith(origen + '/'))
+        .map((c) => ({ ruta: destino + c.ruta.slice(origen.length), creada: c.creada }));
       this.carpetas.update((v) => [...v, { ruta: destino, creada: ahora }, ...remap]);
       // Persistir las carpetas nuevas en el backend.
       forkJoin([destino, ...remap.map((r) => r.ruta)].map((r) => this.datos.crearCarpetaApi(r))).subscribe({
@@ -1103,7 +1145,7 @@ export class ExploradorComponent implements OnInit {
 
     forkJoin(
       afectados.map((a) =>
-        this.datos.copiar(a.id, { carpeta: destino + this.normalizar(a.carpeta).slice(ruta.length) }),
+        this.datos.copiar(a.id, { carpeta: destino + this.normalizar(a.carpeta).slice(origen.length) }),
       ),
     ).subscribe({
       next: () => {

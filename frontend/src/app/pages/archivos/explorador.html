@@ -38,10 +38,10 @@
               @for (r of resultados()!; track r.archivoId) {
                 <button class="res" (click)="irAArchivo(r.carpeta)" title="Ir a la carpeta del archivo">
                   <div class="res-head">
-                    <strong>{{ r.nombre }}</strong>
+                    <strong [innerHTML]="resaltar(r.nombre)"></strong>
                     <span class="muted">{{ r.carpeta }}</span>
                   </div>
-                  <p class="res-frag">{{ r.fragmento }}</p>
+                  <p class="res-frag" [innerHTML]="resaltar(r.fragmento)"></p>
                 </button>
               }
             }
@@ -227,13 +227,14 @@
             <button (click)="accionEscanear(m.ref)">🧾 Escanear</button>
           }
           <button (click)="accionDescargarArchivo(m.ref)">⬇️ Descargar</button>
-          <button (click)="accionCopiarEn(m.ref)">📋 Copiar en…</button>
+          <button (click)="accionCopiarEn('archivo', m.ref)">📋 Copiar en…</button>
           <button (click)="accionRenombrarArchivo(m.ref)">✏️ Renombrar</button>
           <button (click)="accionMoverA('archivo', m.ref)">📂 Mover a…</button>
           <button class="peligro" (click)="accionEliminarArchivo(m.ref)">🗑️ Borrar</button>
         } @else {
           <button (click)="accionDescargarCarpeta(m.ref)">⬇️ Descargar</button>
           <button (click)="cerrarMenu(); copiarCarpeta(m.ref)">📋 Copiar</button>
+          <button (click)="accionCopiarEn('carpeta', m.ref)">📋 Copiar en…</button>
           <button (click)="cerrarMenu(); abrirRenombrarCarpeta(m.ref)">✏️ Renombrar</button>
           <button (click)="accionMoverA('carpeta', m.ref)">📂 Mover a…</button>
           <button class="peligro" (click)="cerrarMenu(); pedirBorrarCarpeta(m.ref)">🗑️ Borrar</button>

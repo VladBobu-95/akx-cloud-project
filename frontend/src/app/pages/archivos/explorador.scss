@@ -193,6 +193,12 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
+      .res mark {
+        background: var(--green-soft);
+        color: var(--green-dark);
+        border-radius: 3px;
+        padding: 0 1px;
+      }
       /* Visor de markdown */
       .modal-md {
         width: min(760px, 94vw);
