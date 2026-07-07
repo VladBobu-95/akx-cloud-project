@@ -412,6 +412,14 @@ export class ExploradorComponent implements OnInit {
     if (cursor < fin) html += this.escaparHtml(texto.slice(cursor, fin));
     return html + (fin < texto.length ? '…' : '');
   }
+  // Clic en un resultado de búsqueda: abre el archivo directamente (visor md /
+  // pestaña de previsualización / descarga, según el tipo). Si por lo que sea no
+  // está entre los cargados, cae a navegar a su carpeta.
+  abrirResultado(r: ResultadoBusqueda) {
+    const archivo = this.todos().find((a) => a.id === r.archivoId);
+    if (archivo) this.abrir(archivo);
+    else this.irAArchivo(r.carpeta);
+  }
   // Lleva a la carpeta donde está el archivo del resultado.
   irAArchivo(carpeta: string) {
     this.rutaActual.set(this.normalizar(carpeta));

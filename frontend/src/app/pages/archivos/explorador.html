@@ -36,7 +36,7 @@
               <div class="empty">Sin resultados para "{{ ultimaConsulta() }}".</div>
             } @else {
               @for (r of resultados()!; track r.archivoId) {
-                <button class="res" (click)="irAArchivo(r.carpeta)" title="Ir a la carpeta del archivo">
+                <button class="res" (click)="abrirResultado(r)" title="Abrir archivo">
                   <div class="res-head">
                     <strong [innerHTML]="resaltar(r.nombre)"></strong>
                     <span class="muted">{{ r.carpeta }}</span>
