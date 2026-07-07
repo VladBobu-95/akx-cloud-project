@@ -55,9 +55,14 @@ export const embeddings = async (
 const TAM = 1000;
 const SOLAPE = 150;
 
-// Similitud mínima (0..1) para considerar un resultado relevante. Por debajo de
-// esto se descarta: evita devolver documentos que no tienen que ver con la consulta.
-// Calibrado para bge-m3: lo relevante en español queda ~0.45+ y lo ajeno por debajo.
+// Similitud mínima (0..1) para considerar un resultado relevante SOLO por
+// semántica. Ojo: con bge-m3 sobre documentos parecidos entre sí (p.ej. varias
+// facturas del mismo emisor) los scores son casi PLANOS y se solapan con lo ajeno
+// —medido: consulta ajena "pedido de material de oficina" ~0.55, consulta buena
+// "herramientas de ferretería" ~0.54—, así que NINGÚN umbral separa bien. Por eso
+// la vía fiable es la coincidencia por PALABRA (abajo); el umbral solo poda lo
+// claramente lejano (recetas/informes médicos quedan ~0.35-0.47). Subirlo mataría
+// consultas conceptuales legítimas sin quitar los falsos positivos "comerciales".
 const MIN_SCORE = 0.50;
 
 // En el ramo puramente semántico (sin aciertos literales) recortamos la cola:
@@ -85,6 +90,23 @@ const vecLiteral = (v: number[]): string => `[${v.join(",")}]`;
 // Escapa los metacaracteres de regex del texto del usuario para poder incrustarlo
 // en un patrón POSIX (`~*`) sin que `.`, `(`, `*`… se interpreten como operadores.
 const escaparRegex = (s: string): string => s.replace(/[.*+?()[\]{}|\\^$]/g, "\\$&");
+
+// Conectores que se ignoran al partir la consulta en palabras: no aportan a la
+// coincidencia literal y, si se exigieran, "escalera de aluminio" no encontraría
+// "Escalera aluminio". (Castellano/catalán/inglés básico.)
+const VACIAS = new Set([
+  "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas", "y", "o",
+  "u", "e", "al", "en", "con", "para", "por", "a", "les", "dels", "i", "amb",
+  "the", "of", "and", "to", "in",
+]);
+
+// Parte la consulta en palabras significativas (sin conectores ni tokens de 1
+// carácter), en minúsculas y sin duplicados. La coincidencia literal exigirá
+// TODAS estas palabras (como palabras completas), en cualquier orden.
+const tokenizar = (q: string): string[] => {
+  const brutos = q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return [...new Set(brutos.filter((t) => t.length >= 2 && !VACIAS.has(t)))];
+};
 
 // Trocea, genera embeddings y guarda los fragmentos para RAG de un texto ya
 // resuelto (combinado, en su caso). Devuelve cuántos fragmentos creó. Borra
@@ -195,18 +217,20 @@ const dedupPorArchivo = (filas: FilaFragmento[], k: number): ResultadoSemantico[
 };
 
 // Búsqueda HÍBRIDA: un fragmento entra si (a) es semánticamente parecido
-// (distancia coseno por debajo del umbral) O (b) contiene la palabra buscada
-// como PALABRA COMPLETA. Así una palabra suelta como "pintura" que aparece en la
-// factura sale aunque su similitud semántica sea media, sin devolver basura.
+// (distancia coseno por debajo del umbral) O (b) contiene TODAS las palabras
+// significativas de la consulta como PALABRAS COMPLETAS (en cualquier orden). Así
+// "escalera de aluminio" encuentra "Escalera aluminio" y "pintura" suelta sale sin
+// devolver basura.
 //
 // El match literal usa el operador regex `~*` con límites de palabra POSIX (`\y`),
 // NO un ILIKE `%texto%` por subcadena: buscar "iva" NO debe acertar dentro de
 // "privado"/"activo" y arrastrar archivos ajenos (un acierto literal SUPRIME el
 // ranking semántico, así que una subcadena espuria envenenaba todos los
-// resultados). unaccent() en ambos lados (igual que la analítica de facturas) para
-// que "tecnologia" encuentre "Tecnología" — requiere la extensión unaccent
-// (migración HabilitarUnaccent). `filtroAcceso` acota el ámbito (solo personal, o
-// una carpeta compartida concreta) y aporta sus parámetros extra.
+// resultados). Exigir TODAS las palabras (AND) evita el otro extremo: no basta con
+// compartir una palabra común. unaccent() en ambos lados (igual que la analítica de
+// facturas) para que "tecnologia" encuentre "Tecnología" — requiere la extensión
+// unaccent (migración HabilitarUnaccent). `filtroAcceso` acota el ámbito (solo
+// personal, o una carpeta compartida concreta) y aporta sus parámetros extra.
 const buscarConFiltro = async (
   consulta: string,
   k: number,
@@ -220,28 +244,38 @@ const buscarConFiltro = async (
   if (!vec) return [];
 
   const maxDist = 1 - MIN_SCORE;
-  // `\y` = límite de palabra en la regex POSIX de Postgres → coincidencia por
-  // palabra completa, no por subcadena. Escapamos los metacaracteres del texto.
-  const kw = `\\y${escaparRegex(texto)}\\y`;
-  // Se prioriza la coincidencia LITERAL (`literal DESC`): un fragmento que
-  // contiene la palabra buscada es un acierto seguro y va SIEMPRE primero, aunque
-  // su similitud semántica sea mediocre. Sin esto, los aciertos literales con
-  // `dist` alta caían al fondo del ORDER BY y el `LIMIT` los cortaba antes del
-  // dedup, dejando arriba falsos positivos semánticos (facturas parecidas que no
-  // contienen la palabra). Dentro de cada grupo se ordena por distancia.
-  // $1..$4 fijos; los parámetros de acceso van a partir de $5.
+  // Layout de parámetros: $1=vector, $2=maxDist, $3=limit, luego los de acceso, y
+  // al final uno por cada palabra de la consulta (patrón `\ypalabra\y`, límite de
+  // palabra POSIX → coincidencia por palabra completa, no subcadena).
+  const tokens = tokenizar(texto);
+  const baseTok = 4 + paramsAcceso.length; // índice $ del primer token
+  const tokenPatrones = tokens.map((t) => `\\y${escaparRegex(t)}\\y`);
+  // Condición literal = TODAS las palabras presentes (AND). Sin palabras
+  // significativas (consulta de solo conectores/símbolos) no hay literal posible.
+  const condLiteral =
+    tokens.length > 0
+      ? tokens
+          .map((_, i) => `unaccent(f."texto") ~* unaccent($${baseTok + i})`)
+          .join(" AND ")
+      : "false";
+  // Se prioriza la coincidencia LITERAL (`literal DESC`): un fragmento que contiene
+  // todas las palabras es un acierto seguro y va SIEMPRE primero, aunque su
+  // similitud semántica sea mediocre. Sin esto, los aciertos literales con `dist`
+  // alta caían al fondo del ORDER BY y el `LIMIT` los cortaba antes del dedup,
+  // dejando arriba falsos positivos semánticos. Dentro de cada grupo se ordena por
+  // distancia.
   const filas: FilaFragmento[] = await AppDataSource.query(
     `SELECT a."id" AS "archivoId", a."nombre" AS "nombre", a."carpeta" AS "carpeta",
             f."texto" AS "fragmento", (f."embedding" <=> $1::vector) AS "dist",
-            (unaccent(f."texto") ~* unaccent($3)) AS "literal"
+            (${condLiteral}) AS "literal"
      FROM "fragmentos" f
      JOIN "archivos" a ON a."id" = f."archivoId"
      WHERE ${filtroAcceso}
        AND a."eliminadoEn" IS NULL
-       AND ( (f."embedding" <=> $1::vector) <= $2 OR unaccent(f."texto") ~* unaccent($3) )
+       AND ( (f."embedding" <=> $1::vector) <= $2 OR (${condLiteral}) )
      ORDER BY "literal" DESC, "dist" ASC
-     LIMIT $4`,
-    [vecLiteral(vec), maxDist, kw, k * 4, ...paramsAcceso],
+     LIMIT $3`,
+    [vecLiteral(vec), maxDist, k * 4, ...paramsAcceso, ...tokenPatrones],
   );
   // Si algún fragmento contiene la palabra buscada, devolvemos SOLO esos: una
   // búsqueda por palabra concreta ("devolución") no debe mezclar facturas
@@ -270,7 +304,7 @@ export const buscarSemantica = async (
   buscarConFiltro(
     consulta,
     k,
-    `(f."propietarioId" = $5 AND f."carpetaCompartidaId" IS NULL)`,
+    `(f."propietarioId" = $4 AND f."carpetaCompartidaId" IS NULL)`,
     [usuarioId],
   );
 
@@ -282,4 +316,4 @@ export const buscarEnCarpetaCompartida = async (
   consulta: string,
   k = 5,
 ): Promise<ResultadoSemantico[]> =>
-  buscarConFiltro(consulta, k, `f."carpetaCompartidaId" = $5`, [carpetaCompartidaId]);
+  buscarConFiltro(consulta, k, `f."carpetaCompartidaId" = $4`, [carpetaCompartidaId]);
