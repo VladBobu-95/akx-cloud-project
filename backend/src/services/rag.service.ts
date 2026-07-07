@@ -59,6 +59,13 @@ const SOLAPE = 150;
 // esto se descarta: evita devolver documentos que no tienen que ver con la consulta.
 // Calibrado para bge-m3: lo relevante en español queda ~0.45+ y lo ajeno por debajo.
 const MIN_SCORE = 0.50;
+
+// En el ramo puramente semántico (sin aciertos literales) recortamos la cola:
+// tras el mejor resultado, descartamos los que quedan más de GAP por debajo. Evita
+// devolver una lista larga de archivos "medio parecidos" cuando la consulta no
+// tiene un match claro (bge-m3 asigna ~0.5 a texto español no relacionado, así que
+// un umbral absoluto solo no basta: hay que mirar también la distancia al top).
+const GAP = 0.10;
 export const trocear = (texto: string): string[] => {
   const limpio = texto.replace(/\s+/g, " ").trim();
   if (!limpio) return [];
@@ -74,6 +81,10 @@ export const trocear = (texto: string): string[] => {
 
 // Literal de pgvector: un array JS [0.1, 0.2] -> "[0.1,0.2]" para insertar como ::vector.
 const vecLiteral = (v: number[]): string => `[${v.join(",")}]`;
+
+// Escapa los metacaracteres de regex del texto del usuario para poder incrustarlo
+// en un patrón POSIX (`~*`) sin que `.`, `(`, `*`… se interpreten como operadores.
+const escaparRegex = (s: string): string => s.replace(/[.*+?()[\]{}|\\^$]/g, "\\$&");
 
 // Trocea, genera embeddings y guarda los fragmentos para RAG de un texto ya
 // resuelto (combinado, en su caso). Devuelve cuántos fragmentos creó. Borra
@@ -184,13 +195,18 @@ const dedupPorArchivo = (filas: FilaFragmento[], k: number): ResultadoSemantico[
 };
 
 // Búsqueda HÍBRIDA: un fragmento entra si (a) es semánticamente parecido
-// (distancia coseno por debajo del umbral) O (b) contiene literalmente el texto
-// buscado (ILIKE). Así una palabra suelta como "pintura" que aparece en la
+// (distancia coseno por debajo del umbral) O (b) contiene la palabra buscada
+// como PALABRA COMPLETA. Así una palabra suelta como "pintura" que aparece en la
 // factura sale aunque su similitud semántica sea media, sin devolver basura.
-// El ILIKE usa unaccent() en ambos lados (igual que la analítica de facturas)
-// para que "tecnologia" encuentre "Tecnología" — requiere la extensión
-// unaccent (migración HabilitarUnaccent). `filtroAcceso` acota el ámbito (solo
-// personal, o una carpeta compartida concreta) y aporta sus parámetros extra.
+//
+// El match literal usa el operador regex `~*` con límites de palabra POSIX (`\y`),
+// NO un ILIKE `%texto%` por subcadena: buscar "iva" NO debe acertar dentro de
+// "privado"/"activo" y arrastrar archivos ajenos (un acierto literal SUPRIME el
+// ranking semántico, así que una subcadena espuria envenenaba todos los
+// resultados). unaccent() en ambos lados (igual que la analítica de facturas) para
+// que "tecnologia" encuentre "Tecnología" — requiere la extensión unaccent
+// (migración HabilitarUnaccent). `filtroAcceso` acota el ámbito (solo personal, o
+// una carpeta compartida concreta) y aporta sus parámetros extra.
 const buscarConFiltro = async (
   consulta: string,
   k: number,
@@ -204,7 +220,9 @@ const buscarConFiltro = async (
   if (!vec) return [];
 
   const maxDist = 1 - MIN_SCORE;
-  const kw = `%${texto}%`;
+  // `\y` = límite de palabra en la regex POSIX de Postgres → coincidencia por
+  // palabra completa, no por subcadena. Escapamos los metacaracteres del texto.
+  const kw = `\\y${escaparRegex(texto)}\\y`;
   // Se prioriza la coincidencia LITERAL (`literal DESC`): un fragmento que
   // contiene la palabra buscada es un acierto seguro y va SIEMPRE primero, aunque
   // su similitud semántica sea mediocre. Sin esto, los aciertos literales con
@@ -215,12 +233,12 @@ const buscarConFiltro = async (
   const filas: FilaFragmento[] = await AppDataSource.query(
     `SELECT a."id" AS "archivoId", a."nombre" AS "nombre", a."carpeta" AS "carpeta",
             f."texto" AS "fragmento", (f."embedding" <=> $1::vector) AS "dist",
-            (unaccent(f."texto") ILIKE unaccent($3)) AS "literal"
+            (unaccent(f."texto") ~* unaccent($3)) AS "literal"
      FROM "fragmentos" f
      JOIN "archivos" a ON a."id" = f."archivoId"
      WHERE ${filtroAcceso}
        AND a."eliminadoEn" IS NULL
-       AND ( (f."embedding" <=> $1::vector) <= $2 OR unaccent(f."texto") ILIKE unaccent($3) )
+       AND ( (f."embedding" <=> $1::vector) <= $2 OR unaccent(f."texto") ~* unaccent($3) )
      ORDER BY "literal" DESC, "dist" ASC
      LIMIT $4`,
     [vecLiteral(vec), maxDist, kw, k * 4, ...paramsAcceso],
@@ -230,8 +248,16 @@ const buscarConFiltro = async (
   // parecidas que no la contienen. El relleno semántico solo entra cuando NADIE
   // la contiene literalmente (consultas conceptuales tipo "facturas de transporte",
   // cuya frase completa casi nunca aparece tal cual → caen a semántico como antes).
-  const relevantes = filas.some((f) => f.literal) ? filas.filter((f) => f.literal) : filas;
-  return dedupPorArchivo(relevantes, k);
+  const hayLiteral = filas.some((f) => f.literal);
+  const relevantes = hayLiteral ? filas.filter((f) => f.literal) : filas;
+  const resultados = dedupPorArchivo(relevantes, k);
+  // Ramo puramente semántico: recorta la cola de resultados flojos respecto al
+  // mejor (ver GAP). No se aplica a los aciertos literales (son exactos).
+  if (!hayLiteral && resultados.length > 1) {
+    const mejor = resultados[0].score;
+    return resultados.filter((r) => r.score >= mejor - GAP);
+  }
+  return resultados;
 };
 
 // Búsqueda semántica PERSONAL: solo el contenido propio del usuario (fragmentos

@@ -1,3 +1,4 @@
+- la busqueda semantica no funciona muy bien , saca archivos no relacionados con la busqueda 
 - mover de compartido a otra carpeta compartida
 - pasa imagenes/ pasa las imagenes que tengo 
 - Paginacion registro
