@@ -17,6 +17,10 @@
   --orange-dark: #c2410c;
   --orange-soft: #ffedd5;
 
+  --true-green: #16a34a;
+  --true-green-soft: #dcfce7;
+  --true-green-softer: #f0fdf4;
+
   --radius: 12px;
   --radius-sm: 9px;
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 30px rgba(15, 23, 42, 0.05);
@@ -28,6 +32,10 @@
 body.dark {
   --green-soft: #3f6d1250;
   --green-softer: #16250a;
+
+  --true-green: #4ade80;
+  --true-green-soft: #14532d80;
+  --true-green-softer: #14532d40;
 
   --bg: #0f172a;
   --surface: #1e293b;

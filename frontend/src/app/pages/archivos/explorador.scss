@@ -194,8 +194,8 @@
         overflow: hidden;
       }
       .res mark {
-        background: var(--green-soft);
-        color: var(--green-dark);
+        background: var(--true-green-soft);
+        color: var(--true-green);
         border-radius: 3px;
         padding: 0 1px;
       }
@@ -263,7 +263,7 @@
         cursor: pointer;
         width: 15px;
         height: 15px;
-        accent-color: var(--green);
+        accent-color: var(--true-green);
       }
       /* Resalte al pasar el ratón por una fila de la lista: slate suave
          (en vez del verde-lima del hover global de .table). */
@@ -272,7 +272,7 @@
       }
       /* Fila seleccionada */
       .table tbody tr.seleccionada td {
-        background: var(--green-softer) !important;
+        background: var(--true-green-softer) !important;
       }
       /* Barra de acciones múltiples */
       .bulk-bar {
@@ -280,8 +280,8 @@
         align-items: center;
         gap: 8px;
         padding: 10px 14px;
-        background: var(--green-soft);
-        border: 1px solid var(--green);
+        background: var(--true-green-soft);
+        border: 1px solid var(--true-green);
         border-radius: var(--radius);
         margin-bottom: 10px;
         flex-wrap: wrap;
@@ -289,7 +289,7 @@
       .bulk-count {
         font-weight: 700;
         font-size: 0.9rem;
-        color: var(--green-dark);
+        color: var(--true-green);
         margin-right: 4px;
       }
       .col-tamano,
