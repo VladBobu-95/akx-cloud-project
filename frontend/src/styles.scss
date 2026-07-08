@@ -87,7 +87,7 @@ a { color: var(--green-dark); text-decoration: none; }
 .btn-primary { background: var(--green); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--green-dark); }
 
-.btn-outline { background: var(--bg); color: var(--text); border-color: var(--border); }
+.btn-outline { background: #e5e7eb; color: var(--text); border-color: var(--border); }
 .btn-outline:hover:not(:disabled) { border-color: var(--green); color: var(--green-dark); }
 
 .btn-ghost { background: transparent; color: var(--muted); padding: 8px 12px; }
