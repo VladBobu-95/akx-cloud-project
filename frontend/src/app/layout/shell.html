@@ -32,7 +32,7 @@
       </span>
       <span class="user-nombre">{{ auth.usuario()?.nombre || auth.usuario()?.email }}</span>
     </a>
-    <button class="btn btn-outline btn-sm" (click)="auth.logout()">Cerrar sesión</button>
+    <button class="btn btn-outline btn-sm btn-logout" (click)="auth.logout()">Cerrar sesión</button>
   </div>
 </header>
 

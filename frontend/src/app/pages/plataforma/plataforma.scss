@@ -31,8 +31,23 @@
         color: var(--green-dark);
       }
       .badge-off {
-        background: #fde8e8;
-        color: var(--danger);
+        background: var(--orange-soft);
+        color: var(--orange-dark);
+      }
+      /* "Suspender" (empresa activa) avisa en naranja al pasar el ratón. */
+      .btn-outline.btn-suspender:hover:not(:disabled) {
+        background: var(--orange);
+        border-color: var(--orange);
+        color: #fff;
+      }
+      /* "Continuar" de los pasos intermedios del borrado en naranja; el paso
+         final "Borrar definitivamente" mantiene el rojo (btn-danger). */
+      .btn-naranja {
+        background: var(--orange);
+        color: #fff;
+      }
+      .btn-naranja:hover:not(:disabled) {
+        background: var(--orange-dark);
       }
       .seccion {
         margin: 14px 0 6px;

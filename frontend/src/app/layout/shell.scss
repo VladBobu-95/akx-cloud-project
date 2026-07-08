@@ -15,9 +15,9 @@
   max-width: 1100px;
   display: flex;
   align-items: center;
-  gap: 22px;
-  min-height: 62px;
-  padding: 10px 22px;
+  gap: 18px;
+  min-height: 54px;
+  padding: 8px 18px;
   background: #0f172a;
   border: 1px solid #1e293b;
   border-radius: 14px;
@@ -26,15 +26,15 @@
 .logo {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   font-weight: 800;
-  font-size: 1.6rem;
+  font-size: 1.35rem;
   color: #f8fafc;
   letter-spacing: -0.02em;
 }
 .logo-img {
-  width: 34px;
-  height: 34px;
+  width: 29px;
+  height: 29px;
   display: block;
   flex: none;
 }
@@ -49,9 +49,9 @@
 .nav-links a {
   color: #cbd5e1;
   font-weight: 600;
-  padding: 9px 16px;
+  padding: 7px 13px;
   border-radius: 999px;
-  font-size: 1.05rem;
+  font-size: 0.94rem;
 }
 .nav-links a:hover {
   background: rgba(255, 255, 255, 0.08);
@@ -64,17 +64,17 @@
 .perfil {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   color: #cbd5e1;
-  font-size: 0.98rem;
+  font-size: 0.88rem;
   font-weight: 600;
 }
 .perfil:hover {
   color: #fff;
 }
 .avatar {
-  width: 36px;
-  height: 36px;
+  width: 31px;
+  height: 31px;
   border-radius: 50%;
   background: var(--green);
   color: #fff;
@@ -91,6 +91,19 @@
   height: 100%;
   object-fit: cover;
 }
+/* "Cerrar sesión": al pasar el ratón se pone rojo (acción de salida). */
+.btn-outline.btn-logout:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+/* En modo oscuro la píldora comparte color con la banda de fondo (#0f172a),
+   así que se le da un borde más claro para que se distinga bien. */
+:host-context(body.dark) .nav-inner {
+  border-color: #3b4a63;
+}
+
 @media (max-width: 640px) {
   .user-nombre {
     display: none;

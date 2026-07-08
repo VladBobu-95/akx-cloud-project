@@ -40,7 +40,7 @@
                 <td>
                   <div class="acciones">
                     <button class="btn btn-outline btn-sm" (click)="abrirEditar(e)">Renombrar</button>
-                    <button class="btn btn-outline btn-sm" (click)="toggleEstado(e)">
+                    <button class="btn btn-outline btn-sm" [class.btn-suspender]="e.estado === 'activa'" (click)="toggleEstado(e)">
                       {{ e.estado === 'activa' ? 'Suspender' : 'Reactivar' }}
                     </button>
                     <button class="btn btn-danger btn-sm" (click)="pedirEliminar(e)">Borrar</button>
@@ -142,8 +142,8 @@
             </p>
           }
           <div class="row" style="justify-content: flex-end;">
-            <button class="btn btn-ghost" (click)="confirmacion.set(null)">Cancelar</button>
-            <button class="btn btn-danger" (click)="confirmarPaso()">
+            <button class="btn btn-outline" (click)="confirmacion.set(null)">Cancelar</button>
+            <button class="btn" [class.btn-naranja]="c.paso < 3" [class.btn-danger]="c.paso >= 3" (click)="confirmarPaso()">
               {{ c.paso < 3 ? 'Continuar' : 'Borrar definitivamente' }}
             </button>
           </div>
