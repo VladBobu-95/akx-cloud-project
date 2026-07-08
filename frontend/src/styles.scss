@@ -111,8 +111,8 @@ a { color: var(--green-dark); text-decoration: none; }
 .btn-outline { background: var(--bg); color: var(--text); border-color: var(--border); }
 .btn-outline:hover:not(:disabled) { border-color: var(--green); color: var(--green-dark); }
 
-.btn-ghost { background: transparent; color: var(--muted); padding: 8px 12px; }
-.btn-ghost:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+.btn-ghost { background: transparent; color: var(--muted); padding: 8px 12px; border-color: var(--border); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface); color: var(--text); border-color: var(--muted); }
 
 .btn-danger { background: var(--bg); color: var(--danger); border-color: var(--border); }
 .btn-danger:hover:not(:disabled) { background: var(--danger); color: #fff; border-color: var(--danger); }
@@ -126,6 +126,9 @@ a { color: var(--green-dark); text-decoration: none; }
   width: 100%; font: inherit; color: var(--text);
   padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg); transition: border-color .15s, box-shadow .15s;
+  /* Color explícito del cursor: en algunos temas/navegadores (Edge) el caret
+     salía blanco/invisible sobre fondo claro al no heredar bien el color. */
+  caret-color: var(--text);
 }
 .input:focus {
   outline: none; border-color: var(--green);
