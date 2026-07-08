@@ -47,7 +47,7 @@
   gap: 6px;
 }
 .nav-links a {
-  color: #cbd5e1;
+  color: #fff;
   font-weight: 600;
   padding: 7px 13px;
   border-radius: 999px;
@@ -65,12 +65,15 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #cbd5e1;
+  color: #fff;
   font-size: 0.88rem;
   font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  transition: background-color 0.15s;
 }
 .perfil:hover {
-  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 .avatar {
   width: 31px;
