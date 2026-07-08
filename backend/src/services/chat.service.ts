@@ -2366,10 +2366,20 @@ export const chatear = async (
   // ficar una factura a venta y preguntar "qué cliente ha facturado más"). Requiere
   // "cliente(s)" + señal de ranking (más/menos/mejor/top/principal) y NO producto
   // (ese es esRankingVentas). Combina periodo y moneda. Va ANTES de los totales.
+  //
+  // También capta "a quién (le) vendimos/vendí/facturé más" — el destinatario de la
+  // venta ES el cliente, aunque no se nombre la palabra "cliente". Sin esto caía en
+  // esRankingVentas ("vendimos mas" casa su patrón) y devolvía el ranking de PRODUCTOS
+  // en vez de a qué cliente se vendió más. Por eso va ANTES que esRankingVentas.
+  const esQuienVenta =
+    /\ba\s+quien(?:es)?\b/.test(msgSinTildes) &&
+    /\b(vend|factur)/.test(msgSinTildes) &&
+    /\b(mas|menos|mejor(?:es)?|top|principal(?:es)?)\b/.test(msgSinTildes);
   const esRankingClientes =
     puedeFacturas &&
-    /\bclientes?\b/.test(msgSinTildes) &&
-    /\b(mas|menos|mejor(?:es)?|top|principal(?:es)?)\b/.test(msgSinTildes) &&
+    (esQuienVenta ||
+      (/\bclientes?\b/.test(msgSinTildes) &&
+        /\b(mas|menos|mejor(?:es)?|top|principal(?:es)?)\b/.test(msgSinTildes))) &&
     !/\bproductos?\b/.test(msgSinTildes) &&
     !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes);
   if (esRankingClientes) {
