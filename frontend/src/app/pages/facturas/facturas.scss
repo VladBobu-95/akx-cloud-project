@@ -51,7 +51,7 @@
     white-space: nowrap;
   }
   tr.fila { cursor: pointer; }
-  tr.fila:hover { background: var(--green-soft); }
+  tr.fila:hover { background: rgba(148, 163, 184, 0.16); }
 }
 
 .badge {

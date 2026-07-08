@@ -265,6 +265,11 @@
         height: 15px;
         accent-color: var(--green);
       }
+      /* Resalte al pasar el ratón por una fila de la lista: slate suave
+         (en vez del verde-lima del hover global de .table). */
+      .list .table tbody tr:hover td {
+        background: rgba(148, 163, 184, 0.16);
+      }
       /* Fila seleccionada */
       .table tbody tr.seleccionada td {
         background: var(--green-softer) !important;

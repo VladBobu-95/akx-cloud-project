@@ -115,7 +115,7 @@ class FuenteCompartida implements FuenteArchivos {
   styles: [`
     .card.list { padding: 0; overflow: hidden; }
     .fila-carpeta { cursor: pointer; }
-    .fila-carpeta:hover { background: var(--green-soft); }
+    .fila-carpeta:hover { background: rgba(148, 163, 184, 0.16); }
     .fila-carpeta .nombre { font-weight: 600; }
     /* Mismos anchos/alineación de columnas que el explorador de Mis archivos. */
     .col-tamano { width: 120px; }
