@@ -1862,6 +1862,8 @@ ${secciones}
 // facturas "sin clasificar" (tipo="desconocido") al final. Es lo que devuelve el
 // chat para "resumen de junio 2026" / "resumen de todo": un modelo pequeño no
 // agregaba compras ni mostraba las desconocidas, así que se hace aquí, determinista.
+// Solo se incluyen las secciones con datos: si no hay ventas (o compras, o sin
+// clasificar) esa sección se omite; si no hay ninguna, un mensaje único.
 // `md` es todo el markdown (una sola burbuja: el front oculta el texto si además
 // mandas una tabla, por eso las desconocidas van embebidas). `desconocidas` son
 // {id,nombre} para que el chat ofrezca un botón "Abrir" por cada una y el usuario
@@ -1879,10 +1881,11 @@ export const generarResumenCombinadoMd = async (
   const en = etiqueta ? ` en ${etiqueta}` : "";
   const de = etiqueta ? ` de ${etiqueta}` : "";
 
-  const bloques: string[] = [
-    ventas ?? `# Resumen de ventas${de}\n\n_No hay ventas${en}._`,
-    compras ?? `# Resumen de compras${de}\n\n_No hay compras${en}._`,
-  ];
+  // Solo se incluye la sección que TENGA datos: si no hay ventas / compras / sin
+  // clasificar, esa sección no aparece (no se muestran bloques "No hay ...").
+  const bloques: string[] = [];
+  if (ventas) bloques.push(ventas);
+  if (compras) bloques.push(compras);
 
   if (desc.total > 0) {
     const lista = desc.filas
@@ -1891,13 +1894,16 @@ export const generarResumenCombinadoMd = async (
     bloques.push(
       `## Facturas sin clasificar${de} (${desc.total})\n\n${lista}\n\n_Ábrelas para asignarles venta o compra en la página **Facturas**._`,
     );
-  } else {
-    bloques.push(`## Facturas sin clasificar${de}\n\n_No hay facturas sin clasificar${en}._`);
   }
 
   const desconocidas = desc.filas
     .filter((f) => f.archivoId && f.archivoNombre)
     .map((f) => ({ id: f.archivoId as string, nombre: f.archivoNombre as string }));
+
+  // Ninguna de las tres tiene datos: un único mensaje claro en vez de tres vacíos.
+  if (bloques.length === 0) {
+    return { md: `No tienes ninguna factura${en} todavía.`, desconocidas: [] };
+  }
 
   return { md: bloques.join("\n\n---\n\n"), desconocidas };
 };

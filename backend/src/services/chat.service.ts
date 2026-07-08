@@ -2306,15 +2306,16 @@ export const chatear = async (
     };
   }
 
-  // Extrae "de [cliente/la empresa] X" al final del mensaje como nombre de
-  // cliente, para filtrar totales_facturas/ventas_top cuando el mensaje no es
-  // un periodo. El ".*" inicial (codicioso) hace que, si hay varias "de" en
-  // el mensaje, se quede con la ÚLTIMA (la más cercana al nombre real).
+  // Extrae "de [cliente/la empresa] X" —o "a [cliente] X" (facturar/vender/cobrar
+  // A alguien: "cuánto le he facturado a Ferretería Sánchez")— al final del mensaje
+  // como nombre de cliente, para filtrar totales_facturas/ventas_top cuando el
+  // mensaje no es un periodo. El ".*" inicial (codicioso) hace que, si hay varias
+  // "de"/"a" en el mensaje, se quede con la ÚLTIMA (la más cercana al nombre real).
   // Descarta capturas que claramente no son un nombre de cliente (periodo
   // relativo, "la carpeta X", "la papelera", palabras sueltas sin valor).
   const extraerClienteDeFrase = (texto: string, original: string): string | null => {
     const m = texto.match(
-      /.*\b(?:del\s+cliente\s+|de\s+el\s+cliente\s+|de\s+cliente\s+|del\s+|de\s+la\s+empresa\s+|de\s+)(.+?)[?¿.!¡]*$/,
+      /.*\b(?:del\s+cliente\s+|de\s+el\s+cliente\s+|de\s+cliente\s+|al\s+cliente\s+|a\s+cliente\s+|de\s+la\s+empresa\s+|a\s+la\s+empresa\s+|del\s+|de\s+|al\s+|a\s+)(.+?)[?¿.!¡]*$/,
     );
     if (!m) return null;
     const cliente = grupoOriginal(original, m).trim();
