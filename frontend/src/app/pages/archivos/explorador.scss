@@ -263,7 +263,7 @@
         cursor: pointer;
         width: 15px;
         height: 15px;
-        accent-color: var(--true-green);
+        accent-color: var(--select-accent);
       }
       /* Resalte al pasar el ratón por una fila de la lista: slate suave
          (en vez del verde-lima del hover global de .table). */
@@ -272,7 +272,7 @@
       }
       /* Fila seleccionada */
       .table tbody tr.seleccionada td {
-        background: var(--true-green-softer) !important;
+        background: var(--select-row) !important;
       }
       /* Barra de acciones múltiples */
       .bulk-bar {
@@ -280,8 +280,8 @@
         align-items: center;
         gap: 8px;
         padding: 10px 14px;
-        background: var(--true-green-soft);
-        border: 1px solid var(--true-green);
+        background: var(--select-bar-bg);
+        border: 1px solid var(--select-accent);
         border-radius: var(--radius);
         margin-bottom: 10px;
         flex-wrap: wrap;
@@ -289,7 +289,7 @@
       .bulk-count {
         font-weight: 700;
         font-size: 0.9rem;
-        color: var(--true-green);
+        color: var(--select-text);
         margin-right: 4px;
       }
       .col-tamano,
