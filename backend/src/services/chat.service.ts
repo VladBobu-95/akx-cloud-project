@@ -2321,7 +2321,13 @@ export const chatear = async (
     const clienteSinTildes = quitarTildes(cliente.toLowerCase());
     const pareceOtraCosa =
       /^(este|esta|esa|ese|el|la|los|las|mi|tu)?\s*(mes|ano|semana|dia)\b/.test(clienteSinTildes) ||
-      /^(la|el)\s+(carpeta|papelera|raiz|archivo)\b/.test(clienteSinTildes);
+      /^(la|el)\s+(carpeta|papelera|raiz|archivo)\b/.test(clienteSinTildes) ||
+      // "todo lo que he facturado", "todo", "todos mis clientes"... expresan "TODO"
+      // (sin filtro), no un cliente concreto. Sin esto, "el total de todo lo que he
+      // facturado" capturaba "todo lo que he facturado" como cliente y filtraba por
+      // él → total 0. También cualquier captura con "lo que" (una relativa, no un nombre).
+      /^tod[oa]s?\b/.test(clienteSinTildes) ||
+      /\blo\s+que\b/.test(clienteSinTildes);
     if (!cliente || STOPWORDS_NOMBRE.has(clienteSinTildes) || pareceOtraCosa) return null;
     return cliente;
   };
@@ -2344,6 +2350,42 @@ export const chatear = async (
     if (monedaDetectada) args.moneda = monedaDetectada;
     const resultado = (await ejecutarTool(
       "totales_facturas",
+      args,
+      usuarioId,
+      acciones,
+      capacidades,
+    )) as Record<string, unknown>;
+    if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
+  // Pre-flight: ranking de CLIENTES ("qué cliente ha facturado/comprado más",
+  // "quién es mi mejor cliente", "top clientes", "el cliente que menos gasta").
+  // Sin esto, el "facturado"/"más" lo capturaba esTotalesGeneral y devolvía el
+  // GRAN TOTAL en vez del ranking por cliente (bug que se notaba justo al reclasi-
+  // ficar una factura a venta y preguntar "qué cliente ha facturado más"). Requiere
+  // "cliente(s)" + señal de ranking (más/menos/mejor/top/principal) y NO producto
+  // (ese es esRankingVentas). Combina periodo y moneda. Va ANTES de los totales.
+  const esRankingClientes =
+    puedeFacturas &&
+    /\bclientes?\b/.test(msgSinTildes) &&
+    /\b(mas|menos|mejor(?:es)?|top|principal(?:es)?)\b/.test(msgSinTildes) &&
+    !/\bproductos?\b/.test(msgSinTildes) &&
+    !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes);
+  if (esRankingClientes) {
+    const rango = detectarRangoPeriodo(msgSinTildes);
+    const { mes, anio } = detectarMesAnio(msgSinTildes);
+    const orden = /\bmenos\b/.test(msgSinTildes) ? "menos" : "mas";
+    const args: Record<string, unknown> = { orden };
+    if (rango) {
+      args.desde = rango.desde;
+      args.hasta = rango.hasta;
+    } else {
+      if (mes) args.mes = mes;
+      if (anio) args.anio = anio;
+    }
+    if (monedaDetectada) args.moneda = monedaDetectada;
+    const resultado = (await ejecutarTool(
+      "clientes_top",
       args,
       usuarioId,
       acciones,
