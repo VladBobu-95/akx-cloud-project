@@ -1,16 +1,27 @@
-/* Barra superior azul oscuro en todas las páginas (igual que la web de ateka.digital) */
+/* Barra flotante centrada, igual que la web de ateka.digital: deja espacio arriba
+   y a los lados; el "envoltorio" toma el color de la página y la barra es una
+   píldora azul oscuro redondeada. */
 .navbar {
-  background: #0f172a;
-  border-bottom: 1px solid #1e293b;
+  display: flex;
+  justify-content: center;
+  padding: 18px 20px 0;
+  background: var(--bg);
   position: sticky;
   top: 0;
   z-index: 20;
 }
 .nav-inner {
+  width: 100%;
+  max-width: 1100px;
   display: flex;
   align-items: center;
   gap: 22px;
-  height: 64px;
+  min-height: 62px;
+  padding: 10px 22px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 14px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.18);
 }
 .logo {
   display: inline-flex;
