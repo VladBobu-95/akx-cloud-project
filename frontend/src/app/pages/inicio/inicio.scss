@@ -61,9 +61,20 @@
       }
       .burbuja.bot {
         align-self: flex-start;
-        background: var(--surface);
-        color: var(--text);
+        /* Fondo azul oscuro (soft-dark) también en modo claro; el contenido
+           interno se aclara para contrastar sobre el navy. En modo oscuro
+           --surface ya es este mismo color, así que se ve igual. */
+        background: #1e293b;
+        color: #e7ecf3;
         border-bottom-left-radius: 4px;
+      }
+      /* Etiquetas atenuadas (carpeta, "Página x de y") legibles sobre el navy. */
+      .burbuja.bot .muted {
+        color: #94a3b8;
+      }
+      /* Enlaces del markdown del bot: lima en vez del verde oscuro por contraste. */
+      .burbuja.bot .md a {
+        color: var(--green);
       }
       .burbuja.pensando {
         opacity: 0.6;
@@ -103,17 +114,17 @@
       }
       .burbuja.bot .md th,
       .burbuja.bot .md td {
-        border: 1px solid var(--border);
+        border: 1px solid rgba(255, 255, 255, 0.14);
         padding: 5px 8px;
         text-align: left;
         white-space: nowrap;
       }
       .burbuja.bot .md th {
-        background: rgba(0, 0, 0, 0.04);
+        background: rgba(255, 255, 255, 0.06);
         font-weight: 700;
       }
       .burbuja.bot .md code {
-        background: rgba(0, 0, 0, 0.06);
+        background: rgba(255, 255, 255, 0.12);
         padding: 1px 5px;
         border-radius: 4px;
         font-size: 0.85em;
@@ -134,13 +145,21 @@
       }
       .tabla-chat th,
       .tabla-chat td {
-        border: 1px solid var(--border);
+        border: 1px solid rgba(255, 255, 255, 0.14);
         padding: 5px 8px;
         text-align: left;
       }
       .tabla-chat th {
-        background: rgba(0, 0, 0, 0.04);
+        background: rgba(255, 255, 255, 0.06);
         font-weight: 700;
+      }
+      /* La tabla del chat también lleva la clase global .table (cabecera gris,
+         hover verde claro); se recolorean aquí para el fondo navy del bot. */
+      .burbuja.bot .tabla-chat th {
+        color: #cbd5e1;
+      }
+      .burbuja.bot .tabla-chat tbody tr:hover td {
+        background: rgba(255, 255, 255, 0.05);
       }
       .tabla-chat td:last-child {
         text-align: right;
