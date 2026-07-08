@@ -7,21 +7,13 @@ import { Empresa } from "../entities/Empresa";
 import { Factura } from "../entities/Factura";
 import { LineaFactura } from "../entities/LineaFactura";
 import { AppError } from "../utils/errors";
-import { crearArchivoTexto, borrarPermanente, combinarContenido } from "./archivos.service";
+import { combinarContenido } from "./archivos.service";
 import { actualizarDescripcionManual } from "./rag.service";
 import { pareceFacturaConImportes } from "./extraccion.service";
 // Cola durable: encolarEscaneoManual encola aquí en vez de en la cola en memoria.
 // (Import circular tareas<->facturas: ambos se usan solo dentro de funciones, no
 // a nivel de módulo, así que se resuelve en runtime sin problema.)
 import { encolarTarea, P_ALTA } from "./tareas.service";
-
-// Exportada para que carpetas.service.ts pueda bloquear mover/renombrar esta
-// ruta exacta (ver moverCarpetaConContenido): resumen-ventas.md y los
-// resumen-<archivo>.md se regeneran SIEMPRE en esta ruta fija, así que si la
-// carpeta se mueve/renombra, la próxima regeneración crea una copia nueva
-// aquí mientras la vieja queda huérfana (desactualizada) en la ubicación
-// nueva — quedan dos copias activas, una sin actualizar nunca más.
-export const CARPETA_FACTURAS = "/facturas";
 
 // Contenido de la factura: el texto ya extraído (OCR/PDF/DOCX) combinado con
 // la descripción manual del usuario, si la hay (ver `combinarContenido`). NO
@@ -536,40 +528,6 @@ const normalizarFecha = (f?: string): string | null => {
   return null;
 };
 
-// Crea un archivo de texto reemplazando cualquier otro activo con el mismo nombre
-// en la carpeta (para no acumular duplicados de los .md de resumen).
-const reemplazarArchivoTexto = async (
-  usuarioId: string,
-  nombre: string,
-  carpeta: string,
-  contenido: string,
-): Promise<void> => {
-  const repo = AppDataSource.getRepository(Archivo);
-  const existentes = await repo.find({
-    where: { nombre, carpeta, propietario: { id: usuarioId } },
-  });
-  for (const a of existentes) {
-    // Solo se borra si de verdad es un .md generado por este mismo mecanismo
-    // (crearArchivoTexto le pone mimeType "text/markdown" SIEMPRE a los .md).
-    // "resumen-ventas.md"/"resumen-<archivo>.md" son nombres que este sistema
-    // trata como propios, pero por coincidencia (o porque alguien renombra/
-    // mueve un archivo real a propósito) podría existir un archivo REAL con
-    // ese mismo nombre+carpeta — sin este filtro, la próxima regeneración lo
-    // borraría para siempre (borrarPermanente, sin pasar por la papelera)
-    // solo por compartir nombre. Si no es un .md nuestro, se deja intacto;
-    // a costa de que pueda quedar un nombre duplicado, mucho mejor que perder
-    // datos del usuario.
-    if (a.mimeType !== "text/markdown") {
-      console.warn(
-        `[facturas] "${nombre}" en ${carpeta} coincide con un archivo real (no se borra): ${a.id}`,
-      );
-      continue;
-    }
-    await borrarPermanente(a.id, usuarioId);
-  }
-  await crearArchivoTexto(usuarioId, nombre, carpeta, contenido);
-};
-
 // Formato monetario español legible POR DIVISA: separador de miles (.), coma
 // decimal y el símbolo de la moneda en su sitio, p. ej. (1234.5, "EUR") →
 // "1.234,50 €" y (1234.5, "USD") → "1.234,50 US$". Un Intl.NumberFormat por
@@ -631,118 +589,6 @@ const celdaMd = (texto: string | number | null | undefined, max = 80): string =>
   return limpio.length > max ? `${limpio.slice(0, max - 1)}…` : limpio;
 };
 
-// 8 caracteres del UUID del archivo (sin guiones), como sufijo estable e
-// independiente del nombre. Evita que dos archivos distintos con el mismo
-// nombre (en carpetas distintas) generen el mismo resumen-<nombre>.md y se
-// pisen entre sí — antes el nombre del resumen dependía solo de
-// archivo.nombre, así que dos "factura.pdf" en carpetas distintas competían
-// por el mismo "resumen-factura.md".
-const idCortoDeArchivo = (archivoId: string): string => archivoId.replace(/-/g, "").slice(0, 8);
-
-// Nombre del archivo de resumen a partir del nombre original (sin extensión,
-// caracteres no seguros sustituidos) más el sufijo de archivo.id — más fácil
-// de relacionar a simple vista con el archivo original en el explorador que
-// el número de factura/UUID completo, pero sin las colisiones de antes.
-const nombreResumenFactura = (nombreOriginal: string, archivoId: string): string => {
-  const punto = nombreOriginal.lastIndexOf(".");
-  const base = punto > 0 ? nombreOriginal.slice(0, punto) : nombreOriginal;
-  return `resumen-${base.replace(/[^\w.-]/g, "_")}-${idCortoDeArchivo(archivoId)}.md`;
-};
-
-// Localiza dónde vive ACTUALMENTE la carpeta de facturas del usuario: la del
-// resumen-ventas.md activo, si ya existe alguno, o /facturas por defecto si
-// todavía no se ha generado ningún resumen (cuenta nueva / primera factura).
-// La usan tanto el resumen agregado como el fallback de cada resumen
-// INDIVIDUAL nuevo (ver más abajo) — así, si el usuario mueve esa carpeta
-// mientras hay varias facturas escaneándose a la vez, las que aún no tenían
-// resumen propio (primera vez que se crea el suyo) aterrizan junto a las
-// demás en la ubicación nueva, en vez de recrear /facturas en la raíz.
-const buscarResumenVentasArchivo = (usuarioId: string): Promise<Archivo | null> =>
-  AppDataSource.getRepository(Archivo).findOne({
-    where: { nombre: "resumen-ventas.md", propietario: { id: usuarioId } },
-  });
-
-const localizarCarpetaFacturas = async (usuarioId: string): Promise<string> => {
-  const existente = await buscarResumenVentasArchivo(usuarioId);
-  return existente?.carpeta ?? CARPETA_FACTURAS;
-};
-
-// Localiza el archivo "resumen-ventas.md" activo (null si todavía no hay
-// ninguna factura escaneada). Para "pásame/dame el resumen [de todo/de
-// ventas]" en el chat: devuelve el archivo concreto para leer su contenido
-// y ofrecer el botón "Abrir", en vez de recalcular las estadísticas aparte.
-export const localizarResumenVentas = (usuarioId: string): Promise<Archivo | null> =>
-  buscarResumenVentasArchivo(usuarioId);
-
-// Localiza el resumen individual de un archivo (activo o en la papelera) por
-// su sufijo "-<idCorto>.md" — estable mientras exista el archivo, sin
-// importar en qué carpeta esté ni cómo se llame ahora. null si nunca se generó.
-// Exportada para que archivos.service.ts mantenga el resumen sincronizado con
-// el ciclo de vida del archivo original (si se borra/restaura/borra para
-// siempre la factura, su resumen sigue el mismo camino).
-export const localizarResumenDeArchivo = async (
-  usuarioId: string,
-  archivoId: string,
-): Promise<Archivo | null> => {
-  const repo = AppDataSource.getRepository(Archivo);
-  const encontrado = await repo
-    .createQueryBuilder("a")
-    .where("a.propietarioId = :u", { u: usuarioId })
-    .andWhere("a.nombre LIKE :p", { p: `%-${idCortoDeArchivo(archivoId)}.md` })
-    .andWhere("a.mimeType = :m", { m: "text/markdown" })
-    .withDeleted()
-    .getOne();
-  return encontrado ?? null;
-};
-
-// Como reemplazarArchivoTexto, pero para el resumen INDIVIDUAL de un archivo:
-// en vez de buscar por nombre+carpeta exactos (que cambian si se renombra el
-// archivo original), busca por el sufijo "-<idCorto>.md" — estable mientras
-// exista el archivo — así encuentra y sustituye el resumen viejo aunque el
-// archivo se haya renombrado entre medias (antes se quedaba huérfano con el
-// nombre antiguo hasta volver a escanear a mano). Tampoco fija la carpeta de
-// búsqueda a /facturas: si el usuario movió/renombró esa carpeta (o solo este
-// resumen suelto), lo encuentra donde esté y actualiza ahí mismo — solo usa
-// /facturas por defecto si todavía no existía ninguno.
-const reemplazarResumenDeArchivo = async (
-  usuarioId: string,
-  archivoId: string,
-  nuevoNombre: string,
-  contenido: string,
-): Promise<void> => {
-  const repo = AppDataSource.getRepository(Archivo);
-  // Solo activos: uno ya en la papelera no es "la ubicación actual" del
-  // resumen, es un huérfano de un ciclo de vida anterior — no debe
-  // resucitarse ni dictar dónde escribir el nuevo (lo gestiona por separado
-  // `sincronizarResumenFactura`, que sigue el ciclo de vida del archivo).
-  const existentes = await repo
-    .createQueryBuilder("a")
-    .where("a.propietarioId = :u", { u: usuarioId })
-    .andWhere("a.nombre LIKE :p", { p: `%-${idCortoDeArchivo(archivoId)}.md` })
-    .andWhere("a.eliminadoEn IS NULL")
-    .getMany();
-  let carpetaDestino: string | null = null;
-  for (const a of existentes) {
-    // Misma protección que en reemplazarArchivoTexto: nunca borrar algo que
-    // no sea de verdad un .md generado por este mecanismo.
-    if (a.mimeType !== "text/markdown") {
-      console.warn(
-        `[facturas] resumen de "${nuevoNombre}" coincide con un archivo real (no se borra): ${a.id}`,
-      );
-      continue;
-    }
-    carpetaDestino = a.carpeta; // sigue al resumen a su ubicación actual
-    await borrarPermanente(a.id, usuarioId);
-  }
-  // Resumen INDIVIDUAL nuevo (este archivo no tenía uno todavía): en vez de
-  // /facturas fijo, sigue a donde esté ahora el resto de resúmenes — antes,
-  // si el usuario movía /facturas mientras otras facturas seguían
-  // escaneándose, las que aún no tenían resumen propio recreaban /facturas
-  // en la raíz en vez de aterrizar junto a las demás en la ubicación nueva.
-  if (carpetaDestino === null) carpetaDestino = await localizarCarpetaFacturas(usuarioId);
-  await crearArchivoTexto(usuarioId, nuevoNombre, carpetaDestino, contenido);
-};
-
 // Formatea una fecha ISO (YYYY-MM-DD) como DD/MM/YYYY para mostrar al usuario.
 export const formatearFecha = (iso: string): string => {
   const [anio, mes, dia] = iso.split("-");
@@ -750,17 +596,9 @@ export const formatearFecha = (iso: string): string => {
 };
 
 // Serializa tareas por usuario: las que llegan para el mismo usuario se
-// encadenan en vez de correr a la vez. Necesario porque varias facturas
-// escaneándose a la vez (subida múltiple / "escanea todas") acaban
-// regenerando el MISMO archivo "resumen-ventas.md" (borrar+crear): sin
-// serializar, dos ejecuciones a la vez podían dejar dos copias del .md o
-// competir en el borrado. Exportada (como `enSerieFacturas`) para que
-// carpetas.service.ts encole en esta MISMA cola las operaciones que cambian
-// dónde vive /facturas (mover/renombrar/borrar esa carpeta): sin esto, mover
-// la carpeta justo mientras se está escaneando una factura podía entrelazarse
-// con la regeneración en curso (cada una lee/escribe la ubicación por su
-// cuenta) y acabar creando una /facturas duplicada con un resumen que
-// referencia una clave de MinIO inconsistente (no se podía abrir).
+// encadenan en vez de correr a la vez. Exportada (como `enSerieFacturas`) para
+// que carpetas.service.ts encole en esta MISMA cola las operaciones bulk sobre
+// carpetas/archivos del usuario (vaciar/mover/borrar), y no compitan entre sí.
 // (Estado en memoria: válido para una sola instancia de API, como es el caso.)
 const colasPorUsuario = new Map<string, Promise<unknown>>();
 const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
@@ -772,21 +610,6 @@ const enSerie = <T>(usuarioId: string, tarea: () => Promise<T>): Promise<T> => {
   return actual;
 };
 export const enSerieFacturas = enSerie;
-
-// Wrapper serializado de reemplazarResumenDeArchivo: comparte la MISMA cola
-// (`colasPorUsuario`, por usuario) que regenerarResumenVentasSerie. Sin esto,
-// dos disparadores casi simultáneos para EL MISMO archivo (p. ej. renombrarlo
-// dos veces rápido, o renombrarlo justo cuando se está reescaneando) podían
-// competir: ambos leen "el resumen viejo" antes de que el otro lo borre, y el
-// segundo borrarPermanente lanza 404 (ya no existe) y aborta esa regeneración
-// a medias, dejando el resumen con el nombre equivocado o sin crear.
-const reemplazarResumenDeArchivoSerie = (
-  usuarioId: string,
-  archivoId: string,
-  nuevoNombre: string,
-  contenido: string,
-): Promise<void> =>
-  enSerie(usuarioId, () => reemplazarResumenDeArchivo(usuarioId, archivoId, nuevoNombre, contenido));
 
 // NOTA: la antigua cola en memoria (colaOcr/colaExtraccion/procesarColas) se
 // sustituyó por la COLA DURABLE en Postgres (tareas.service.ts), que sobrevive
@@ -875,19 +698,14 @@ export const escanearFactura = async (
       await archivoRepo.update(archivo.id, { estadoEscaneo: "no_factura" });
       // Si un escaneo anterior llegó a guardar una factura (inventada) para este
       // archivo, ahora que sabemos que NO es factura la eliminamos: si no, seguiría
-      // apareciendo en "abre X" y en la analítica pese a este resultado.
-      const { affected } = await AppDataSource.getRepository(Factura)
+      // apareciendo en "abre X" y en la analítica pese a este resultado. Al
+      // borrar la fila desaparece de la analítica sola (los resúmenes se generan
+      // al vuelo desde la BD, no hay ningún .md que actualizar).
+      await AppDataSource.getRepository(Factura)
         .createQueryBuilder()
         .delete()
         .where(`"archivoId" = :a AND "propietarioId" = :u`, { a: archivo.id, u: usuarioId })
         .execute();
-      // Si de verdad había una factura guardada de un escaneo anterior, ya no
-      // cuenta: regeneramos resumen-ventas.md para que deje de incluirla.
-      if (affected) {
-        await regenerarResumenesFacturasSerie(usuarioId).catch((err) =>
-          console.error("[facturas] Error al regenerar resúmenes de facturas (no crítico):", err),
-        );
-      }
       if (opts.soloSiFactura) return { lineas: 0, resumen: "", omitida: true };
 
       // Escaneo MANUAL de algo que no es factura: ya no hay modal obligatorio
@@ -971,21 +789,9 @@ export const escanearFactura = async (
       );
     }
 
-    // Resumen por factura + regenerar el resumen global de ventas.
-    // Si falla la creación de los .md (p. ej. MinIO), logueamos pero no abortamos:
-    // los datos de la factura ya están guardados en BD y eso es lo importante.
-    try {
-      await reemplazarResumenDeArchivoSerie(
-        usuarioId,
-        archivo.id,
-        nombreResumenFactura(archivo.nombre, archivo.id),
-        resumenFacturaMd(datos),
-      );
-      await regenerarResumenesFacturasSerie(usuarioId);
-    } catch (err) {
-      console.error("[facturas] Error al crear archivos de resumen (no crítico):", err);
-    }
-
+    // Nada que escribir aquí: los resúmenes (individual y agregados) se generan
+    // al vuelo desde la BD cuando el chat los pide (ver generarResumen*Md). La
+    // factura ya está guardada, que es lo único que importa persistir.
     return {
       numero: datos.numero,
       total: datos.total,
@@ -1142,26 +948,6 @@ export const obtenerFactura = async (
     })),
   };
   return { encontrada: true, resumen: resumenFacturaMd(datos), numero: factura.numero };
-};
-
-// Si el archivo (ya renombrado/movido) tiene una factura escaneada, regenera
-// su resumen-<nombre>-<id>.md con el nombre actual. Sin esto, renombrar una
-// factura ("factura_03.pdf" -> "factura_v2.pdf") dejaba su resumen individual
-// con el nombre viejo hasta volver a escanearla a mano — `reemplazarResumenDeArchivo`
-// lo localiza por el sufijo de archivo.id (estable) y no por el nombre.
-// Pensada para llamarse "fire-and-forget" desde archivos.service.ts al renombrar.
-export const actualizarResumenFacturaSiExiste = async (
-  usuarioId: string,
-  archivo: Archivo,
-): Promise<void> => {
-  const { encontrada, resumen } = await obtenerFactura(usuarioId, archivo.id, archivo.nombre);
-  if (!encontrada || !resumen) return;
-  await reemplazarResumenDeArchivoSerie(
-    usuarioId,
-    archivo.id,
-    nombreResumenFactura(archivo.nombre, archivo.id),
-    resumen,
-  );
 };
 
 // Filtro común para las consultas analíticas de facturas. Todos los campos son
@@ -1628,23 +1414,9 @@ export const actualizarFactura = async (
     }
   }
 
-  // Regenera el resumen individual y los agregados con los datos ya corregidos.
-  try {
-    if (factura.archivo) {
-      const { resumen } = await obtenerFactura(usuarioId, factura.archivo.id, factura.archivo.nombre);
-      if (resumen) {
-        await reemplazarResumenDeArchivoSerie(
-          usuarioId,
-          factura.archivo.id,
-          nombreResumenFactura(factura.archivo.nombre, factura.archivo.id),
-          resumen,
-        );
-      }
-    }
-    await regenerarResumenesFacturasSerie(usuarioId);
-  } catch (err) {
-    console.error("[facturas] Error al regenerar resúmenes tras editar (no crítico):", err);
-  }
+  // Nada que regenerar: los resúmenes (individual y agregados) se generan al
+  // vuelo desde la BD, así que la corrección ya queda reflejada en cuanto se
+  // guardan los cambios de arriba.
 
   return obtenerFacturaDetalle(usuarioId, facturaId);
 };
@@ -1685,11 +1457,8 @@ export const reclasificarFacturas = async (
   if (empresa && !empresa.nif) {
     await intentarAprenderCifEmpresa(empresa.id).catch(() => {});
   }
-  if (actualizadas > 0) {
-    await regenerarResumenesFacturasSerie(usuarioId).catch((err) =>
-      console.error("[facturas] Error al regenerar resúmenes tras reclasificar (no crítico):", err),
-    );
-  }
+  // Los resúmenes se generan al vuelo desde la BD: la reclasificación ya queda
+  // reflejada sin necesidad de regenerar ningún .md.
   return { actualizadas, total: facturas.length };
 };
 
@@ -1921,24 +1690,15 @@ export const resumenVentas = async (
   };
 };
 
-const regenerarResumenVentas = async (usuarioId: string): Promise<void> => {
+// Genera el markdown del resumen AGREGADO de ventas leyendo la BD al vuelo.
+// Devuelve null si el usuario no tiene ninguna venta (el chat responde con su
+// propio mensaje de "todavía no hay resumen"). Antes esto se materializaba como
+// un archivo "resumen-ventas.md" en /facturas; ahora es datos derivados que se
+// calculan solo cuando el chat los pide.
+export const generarResumenVentasMd = async (usuarioId: string): Promise<string | null> => {
   const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenVentas(usuarioId);
 
-  if (numFacturas === 0) {
-    // Sin facturas no hay nada que resumir: si quedaba un resumen-ventas.md
-    // de antes (p. ej. se borraron/movieron todas), se borra en vez de
-    // reescribirse con ceros — y como era el único motivo para que /facturas
-    // existiera, la carpeta deja de "resucitar" sola. Solo debe reaparecer al
-    // subir o escanear una factura nueva (entonces SÍ hay datos que mostrar).
-    const repo = AppDataSource.getRepository(Archivo);
-    const existente = await repo.findOne({
-      where: { nombre: "resumen-ventas.md", propietario: { id: usuarioId } },
-    });
-    if (existente && existente.mimeType === "text/markdown") {
-      await borrarPermanente(existente.id, usuarioId);
-    }
-    return;
-  }
+  if (numFacturas === 0) return null;
 
   const periodo =
     primeraFecha && ultimaFecha
@@ -1976,23 +1736,17 @@ ${rankingClientes || "_(todavía no hay datos)_"}`;
   const cabeceraGeneral = `- **Facturas escaneadas:** ${unidadesMd(numFacturas)}
 - **Periodo:** ${periodo}${varias ? `\n- **Monedas:** ${porMoneda.map((m) => m.moneda).join(", ")}` : ""}`;
 
-  const md = `# Resumen de ventas
+  return `# Resumen de ventas
 
 ${cabeceraGeneral}
 
 ${secciones}
 `;
-  // Sigue al resumen a su ubicación actual si el usuario movió/renombró la
-  // carpeta donde vivía (ver `localizarCarpetaFacturas`). Sin esto, mover esa
-  // carpeta dejaba el resumen viejo huérfano (nunca se actualizaba) y creaba
-  // uno nuevo en /facturas cada vez.
-  const carpetaDestino = await localizarCarpetaFacturas(usuarioId);
-  await reemplazarArchivoTexto(usuarioId, "resumen-ventas.md", carpetaDestino, md);
 };
 
 // --- Resumen de COMPRAS (facturas donde la empresa es el cliente) ---
 // Espejo de resumenVentas pero con tipo="compra" y ranking por PROVEEDOR (emisor)
-// en vez de por cliente. Alimenta resumen-compras.md.
+// en vez de por cliente.
 type ResumenComprasMoneda = {
   moneda: string;
   numFacturas: number;
@@ -2045,20 +1799,11 @@ const resumenCompras = async (
   };
 };
 
-const regenerarResumenCompras = async (usuarioId: string): Promise<void> => {
+// Espejo de generarResumenVentasMd para las COMPRAS. null si no hay compras.
+export const generarResumenComprasMd = async (usuarioId: string): Promise<string | null> => {
   const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenCompras(usuarioId);
 
-  if (numFacturas === 0) {
-    // Sin compras, se borra el resumen-compras.md que hubiera (mismo criterio que ventas).
-    const repo = AppDataSource.getRepository(Archivo);
-    const existente = await repo.findOne({
-      where: { nombre: "resumen-compras.md", propietario: { id: usuarioId } },
-    });
-    if (existente && existente.mimeType === "text/markdown") {
-      await borrarPermanente(existente.id, usuarioId);
-    }
-    return;
-  }
+  if (numFacturas === 0) return null;
 
   const periodo =
     primeraFecha && ultimaFecha
@@ -2092,31 +1837,10 @@ ${rankingProveedores || "_(todavía no hay datos)_"}`;
   const cabeceraGeneral = `- **Facturas escaneadas:** ${unidadesMd(numFacturas)}
 - **Periodo:** ${periodo}${varias ? `\n- **Monedas:** ${porMoneda.map((m) => m.moneda).join(", ")}` : ""}`;
 
-  const md = `# Resumen de compras
+  return `# Resumen de compras
 
 ${cabeceraGeneral}
 
 ${secciones}
 `;
-  const carpetaDestino = await localizarCarpetaFacturas(usuarioId);
-  await reemplazarArchivoTexto(usuarioId, "resumen-compras.md", carpetaDestino, md);
 };
-
-// Localiza el "resumen-compras.md" activo (null si aún no hay compras). Espejo de
-// localizarResumenVentas, para el chat ("dame el resumen de compras/gastos").
-export const localizarResumenCompras = (usuarioId: string): Promise<Archivo | null> =>
-  AppDataSource.getRepository(Archivo).findOne({
-    where: { nombre: "resumen-compras.md", propietario: { id: usuarioId } },
-  });
-
-// Regenera AMBOS resúmenes agregados (ventas y compras) de una vez. Wrapper
-// público serializado por usuario (ver `enSerie`): dos operaciones a la vez sobre
-// archivos/facturas del mismo usuario no deben competir reescribiendo los mismos
-// .md. Lo usan este servicio y `archivos.service.ts`/`carpetas.service.ts` cada
-// vez que cambia qué facturas están activas (se crean, borran o restauran).
-const regenerarResumenesFacturas = async (usuarioId: string): Promise<void> => {
-  await regenerarResumenVentas(usuarioId);
-  await regenerarResumenCompras(usuarioId);
-};
-export const regenerarResumenesFacturasSerie = (usuarioId: string): Promise<void> =>
-  enSerie(usuarioId, () => regenerarResumenesFacturas(usuarioId));

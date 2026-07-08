@@ -9,65 +9,6 @@ import { AppError } from "../utils/errors";
 import { env } from "../config/env";
 import { z } from "zod";
 import { crearCarpeta, normalizarRuta } from "./carpetas.service";
-import {
-  regenerarResumenesFacturasSerie,
-  esArchivoFactura,
-  actualizarResumenFacturaSiExiste,
-  localizarResumenDeArchivo,
-} from "./facturas.service";
-
-// Best-effort: nunca debe romper la operación de archivos en sí si falla
-// (p. ej. MinIO caído al regenerar el .md). Se usa tras cualquier cambio en
-// qué archivos están activos/en papelera, para que "resumen-ventas.md" y
-// "resumen-compras.md" (carpeta /facturas) reflejen siempre solo las facturas
-// con archivo activo.
-const refrescarResumenVentas = (usuarioId: string): void => {
-  void regenerarResumenesFacturasSerie(usuarioId).catch((err) =>
-    console.error("[archivos] Error al regenerar resúmenes de facturas (no crítico):", err),
-  );
-};
-
-// Solo merece la pena regenerar el resumen si el archivo afectado puede tener
-// una factura asociada (PDF/imagen). Además, es IMPRESCINDIBLE para evitar un
-// bucle infinito: `regenerarResumenVentas` reescribe "resumen-ventas.md"
-// borrando+creando (vía `borrarPermanente` + `crearArchivoTexto`), y ese borrado
-// dispararía esta misma función otra vez si no se filtrara — los .md de resumen
-// (extensión .md, mimeType "text/markdown") nunca cumplen `esArchivoFactura`.
-const refrescarResumenVentasSiFactura = (usuarioId: string, archivo: Archivo): void => {
-  if (esArchivoFactura(archivo)) refrescarResumenVentas(usuarioId);
-};
-
-// Mantiene el resumen INDIVIDUAL de una factura (si lo tiene) sincronizado
-// con el ciclo de vida de su archivo original: se manda a la papelera, se
-// restaura o se borra para siempre junto con él — antes quedaba huérfano
-// para siempre, sin reflejar que la factura ya no existe (o volvió a
-// existir). Best-effort: un fallo aquí no debe romper la operación principal
-// sobre el archivo, que ya se aplicó.
-const sincronizarResumenFactura = async (
-  usuarioId: string,
-  archivo: Archivo,
-  accion: "borrar" | "restaurar" | "borrarPermanente",
-): Promise<void> => {
-  if (!esArchivoFactura(archivo)) return;
-  try {
-    const resumen = await localizarResumenDeArchivo(usuarioId, archivo.id);
-    if (!resumen) return;
-    if (accion === "borrar" && !resumen.eliminadoEn) {
-      await repo().softRemove(resumen);
-    } else if (accion === "restaurar" && resumen.eliminadoEn) {
-      await repo().restore(resumen.id);
-    } else if (accion === "borrarPermanente") {
-      await minioClient.removeObject(env.MINIO_BUCKET, resumen.claveMinio).catch(() => {});
-      await repo().delete(resumen.id);
-    }
-  } catch (err) {
-    console.error(
-      `[archivos] Error al sincronizar el resumen de la factura "${archivo.nombre}" (no crítico):`,
-      err,
-    );
-  }
-};
-
 const repo = () => AppDataSource.getRepository(Archivo);
 
 // --- SUBIR ARCHIVO ---
@@ -400,20 +341,13 @@ export const eliminarArchivo = async (
     throw new AppError(403, "No tienes permiso para eliminar este archivo");
   }
   // Idempotente: si ya está en la papelera, no es un error, ya se cumplió lo
-  // que se pedía. Importante para el borrado múltiple del explorador — si se
-  // selecciona a la vez una factura Y su resumen individual, borrar la
-  // factura ya borra el resumen como efecto colateral (sincronizarResumenFactura
-  // más abajo); sin este idempotente, la petición de borrado del resumen que
-  // llega después (porque también estaba seleccionado) fallaba con "Archivo
-  // no encontrado" y tumbaba todo el forkJoin del explorador a medias (los
-  // archivos quedaban borrados pero las carpetas seleccionadas nunca llegaban
-  // a borrarse, porque ese paso solo corre si el forkJoin entero tiene éxito).
+  // que se pedía. Importante para el borrado múltiple del explorador: si una
+  // misma petición del forkJoin intenta borrar dos veces, la segunda no debe
+  // fallar con "Archivo no encontrado" y tumbar el resto de la operación.
   if (archivo.eliminadoEn) return;
 
   // softRemove rellena eliminadoEn en vez de borrar la fila
   await repo().softRemove(archivo);
-  refrescarResumenVentasSiFactura(usuarioId, archivo);
-  await sincronizarResumenFactura(usuarioId, archivo, "borrar");
 };
 
 // --- RESTAURAR ARCHIVO (sacar de la papelera) ---
@@ -432,9 +366,8 @@ export const restaurarArchivo = async (
   if (archivo.propietario.id !== usuarioId) {
     throw new AppError(403, "No tienes permiso para restaurar este archivo");
   }
-  // Idempotente por la misma razón que en eliminarArchivo: si ya está activo
-  // (p. ej. lo restauró de rebote sincronizarResumenFactura porque también se
-  // restauró su factura asociada en la misma operación), no es un error.
+  // Idempotente por la misma razón que en eliminarArchivo: si ya está activo,
+  // no es un error.
   if (!archivo.eliminadoEn) return;
 
   // Si mientras estaba en la papelera se creó/subió otro archivo activo con el
@@ -461,8 +394,6 @@ export const restaurarArchivo = async (
 
   // restore pone eliminadoEn a null → vuelve a aparecer en las queries normales
   await repo().restore(id);
-  refrescarResumenVentasSiFactura(usuarioId, archivo);
-  await sincronizarResumenFactura(usuarioId, archivo, "restaurar");
 };
 
 // --- LISTAR PAPELERA ---
@@ -492,10 +423,8 @@ export const borrarPermanente = async (
     withDeleted: true,
   });
 
-  // Idempotente por la misma razón que en eliminarArchivo: si ya no existe
-  // (p. ej. lo borró de rebote sincronizarResumenFactura al borrar
-  // permanentemente su factura asociada en la misma operación), el resultado
-  // que se pedía — que ya no exista — se cumple igual, no es un error.
+  // Idempotente por la misma razón que en eliminarArchivo: si ya no existe, el
+  // resultado que se pedía — que ya no exista — se cumple igual, no es un error.
   if (!archivo) return;
   if (archivo.propietario.id !== usuarioId) {
     throw new AppError(403, "No tienes permiso para borrar este archivo");
@@ -504,8 +433,6 @@ export const borrarPermanente = async (
   // Primero MinIO (idempotente: no falla si la clave ya no existe), luego Postgres.
   await minioClient.removeObject(env.MINIO_BUCKET, archivo.claveMinio);
   await repo().delete(id); // hard delete: funciona aunque esté soft-deleted
-  refrescarResumenVentasSiFactura(usuarioId, archivo);
-  await sincronizarResumenFactura(usuarioId, archivo, "borrarPermanente");
 };
 
 // --- VACIAR PAPELERA ---
@@ -523,11 +450,6 @@ export const vaciarPapelera = async (
   // removeObjects borra en lote (idempotente con claves inexistentes)
   await minioClient.removeObjects(env.MINIO_BUCKET, claves);
   await repo().delete(ids); // hard delete de todas las filas soft-deleted
-
-  // Bulk: no pasa por borrarPermanente, así que no hay riesgo de bucle con la
-  // regeneración del propio resumen-ventas.md (que sí podría estar entre los
-  // borrados). Solo se regenera si había alguna candidata a factura.
-  if (archivos.some((a) => esArchivoFactura(a))) refrescarResumenVentas(usuarioId);
 
   return { borrados: archivos.length };
 };
@@ -558,9 +480,6 @@ export const eliminarTodosLosArchivos = async (
     .andWhere("carpetaCompartidaId IS NULL") // no mandar a papelera los compartidos
     .andWhere("eliminadoEn IS NULL")
     .execute();
-  // Bulk directo por SQL (no pasa por eliminarArchivo): manda a la papelera
-  // archivos de cualquier tipo, así que puede incluir facturas activas.
-  if (res.affected) refrescarResumenVentas(usuarioId);
   return { borrados: res.affected ?? 0 };
 };
 
@@ -621,17 +540,6 @@ export const actualizarArchivo = async (
   // archivo de una carpeta nueva y luego borrarlo, la carpeta desaparecería
   // de los listados (nunca existió como fila propia en "carpetas").
   if (archivo.carpeta !== "/") await crearCarpeta(usuarioId, archivo.carpeta);
-
-  // Si se renombró y ya tenía una factura escaneada, su resumen-<nombre>.md
-  // individual queda con el nombre viejo hasta que se vuelva a escanear a
-  // mano — esto lo mantiene sincronizado con el nombre actual. Fire-and-forget
-  // (no bloquea la respuesta) y best-effort (un fallo aquí no debe romper el
-  // renombrado, que ya se guardó en BD).
-  if (datos.nombre) {
-    void actualizarResumenFacturaSiExiste(usuarioId, guardado).catch((err) =>
-      console.error("[archivos] Error al actualizar el resumen de la factura (no crítico):", err),
-    );
-  }
 
   // Igual que en obtenerArchivo: no devolvemos el propietario (lleva passwordHash).
   delete (guardado as Partial<Archivo>).propietario;

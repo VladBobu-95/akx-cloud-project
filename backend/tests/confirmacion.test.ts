@@ -1,7 +1,7 @@
 import request from "supertest";
 import { app } from "../src/app";
 import { describe, it, expect, beforeAll } from "@jest/globals";
-import { tokenUsuario } from "./helpers";
+import { crearUsuario } from "./helpers";
 
 // Confirmación de operaciones masivas irreversibles en el chat (#9). Solo
 // vaciar la papelera (borrado DEFINITIVO) la requiere; el resto sigue instantáneo.
@@ -33,7 +33,9 @@ describe("Confirmación vaciar papelera (#9)", () => {
   };
 
   beforeAll(async () => {
-    token = await tokenUsuario(`conf_${Date.now()}@test.com`);
+    // Admin: tiene todas las capacidades, incluida la maestra "chat" que el
+    // chatbot exige de entrada (un miembro sin rol recibiría 403).
+    token = (await crearUsuario(`conf_${Date.now()}@test.com`, { rol: "admin" })).token;
   });
 
   it("'vaciar papelera' pide confirmación y NO borra todavía", async () => {

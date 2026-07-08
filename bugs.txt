@@ -1,3 +1,4 @@
+- borrar el cambio hecho en facturas_service
 - mover de compartido a otra carpeta compartida
 - pasa imagenes/ pasa las imagenes que tengo 
 - Paginacion registro

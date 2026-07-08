@@ -39,8 +39,8 @@ import {
   proveedoresTop,
   listarFacturas,
   listarFacturasPapelera,
-  localizarResumenVentas,
-  localizarResumenCompras,
+  generarResumenVentasMd,
+  generarResumenComprasMd,
   asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
@@ -258,17 +258,7 @@ const resolverArchivo = async (
   const exacto = lista.find((a) => a.nombre.toLowerCase() === nombre.toLowerCase());
   if (exacto) return { archivo: exacto };
   if (lista.length === 1) return { archivo: lista[0] };
-  // El .md de resumen que se genera automáticamente al escanear una factura
-  // (resumen-<nombre original>.md, en /facturas — ver `nombreResumenFactura`
-  // en facturas.service.ts) coincide con casi cualquier búsqueda por el nombre
-  // de esa factura, generando una ambigüedad constante con el archivo real.
-  // Se descarta de los candidatos salvo que sea la única coincidencia (pedirlo
-  // por su nombre completo ya se resuelve arriba, y listar la carpeta entera
-  // no pasa por aquí, así que sigue mostrándolo).
-  const sinResumenes = lista.filter((a) => !/^resumen-/i.test(a.nombre));
-  if (sinResumenes.length === 1) return { archivo: sinResumenes[0] };
-  const final = sinResumenes.length > 0 ? sinResumenes : lista;
-  return { opciones: final.map((a) => ({ id: a.id, nombre: a.nombre, carpeta: a.carpeta })) };
+  return { opciones: lista.map((a) => ({ id: a.id, nombre: a.nombre, carpeta: a.carpeta })) };
 };
 
 // Localiza una carpeta EXISTENTE por nombre o ruta completa. Si el argumento ya
@@ -2823,17 +2813,12 @@ export const chatear = async (
         };
       }
     }
-    // Varias facturas: el resumen agregado (resumen-ventas.md) si existe.
-    const resumenVentas = await localizarResumenVentas(usuarioId);
+    // Varias facturas: el resumen agregado de ventas, generado al vuelo desde la BD.
+    const resumenVentas = await generarResumenVentasMd(usuarioId);
     if (resumenVentas) {
-      const contenido = await leerTextoArchivo(resumenVentas.id, usuarioId);
-      return {
-        respuesta: contenido,
-        acciones,
-        archivos: [{ id: resumenVentas.id, nombre: resumenVentas.nombre }],
-      };
+      return { respuesta: resumenVentas, acciones };
     }
-    // Sin resumen agregado aún: listar las facturas para que elija cuál ver.
+    // Sin ventas aún: listar las facturas para que elija cuál ver.
     return {
       respuesta: listadoFacturasMd(filas, "Tus facturas"),
       acciones,
@@ -2974,58 +2959,40 @@ export const chatear = async (
   }
 
   // Pre-flight: "pásame/dame/muéstrame el resumen [de todo/de ventas/general]"
-  // es el archivo "resumen-ventas.md" (el agregado que vive en /facturas, ver
-  // facturas.service.ts), no las estadísticas recalculadas aparte — el
-  // usuario quiere el mismo artefacto que ve en el explorador. Sin esto, "el
-  // resumen de todo" no encaja con ninguna tool conocida por el modelo, y
-  // tampoco lo encuentra resolverArchivo (busca por nombre, "todo" no es
-  // parte del nombre real "resumen-ventas.md"). Se excluye si se nombra una
-  // factura concreta (ej. "resumen de factura_03"), que es un caso distinto
-  // ya cubierto por obtener_factura.
+  // devuelve el resumen AGREGADO de ventas, generado al vuelo desde la BD (ver
+  // generarResumenVentasMd). Sin esto, "el resumen de todo" no encaja con
+  // ninguna tool conocida por el modelo. Se excluye si se nombra una factura
+  // concreta (ej. "resumen de factura_03"), caso ya cubierto por obtener_factura.
   const esResumenGeneral =
     puedeFacturas &&
     /\bresumen(es)?\b/.test(msgSinTildes) &&
     /\b(de\s+todo|de\s+ventas|general)\b/.test(msgSinTildes) &&
     !/\bfacturas?[\d_-]/.test(msgSinTildes);
   if (esResumenGeneral) {
-    const archivo = await localizarResumenVentas(usuarioId);
-    if (!archivo) {
-      return {
-        respuesta:
-          "Todavía no hay ningún resumen de ventas — se genera automáticamente en /facturas al escanear la primera factura.",
-        acciones,
-      };
-    }
-    const contenido = await leerTextoArchivo(archivo.id, usuarioId);
+    const md = await generarResumenVentasMd(usuarioId);
     return {
-      respuesta: contenido,
+      respuesta:
+        md ??
+        "Todavía no tienes ninguna venta — el resumen se genera en cuanto escanees tu primera factura de venta.",
       acciones,
-      archivos: [{ id: archivo.id, nombre: archivo.nombre }],
     };
   }
 
-  // Pre-flight: "resumen de compras / de gastos" → resumen-compras.md (el agregado
-  // que vive en /facturas, espejo del de ventas). Se excluye si se nombra una
-  // factura concreta.
+  // Pre-flight: "resumen de compras / de gastos" → resumen agregado de compras
+  // (espejo del de ventas), generado al vuelo desde la BD. Se excluye si se
+  // nombra una factura concreta.
   const esResumenCompras =
     puedeFacturas &&
     /\bresumen(es)?\b/.test(msgSinTildes) &&
     /\b(de\s+compras|de\s+gastos|gastos)\b/.test(msgSinTildes) &&
     !/\bfacturas?[\d_-]/.test(msgSinTildes);
   if (esResumenCompras) {
-    const archivo = await localizarResumenCompras(usuarioId);
-    if (!archivo) {
-      return {
-        respuesta:
-          "Todavía no hay ningún resumen de compras — se genera automáticamente en /facturas al escanear la primera factura de compra.",
-        acciones,
-      };
-    }
-    const contenido = await leerTextoArchivo(archivo.id, usuarioId);
+    const md = await generarResumenComprasMd(usuarioId);
     return {
-      respuesta: contenido,
+      respuesta:
+        md ??
+        "Todavía no tienes ninguna compra — el resumen se genera en cuanto escanees tu primera factura de compra.",
       acciones,
-      archivos: [{ id: archivo.id, nombre: archivo.nombre }],
     };
   }
 
