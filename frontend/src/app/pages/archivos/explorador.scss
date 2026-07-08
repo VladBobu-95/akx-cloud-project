@@ -152,6 +152,10 @@
       }
       .buscar-row .input {
         flex: 1;
+        /* Edge: el cursor del ratón salía blanco/corrupto al pasar por encima
+           (bug del cursor "hardware" con contenido dinámico cerca). Declarar
+           `cursor` explícitamente fuerza a dibujarlo por software y lo evita. */
+        cursor: text;
       }
       .resultados {
         display: flex;
