@@ -80,7 +80,7 @@
       @if (haySeleccion()) {
         <div class="bulk-bar">
           <span class="bulk-count">{{ numSeleccionados() }} seleccionado(s)</span>
-          <button class="btn btn-outline btn-sm" (click)="ejecutarCopiarSeleccion()">📋 Copiar</button>
+          <button class="btn btn-outline btn-sm" (click)="abrirBulkCopiar()">📋 Copiar en…</button>
           <button class="btn btn-outline btn-sm" (click)="abrirBulkMover()">📂 Mover a…</button>
           <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
           <span class="spacer"></span>
@@ -443,6 +443,34 @@
           }
           <div class="row" style="justify-content: flex-end; margin-top: 8px;">
             <button class="btn btn-ghost" (click)="bulkMoverModal.set(false)">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Modal copiar selección en… (copia a un destino elegido; los originales permanecen) -->
+    @if (bulkCopiarModal()) {
+      <div class="modal-backdrop">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>Copiar selección en…</h2>
+          <p class="muted" style="margin-bottom: 10px;">{{ numSeleccionados() }} elemento(s) → elige dónde copiar (los originales se quedan):</p>
+          <div class="destinos">
+            @for (d of destinosBulkCopiar(); track d.ruta) {
+              <button class="destino-item" (click)="confirmarBulkCopiar(d.ruta)">📁 {{ d.etiqueta }}</button>
+            } @empty {
+              <p class="muted">No hay carpetas disponibles.</p>
+            }
+          </div>
+          @if (destinosExternos().length) {
+            <p class="muted" style="margin: 12px 0 8px;">Copiar a otro espacio:</p>
+            <div class="destinos">
+              @for (d of destinosExternos(); track d.destinoId + d.ruta) {
+                <button class="destino-item" (click)="confirmarBulkCopiarExterno(d.destinoId, d.ruta)">📥 {{ d.etiqueta }}</button>
+              }
+            </div>
+          }
+          <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+            <button class="btn btn-ghost" (click)="bulkCopiarModal.set(false)">Cancelar</button>
           </div>
         </div>
       </div>

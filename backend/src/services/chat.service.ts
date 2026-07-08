@@ -41,6 +41,7 @@ import {
   listarFacturasPapelera,
   generarResumenVentasMd,
   generarResumenComprasMd,
+  generarResumenCombinadoMd,
   asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
@@ -2764,9 +2765,9 @@ export const chatear = async (
   // de facturas de abajo— porque ese, al ver "factura" en "resumen de factura_29",
   // lo confundía con un LISTADO por cliente ("Facturas de factura_29 (0)") o pedía
   // aclaración. Aquí solo se calcula el match para poder excluirlo; la resolución
-  // real se hace más abajo (después de esResumenGeneral, que cubre "de todo/ventas").
-  // Se excluye el caso general (de todo/ventas/general) para que lo trate
-  // esResumenGeneral, y las stopwords ("eso", "esto"...) que no son un nombre.
+  // real se hace más abajo (tras los resúmenes agregados, que cubren "de todo/
+  // ventas/compras/<periodo>"). Se excluye el caso general (de todo/ventas/general)
+  // para que lo traten esos, y las stopwords ("eso", "esto"...) que no son un nombre.
   const matchResumenArchivo = msgSinTildes.match(
     new RegExp(
       `^(?:(?:${VERBO_LISTAR}|${VERBO_ABRIR}|lee(?:me)?|que\\s+dice)\\s+)?(?:el\\s+|la\\s+)?resumen(?:es)?\\s+(?:de\\s+(?:la\\s+|el\\s+|las\\s+|los\\s+)?|del\\s+)?["']?([\\wÀ-ÿ.\\- ]+?)["']?\\s*\\??\\s*$`,
@@ -2958,42 +2959,61 @@ export const chatear = async (
     };
   }
 
-  // Pre-flight: "pásame/dame/muéstrame el resumen [de todo/de ventas/general]"
-  // devuelve el resumen AGREGADO de ventas, generado al vuelo desde la BD (ver
-  // generarResumenVentasMd). Sin esto, "el resumen de todo" no encaja con
-  // ninguna tool conocida por el modelo. Se excluye si se nombra una factura
-  // concreta (ej. "resumen de factura_03"), caso ya cubierto por obtener_factura.
-  const esResumenGeneral =
-    puedeFacturas &&
-    /\bresumen(es)?\b/.test(msgSinTildes) &&
-    /\b(de\s+todo|de\s+ventas|general)\b/.test(msgSinTildes) &&
-    !/\bfacturas?[\d_-]/.test(msgSinTildes);
-  if (esResumenGeneral) {
-    const md = await generarResumenVentasMd(usuarioId);
+  // Pre-flights de "resumen [de X]" agregado. Se distingue por lo que se nombre:
+  //  - "de compras/gastos"  → SOLO compras
+  //  - "de ventas"          → SOLO ventas
+  //  - "de todo/general" o con periodo ("resumen de junio 2026") → COMBINADO
+  //    (ventas + compras + facturas sin clasificar al final), que es lo que se
+  //    espera de "el resumen del mes": antes solo salían las ventas.
+  // Todos aceptan periodo (mes/año/relativo/rango) y se excluyen si se nombra una
+  // factura CONCRETA (ej. "resumen de factura_03"), ya cubierta por obtener_factura.
+  const tieneResumen = puedeFacturas && /\bresumen(es)?\b/.test(msgSinTildes);
+  const nombraFacturaConcreta = /\bfacturas?[\d_-]/.test(msgSinTildes);
+  const perResumen = periodoDelMensaje();
+  const filtroResumen: FiltroFacturas = perResumen.desde
+    ? { desde: perResumen.desde, hasta: perResumen.hasta }
+    : {};
+
+  const esResumenCompras =
+    tieneResumen && /\b(de\s+compras|de\s+gastos|gastos)\b/.test(msgSinTildes) && !nombraFacturaConcreta;
+  if (esResumenCompras) {
+    const md = await generarResumenComprasMd(usuarioId, filtroResumen, perResumen.etiqueta);
     return {
       respuesta:
         md ??
-        "Todavía no tienes ninguna venta — el resumen se genera en cuanto escanees tu primera factura de venta.",
+        `Todavía no tienes ninguna compra${perResumen.etiqueta ? ` en ${perResumen.etiqueta}` : ""} — el resumen se genera en cuanto escanees tu primera factura de compra.`,
       acciones,
     };
   }
 
-  // Pre-flight: "resumen de compras / de gastos" → resumen agregado de compras
-  // (espejo del de ventas), generado al vuelo desde la BD. Se excluye si se
-  // nombra una factura concreta.
-  const esResumenCompras =
-    puedeFacturas &&
-    /\bresumen(es)?\b/.test(msgSinTildes) &&
-    /\b(de\s+compras|de\s+gastos|gastos)\b/.test(msgSinTildes) &&
-    !/\bfacturas?[\d_-]/.test(msgSinTildes);
-  if (esResumenCompras) {
-    const md = await generarResumenComprasMd(usuarioId);
+  const esResumenVentasSolo =
+    tieneResumen && /\bde\s+ventas\b/.test(msgSinTildes) && !nombraFacturaConcreta;
+  if (esResumenVentasSolo) {
+    const md = await generarResumenVentasMd(usuarioId, filtroResumen, perResumen.etiqueta);
     return {
       respuesta:
         md ??
-        "Todavía no tienes ninguna compra — el resumen se genera en cuanto escanees tu primera factura de compra.",
+        `Todavía no tienes ninguna venta${perResumen.etiqueta ? ` en ${perResumen.etiqueta}` : ""} — el resumen se genera en cuanto escanees tu primera factura de venta.`,
       acciones,
     };
+  }
+
+  // Combinado: "resumen de todo/general" o "resumen de <periodo>" (sin decir
+  // ventas/compras) → ventas + compras + sin clasificar. Va DESPUÉS de los dos
+  // anteriores para no pisarles el "de ventas"/"de compras", y ANTES del
+  // pre-flight de "resumen de <archivo concreto>" de más abajo (que trataría
+  // "junio 2026" como si fuera el nombre de un archivo y no resolvería nada).
+  const esResumenCombinado =
+    tieneResumen &&
+    !nombraFacturaConcreta &&
+    (/\b(de\s+todo|general)\b/.test(msgSinTildes) || !!perResumen.desde);
+  if (esResumenCombinado) {
+    const { md, desconocidas } = await generarResumenCombinadoMd(
+      usuarioId,
+      filtroResumen,
+      perResumen.etiqueta,
+    );
+    return { respuesta: md, acciones, archivos: desconocidas.length ? desconocidas : undefined };
   }
 
   // Resuelve un nombre a un archivo y devuelve su contenido legible: el "resumen"
@@ -3041,8 +3061,8 @@ export const chatear = async (
   };
 
   // Pre-flight: "(pásame/dame/muéstrame) el resumen de X" / "resumen X" — el
-  // resumen de un archivo o factura CONCRETOS (no el general "de todo/de ventas",
-  // ya cubierto arriba en esResumenGeneral, que retorna antes de llegar aquí). Es
+  // resumen de un archivo o factura CONCRETOS (no el general "de todo/de ventas"
+  // ni el de periodo, ya cubiertos arriba, que retornan antes de llegar aquí). Es
   // el mismo artefacto que "abre/lee X": el resumen estructurado si es factura, el
   // texto extraído si no. El match (esResumenArchivoConcreto) se calcula más arriba
   // para poder excluirlo del pre-flight de facturas; aquí se resuelve de verdad. Si

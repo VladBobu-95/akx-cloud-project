@@ -1649,13 +1649,17 @@ export type ResumenMoneda = {
 
 export const resumenVentas = async (
   usuarioId: string,
+  filtro: FiltroFacturas = {},
 ): Promise<{
   numFacturas: number; // total de facturas (todas las monedas), para la cabecera general
   primeraFecha: string | null;
   ultimaFecha: string | null;
   porMoneda: ResumenMoneda[];
 }> => {
-  const { where, params } = construirFiltro(usuarioId, { tipo: "venta" });
+  // `filtro` solo aporta acotaciones (periodo, moneda...); el `tipo` lo fija esta
+  // función a "venta". Se thread-ea a las sub-consultas para que un resumen por
+  // periodo ("resumen de junio 2026") cuente/rankee solo las facturas de ese rango.
+  const { where, params } = construirFiltro(usuarioId, { ...filtro, tipo: "venta" });
   // Cabecera general: conteo y periodo son independientes de la divisa (no se
   // suman importes aquí, solo se cuentan facturas y se mira el rango de fechas).
   const [row] = await AppDataSource.query(
@@ -1668,9 +1672,9 @@ export const resumenVentas = async (
     params,
   );
   const [totales, top, clientes] = await Promise.all([
-    totalesFacturado(usuarioId, {}),
-    ventasTop(usuarioId, {}, { limite: 5 }),
-    clientesTop(usuarioId, {}, { limite: 3 }),
+    totalesFacturado(usuarioId, filtro),
+    ventasTop(usuarioId, filtro, { limite: 5 }),
+    clientesTop(usuarioId, filtro, { limite: 3 }),
   ]);
   const porMoneda: ResumenMoneda[] = totales.map((t) => ({
     moneda: t.moneda,
@@ -1695,8 +1699,12 @@ export const resumenVentas = async (
 // propio mensaje de "todavía no hay resumen"). Antes esto se materializaba como
 // un archivo "resumen-ventas.md" en /facturas; ahora es datos derivados que se
 // calculan solo cuando el chat los pide.
-export const generarResumenVentasMd = async (usuarioId: string): Promise<string | null> => {
-  const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenVentas(usuarioId);
+export const generarResumenVentasMd = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+  etiqueta?: string,
+): Promise<string | null> => {
+  const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenVentas(usuarioId, filtro);
 
   if (numFacturas === 0) return null;
 
@@ -1736,7 +1744,7 @@ ${rankingClientes || "_(todavía no hay datos)_"}`;
   const cabeceraGeneral = `- **Facturas escaneadas:** ${unidadesMd(numFacturas)}
 - **Periodo:** ${periodo}${varias ? `\n- **Monedas:** ${porMoneda.map((m) => m.moneda).join(", ")}` : ""}`;
 
-  return `# Resumen de ventas
+  return `# Resumen de ventas${etiqueta ? ` de ${etiqueta}` : ""}
 
 ${cabeceraGeneral}
 
@@ -1760,13 +1768,14 @@ type ResumenComprasMoneda = {
 
 const resumenCompras = async (
   usuarioId: string,
+  filtro: FiltroFacturas = {},
 ): Promise<{
   numFacturas: number;
   primeraFecha: string | null;
   ultimaFecha: string | null;
   porMoneda: ResumenComprasMoneda[];
 }> => {
-  const { where, params } = construirFiltro(usuarioId, { tipo: "compra" });
+  const { where, params } = construirFiltro(usuarioId, { ...filtro, tipo: "compra" });
   const [row] = await AppDataSource.query(
     `SELECT COUNT(DISTINCT f."id")::int AS numfacturas,
             MIN(f."fecha")::text AS primera,
@@ -1777,9 +1786,9 @@ const resumenCompras = async (
     params,
   );
   const [totales, top, proveedores] = await Promise.all([
-    totalesFacturado(usuarioId, { tipo: "compra" }),
-    ventasTop(usuarioId, { tipo: "compra" }, { limite: 5 }),
-    proveedoresTop(usuarioId, {}, { limite: 3 }),
+    totalesFacturado(usuarioId, { ...filtro, tipo: "compra" }),
+    ventasTop(usuarioId, { ...filtro, tipo: "compra" }, { limite: 5 }),
+    proveedoresTop(usuarioId, filtro, { limite: 3 }),
   ]);
   const porMoneda: ResumenComprasMoneda[] = totales.map((t) => ({
     moneda: t.moneda,
@@ -1800,8 +1809,12 @@ const resumenCompras = async (
 };
 
 // Espejo de generarResumenVentasMd para las COMPRAS. null si no hay compras.
-export const generarResumenComprasMd = async (usuarioId: string): Promise<string | null> => {
-  const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenCompras(usuarioId);
+export const generarResumenComprasMd = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+  etiqueta?: string,
+): Promise<string | null> => {
+  const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenCompras(usuarioId, filtro);
 
   if (numFacturas === 0) return null;
 
@@ -1837,10 +1850,54 @@ ${rankingProveedores || "_(todavía no hay datos)_"}`;
   const cabeceraGeneral = `- **Facturas escaneadas:** ${unidadesMd(numFacturas)}
 - **Periodo:** ${periodo}${varias ? `\n- **Monedas:** ${porMoneda.map((m) => m.moneda).join(", ")}` : ""}`;
 
-  return `# Resumen de compras
+  return `# Resumen de compras${etiqueta ? ` de ${etiqueta}` : ""}
 
 ${cabeceraGeneral}
 
 ${secciones}
 `;
+};
+
+// Resumen COMBINADO por periodo (o global): ventas + compras + un listado de las
+// facturas "sin clasificar" (tipo="desconocido") al final. Es lo que devuelve el
+// chat para "resumen de junio 2026" / "resumen de todo": un modelo pequeño no
+// agregaba compras ni mostraba las desconocidas, así que se hace aquí, determinista.
+// `md` es todo el markdown (una sola burbuja: el front oculta el texto si además
+// mandas una tabla, por eso las desconocidas van embebidas). `desconocidas` son
+// {id,nombre} para que el chat ofrezca un botón "Abrir" por cada una y el usuario
+// pueda ir a clasificarla en la página Facturas.
+export const generarResumenCombinadoMd = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+  etiqueta?: string,
+): Promise<{ md: string; desconocidas: { id: string; nombre: string }[] }> => {
+  const [ventas, compras, desc] = await Promise.all([
+    generarResumenVentasMd(usuarioId, filtro, etiqueta),
+    generarResumenComprasMd(usuarioId, filtro, etiqueta),
+    listarFacturas(usuarioId, { ...filtro, tipo: "desconocido" }, { pagina: 1, limite: 100 }),
+  ]);
+  const en = etiqueta ? ` en ${etiqueta}` : "";
+  const de = etiqueta ? ` de ${etiqueta}` : "";
+
+  const bloques: string[] = [
+    ventas ?? `# Resumen de ventas${de}\n\n_No hay ventas${en}._`,
+    compras ?? `# Resumen de compras${de}\n\n_No hay compras${en}._`,
+  ];
+
+  if (desc.total > 0) {
+    const lista = desc.filas
+      .map((f) => `- **${f.archivoNombre ?? f.numero}** (${formatearFecha(f.fecha)}): ${dinero(f.total, f.moneda)}`)
+      .join("\n");
+    bloques.push(
+      `## Facturas sin clasificar${de} (${desc.total})\n\n${lista}\n\n_Ábrelas para asignarles venta o compra en la página **Facturas**._`,
+    );
+  } else {
+    bloques.push(`## Facturas sin clasificar${de}\n\n_No hay facturas sin clasificar${en}._`);
+  }
+
+  const desconocidas = desc.filas
+    .filter((f) => f.archivoId && f.archivoNombre)
+    .map((f) => ({ id: f.archivoId as string, nombre: f.archivoNombre as string }));
+
+  return { md: bloques.join("\n\n---\n\n"), desconocidas };
 };

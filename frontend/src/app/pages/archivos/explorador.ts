@@ -1250,6 +1250,7 @@ export class ExploradorComponent implements OnInit {
     return claves.length > 0 && claves.every((k) => sel.has(k));
   });
   protected bulkMoverModal = signal(false);
+  protected bulkCopiarModal = signal(false);
 
   protected claveCarpeta(ruta: string) { return `d:${ruta}`; }
   protected claveArchivo(id: string) { return `f:${id}`; }
@@ -1327,16 +1328,26 @@ export class ExploradorComponent implements OnInit {
     });
   }
 
-  protected ejecutarCopiarSeleccion() {
+  protected abrirBulkCopiar() { this.bulkCopiarModal.set(true); }
+
+  // Destinos para copiar la selección: igual que mover (se excluyen las carpetas
+  // seleccionadas y su subárbol, pues no se pueden copiar dentro de sí mismas). A
+  // diferencia de mover, copiar en la carpeta actual sí es válido (duplica con "(copia)").
+  protected destinosBulkCopiar(): { ruta: string; etiqueta: string }[] {
+    return this.destinosBulkMover();
+  }
+
+  // Copia la selección al destino elegido; los originales permanecen. Sin `nombre`:
+  // el backend conserva el nombre y solo añade "(copia)" si ya existe en el destino.
+  protected confirmarBulkCopiar(destino: string) {
+    this.bulkCopiarModal.set(false);
     const sel = [...this.seleccionados()];
     const archIds = sel.filter(k => k.startsWith('f:')).map(k => k.slice(2));
     const carpRutas = sel.filter(k => k.startsWith('d:')).map(k => k.slice(2));
     const n = sel.length;
     const archivos = archIds.map(id => this.todos().find(a => a.id === id)!).filter(Boolean);
-    const opsArch = archivos.map(a =>
-      this.datos.copiar(a.id, { carpeta: this.normalizar(a.carpeta), nombre: `${a.nombre} (copia)` })
-    );
-    for (const ruta of carpRutas) this.copiarCarpeta(ruta);
+    const opsArch = archivos.map(a => this.datos.copiar(a.id, { carpeta: destino }));
+    for (const ruta of carpRutas) this.copiarCarpetaEn(ruta, destino);
     if (opsArch.length > 0) {
       forkJoin(opsArch).subscribe({
         next: () => {
@@ -1349,6 +1360,12 @@ export class ExploradorComponent implements OnInit {
     } else {
       this.limpiarSeleccion();
     }
+  }
+
+  // Copiar la selección a un espacio externo (COPIA; los originales permanecen).
+  protected confirmarBulkCopiarExterno(destinoId: string | null, ruta: string) {
+    this.bulkCopiarModal.set(false);
+    this.emitirExportacion(this.itemsDesdeClaves([...this.seleccionados()]), destinoId, ruta, 'copiar');
   }
 
   protected abrirBulkMover() { this.bulkMoverModal.set(true); }
