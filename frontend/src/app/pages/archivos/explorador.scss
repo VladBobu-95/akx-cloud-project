@@ -200,8 +200,8 @@
          así que no lleva el atributo de encapsulation de Angular; sin ::ng-deep
          esta regla nunca coincide y el navegador aplica su amarillo por defecto. */
       ::ng-deep .res mark {
-        background: var(--true-green-soft);
-        color: var(--true-green);
+        background: var(--green);
+        color: var(--surface);
         border-radius: 3px;
         padding: 0 1px;
       }

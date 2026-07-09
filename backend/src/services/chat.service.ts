@@ -1866,7 +1866,7 @@ export const chatear = async (
   if (saludoNorm && (RE_SALUDO.test(saludoNorm) || RE_QUETAL.test(saludoNorm))) {
     return {
       respuesta:
-        "¡Hola! 👋 Soy el asistente de AKX Cloud. Puedo ayudarte a **gestionar tus archivos y carpetas** (buscar, abrir, mover, copiar, renombrar, crear o borrar)" +
+        "¡Hola! 👋 Soy el asistente de ATEKA Cloud. Puedo ayudarte a **gestionar tus archivos y carpetas** (buscar, abrir, mover, copiar, renombrar, crear o borrar)" +
         (puedeFacturas
           ? " y a **consultar tus facturas** (totales, ventas, compras, o listados por periodo, cliente o carpeta)"
           : "") +

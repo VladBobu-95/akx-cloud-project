@@ -1,0 +1,42 @@
+- si le doy resumen a la devolucion de 00 me da el resumen total
+- borrar el cambio hecho en facturas_service
+- mover de compartido a otra carpeta compartida
+- pasa imagenes/ pasa las imagenes que tengo 
+- Paginacion registro
+- Un boton mover a compartido o mover a mis archivos (chatbot)
+- En lugar de miembro Empleado 
+- quitar el boton de ver archivos de admin si eres admin
+- acciones en plataforma y equipo esta demasiado a la derecha
+- el superadmin que pueda ver los usuarios de cada empresa y sus detalles.
+- paginacion Plataforma
+- si se borra una carpeta vacia que me diga que se borro ,no uqe se envio a la papelera
+- poner el mensaje de prohibicion mejor si no pido cosas sobre facturas directamente.Por ejemplosi pido: mejores clientes 
+    Hecho.
+    ✓ Restaurados 0 archivo/s de la papelera.
+- si le doy a ver archivos de otro usuario que me aparezca como le aperece a el en mis archivos para que los pueda abrir tambien y descargar o mover a la lista de mis archivos o los compartidos.
+- al subir factura_1 en compartido se subio tambien al personal y esta escaneando todo el rato
+- separar por devoluciones/cliente/emisor
+- quien me ha facturado en juio
+- factura.pdf emisor mal
+- personalizar acceso a chatbot
+- fecha esta mal en invoice.pdf
+- si hay menos en factura no lo cuenta
+- poder escribir otro comando y cancelar el anterior
+- losta todo escanea archivos
+- ocultar carpeta facturas con todo lo que tiene dentro incluso cuando hago querrys por chat
+- falta buscador compartido 
+- sufijo en compartido para el chatbot
+- info de la cuenta empresa (empledos,espacio utilizado entre todos lso usuarios)
+- mayusculas en el correo
+- escanear carpetas compartida factura
+- mirar lo del avatar para redimensionar en front
+- mensaje subir duplicados/subir varios duplicados 
+-resumen todo no funciona
+- despues de escribir un mensaje en chat que quede sleccionado el chat para escribir otro
+- si se escanea mediante chat el resumen.md no actualiza creo
+-copia factura en la carpeta demo22 y despues copia la carpeta demo22  
+- mover varios seleccionados desde compartido 
+- highlight palabra en buscador 
+- Mirar posibles bug con la carpeta facturas
+ 
+
