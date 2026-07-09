@@ -42,6 +42,11 @@ import {
   generarResumenVentasMd,
   generarResumenComprasMd,
   generarResumenCombinadoMd,
+  generarResumenNetoMd,
+  generarResumenIvaMd,
+  generarComparativaMd,
+  facturasPorImporte,
+  ticketMedioMd,
   asegurarFacturasEscaneadas,
   rankingMd,
   totalesMd,
@@ -66,6 +71,7 @@ import {
   detectarRestaurarTodo,
   detectarVaciarPapelera,
   clasificarBorradoMasivo,
+  detectarTrimestreSemestre,
 } from "./chat.deteccion";
 
 // Helpers de rutas .
@@ -1469,6 +1475,14 @@ export const chatear = async (
   const detectarRangoPeriodo = (
     texto: string,
   ): { desde: string; hasta: string; etiqueta: string } | null => {
+    // TRIMESTRES / SEMESTRES ("primer trimestre", "T3 de 2026", "Q1", "este
+    // trimestre", "trimestre pasado", "primer/segundo semestre", "S1"). Lógica
+    // pura en chat.deteccion.ts (testeada). Va lo PRIMERO porque estas frases no
+    // llevan nombres de mes que casen con el rango de meses de abajo. Muy usado
+    // para el IVA, que se declara por trimestre.
+    const trimSem = detectarTrimestreSemestre(texto);
+    if (trimSem) return trimSem;
+
     const meses = Object.keys(MESES).join("|");
     const conector = `(?:\\s+(?:a|al|hasta|y)\\s+|\\s*[-\\/]\\s*)`;
     const nombreDe = (m: number, a: number) =>
@@ -2359,6 +2373,155 @@ export const chatear = async (
     if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
   }
 
+  // Filtro base (periodo + moneda) reutilizado por los pre-flights de analítica
+  // agregada de abajo (beneficio, IVA, ticket medio, facturas por importe).
+  const filtroPeriodoMoneda = (): { filtro: FiltroFacturas; etiqueta?: string } => {
+    const { desde, hasta, etiqueta } = periodoDelMensaje();
+    const filtro: FiltroFacturas = {};
+    if (desde) filtro.desde = desde;
+    if (hasta) filtro.hasta = hasta;
+    if (monedaDetectada) filtro.moneda = monedaDetectada;
+    return { filtro, etiqueta };
+  };
+
+  // Pre-flight: FACTURA(S) por IMPORTE ("¿cuál es mi factura más grande/cara/alta?",
+  // "las 5 facturas de mayor importe", "mi factura más pequeña"). Ranking de facturas
+  // INDIVIDUALES por total (no de producto/cliente). Va antes que esRankingVentas
+  // porque "más" aquí no es de producto. Devuelve las filas con botón "Abrir".
+  const esFacturaExtrema =
+    puedeFacturas &&
+    /\bfacturas?\b/.test(msgSinTildes) &&
+    /\b(mas|menos|mayor(?:es)?|menor(?:es)?)\b/.test(msgSinTildes) &&
+    /\b(grande|caras?|caros?|alta|alto|elevad|importe|import|valor|pequen|baja|bajo|barat)\w*/.test(msgSinTildes);
+  if (esFacturaExtrema) {
+    const { filtro, etiqueta } = filtroPeriodoMoneda();
+    const orden: "asc" | "desc" = /\b(menos|menor(?:es)?|pequen|baja|bajo|barat)\w*/.test(msgSinTildes) ? "asc" : "desc";
+    // "las 3 facturas..." — un número explícito fija el límite; un año (4 dígitos) no.
+    const numMatch = msgSinTildes.match(/\b(\d{1,3})\b/);
+    const limite = numMatch ? Math.min(Math.max(1, Number(numMatch[1])), 50) : 5;
+    if (/\bcompras?\b/.test(msgSinTildes) || /\bgastad/.test(msgSinTildes) || /\bproveedor/.test(msgSinTildes)) filtro.tipo = "compra";
+    else if (/\bventas?\b/.test(msgSinTildes)) filtro.tipo = "venta";
+    const filas = await facturasPorImporte(usuarioId, filtro, { orden, limite });
+    const titulo = `Facturas de ${orden === "asc" ? "menor" : "mayor"} importe${etiqueta ? ` (${etiqueta})` : ""}`;
+    const md = listadoFacturasMd(
+      filas.map((f) => ({ archivoId: f.archivoId, archivoNombre: f.archivoNombre, numero: f.numero, fecha: f.fecha, total: f.total, moneda: f.moneda })),
+      titulo,
+    );
+    const archivos = filas
+      .filter((f) => f.archivoId && f.archivoNombre)
+      .map((f) => ({ id: f.archivoId as string, nombre: f.archivoNombre as string }));
+    return { respuesta: md, acciones, archivos: archivos.length ? archivos : undefined };
+  }
+
+  // Pre-flight: TICKET MEDIO ("¿cuál es mi factura media?", "importe medio por
+  // factura", "ticket medio", "promedio por factura"). Se deriva de los totales.
+  // Los términos inequívocos (ticket/importe medio, promedio, "por factura") no
+  // exigen la palabra "factura"; la palabra suelta "media/medio" sí, para no
+  // dispararse con cualquier "media" descontextualizada.
+  const esTicketMedio =
+    puedeFacturas &&
+    (/\bticket\s+medio\b/.test(msgSinTildes) ||
+      /\bimporte\s+medio\b/.test(msgSinTildes) ||
+      /\bfactura\s+media\b/.test(msgSinTildes) ||
+      /\bmedi[ao]\s+por\s+factura\b/.test(msgSinTildes) ||
+      /\bpromedio\b/.test(msgSinTildes) ||
+      (/\bmedi[ao]\b/.test(msgSinTildes) && /\bfactur/.test(msgSinTildes)));
+  if (esTicketMedio) {
+    const { filtro, etiqueta } = filtroPeriodoMoneda();
+    const tipoTM: "venta" | "compra" = /\b(gastad|gasto|comprad|compras?|proveedor)\b/.test(msgSinTildes) ? "compra" : "venta";
+    const totales = await totalesFacturado(usuarioId, { ...filtro, tipo: tipoTM });
+    const titulo = `Ticket medio (${tipoTM === "compra" ? "compras" : "ventas"}${etiqueta ? `, ${etiqueta}` : ""})`;
+    return { respuesta: ticketMedioMd(totales, titulo), acciones };
+  }
+
+  // Pre-flight: IVA ("¿cuánto IVA he cobrado/repercutido?" → ventas; "¿cuánto IVA
+  // he pagado/soportado?" → compras; "¿cuánto IVA me toca declarar/liquidar este
+  // trimestre?" → repercutido − soportado). El periodo (incl. trimestres) sale de
+  // periodoDelMensaje. Va antes de los totales (el IVA es su propia pregunta).
+  const esIva = puedeFacturas && /\biva\b/.test(msgSinTildes);
+  if (esIva) {
+    const { filtro, etiqueta } = filtroPeriodoMoneda();
+    let modo: "cobrado" | "soportado" | "liquidacion" = "liquidacion";
+    if (/\b(cobrad|repercutid|emitid|de\s+(mis\s+)?ventas?)\b/.test(msgSinTildes)) modo = "cobrado";
+    else if (/\b(pagad|soportad|gastad|de\s+(mis\s+)?compras?|proveedor)\b/.test(msgSinTildes)) modo = "soportado";
+    return { respuesta: await generarResumenIvaMd(usuarioId, filtro, etiqueta, modo), acciones };
+  }
+
+  // Pre-flight: BENEFICIO / BALANCE neto ("¿cuánto he ganado?", "mi beneficio de
+  // abril", "balance del trimestre", "ventas menos compras"). Ventas − compras por
+  // moneda. Va antes de los totales para que "balance"/"ganado" no caiga en ellos.
+  const esBalance =
+    puedeFacturas &&
+    (/\b(beneficio|balance|ganancias?|ganad[oa]s?|rentabilidad)\b/.test(msgSinTildes) ||
+      /\bventas?\s+menos\s+compras?\b/.test(msgSinTildes));
+  if (esBalance) {
+    const { filtro, etiqueta } = filtroPeriodoMoneda();
+    return { respuesta: await generarResumenNetoMd(usuarioId, filtro, etiqueta), acciones };
+  }
+
+  // Pre-flight: COMPARATIVA de dos periodos ("¿vendí más en abril o en mayo?",
+  // "compara este trimestre con el anterior", "¿gasté más en enero o febrero?").
+  // Va ANTES de esRankingClientes/esRankingVentas: "vendí más en abril o mayo" casa
+  // el patrón de ventas_top, pero con dos periodos lo que se pide es compararlos.
+  const construirDosPeriodos = (
+    texto: string,
+  ): [{ filtro: FiltroFacturas; etiqueta: string }, { filtro: FiltroFacturas; etiqueta: string }] | null => {
+    const anioTxt = texto.match(/\b(20\d{2})\b/);
+    const anioDef = anioTxt ? Number(anioTxt[1]) : new Date().getFullYear();
+    const mesP = (mes: number, anio: number) => {
+      const mm = String(mes).padStart(2, "0");
+      const ultimo = new Date(anio, mes, 0).getDate();
+      return {
+        filtro: { desde: `${anio}-${mm}-01`, hasta: `${anio}-${mm}-${ultimo}` } as FiltroFacturas,
+        etiqueta: `${new Date(anio, mes - 1).toLocaleString("es-ES", { month: "long" })} ${anio}`,
+      };
+    };
+    const anioP = (anio: number) => ({
+      filtro: { desde: `${anio}-01-01`, hasta: `${anio}-12-31` } as FiltroFacturas,
+      etiqueta: `${anio}`,
+    });
+    const trimP = (n: number, anio: number) => {
+      const ini = (n - 1) * 3 + 1;
+      const fin = ini + 2;
+      const ultimo = new Date(anio, fin, 0).getDate();
+      return {
+        filtro: { desde: `${anio}-${String(ini).padStart(2, "0")}-01`, hasta: `${anio}-${String(fin).padStart(2, "0")}-${ultimo}` } as FiltroFacturas,
+        etiqueta: `${n}º trimestre de ${anio}`,
+      };
+    };
+    // Dos nombres de mes explícitos ("abril o mayo", "enero con febrero").
+    const nombresMes = [...texto.matchAll(new RegExp(`\\b(${Object.keys(MESES).join("|")})\\b`, "g"))].map((m) => m[1]);
+    if (nombresMes.length >= 2) return [mesP(MESES[nombresMes[0]], anioDef), mesP(MESES[nombresMes[1]], anioDef)];
+    // Relativos "este X" vs "el X pasado/anterior" (trimestre / año / mes).
+    const ahora = new Date();
+    if (/\btrimestre\b/.test(texto)) {
+      const actual = Math.floor(ahora.getMonth() / 3) + 1;
+      const prevN = actual === 1 ? 4 : actual - 1;
+      const prevA = actual === 1 ? ahora.getFullYear() - 1 : ahora.getFullYear();
+      return [trimP(actual, ahora.getFullYear()), trimP(prevN, prevA)];
+    }
+    if (/\bano\b/.test(texto)) return [anioP(ahora.getFullYear()), anioP(ahora.getFullYear() - 1)];
+    if (/\bmes\b/.test(texto)) {
+      const cur = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+      const prev = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1);
+      return [mesP(cur.getMonth() + 1, cur.getFullYear()), mesP(prev.getMonth() + 1, prev.getFullYear())];
+    }
+    return null;
+  };
+  const senalComparar =
+    puedeFacturas &&
+    (/\bcompar/.test(msgSinTildes) ||
+      /\bfrente\s+a\b/.test(msgSinTildes) ||
+      /\bvs\b/.test(msgSinTildes) ||
+      (/\bo\b/.test(msgSinTildes) && /\b(mas|menos)\b/.test(msgSinTildes)));
+  if (senalComparar) {
+    const periodos = construirDosPeriodos(msgSinTildes);
+    if (periodos) {
+      const tipoCmp: "venta" | "compra" = /\b(gastad|gasto|comprad|compras?|proveedor)\b/.test(msgSinTildes) ? "compra" : "venta";
+      return { respuesta: await generarComparativaMd(usuarioId, periodos[0], periodos[1], tipoCmp), acciones };
+    }
+  }
+
   // Pre-flight: ranking de CLIENTES ("qué cliente ha facturado/comprado más",
   // "quién es mi mejor cliente", "top clientes", "el cliente que menos gasta").
   // Sin esto, el "facturado"/"más" lo capturaba esTotalesGeneral y devolvía el
@@ -2397,6 +2560,47 @@ export const chatear = async (
     if (monedaDetectada) args.moneda = monedaDetectada;
     const resultado = (await ejecutarTool(
       "clientes_top",
+      args,
+      usuarioId,
+      acciones,
+      capacidades,
+    )) as Record<string, unknown>;
+    if (typeof resultado.resumen === "string") return { respuesta: resultado.resumen, acciones };
+  }
+
+  // Pre-flight: ranking de PROVEEDORES ("qué proveedor me factura más", "mi
+  // principal proveedor", "top proveedores", "a quién/a qué proveedor le compro
+  // más"). Espejo de esRankingClientes para las COMPRAS. Sin esto, "a quién le
+  // compro más" no lo captaba nadie (el de clientes exige vend/factur) y "compro"
+  // caía en esTotalesCompras devolviendo el GRAN TOTAL de gasto en vez del ranking
+  // por proveedor. Por eso va ANTES que esTotalesCompras. Requiere "proveedor(es)"
+  // o "a quién/qué … compro …" + señal de ranking, y NO producto.
+  const esQuienCompra =
+    /\ba\s+(?:quien(?:es)?|que)\b/.test(msgSinTildes) &&
+    /\bcompr/.test(msgSinTildes) &&
+    /\b(mas|menos|mejor(?:es)?|top|principal(?:es)?)\b/.test(msgSinTildes);
+  const esRankingProveedores =
+    puedeFacturas &&
+    (esQuienCompra ||
+      (/\bproveedor(?:es)?\b/.test(msgSinTildes) &&
+        /\b(mas|menos|mejor(?:es)?|top|principal(?:es)?)\b/.test(msgSinTildes))) &&
+    !/\bproductos?\b/.test(msgSinTildes) &&
+    !new RegExp(VERBO_BORRAR + "|" + VERBO_OTRAS_ACCIONES).test(msgSinTildes);
+  if (esRankingProveedores) {
+    const rango = detectarRangoPeriodo(msgSinTildes);
+    const { mes, anio } = detectarMesAnio(msgSinTildes);
+    const orden = /\bmenos\b/.test(msgSinTildes) ? "menos" : "mas";
+    const args: Record<string, unknown> = { orden };
+    if (rango) {
+      args.desde = rango.desde;
+      args.hasta = rango.hasta;
+    } else {
+      if (mes) args.mes = mes;
+      if (anio) args.anio = anio;
+    }
+    if (monedaDetectada) args.moneda = monedaDetectada;
+    const resultado = (await ejecutarTool(
+      "proveedores_top",
       args,
       usuarioId,
       acciones,

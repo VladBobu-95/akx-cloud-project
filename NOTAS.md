@@ -48,6 +48,19 @@ Las tres aceptan un **filtro flexible** y devuelven markdown con € (bypass): `
 
 Las celdas de texto libre de estas tablas (cliente/emisor/producto/descripción) pasan por `celdaMd` (colapsa saltos de línea, neutraliza `|`, acota a 80 chars) para que un valor mal extraído por el modelo pequeño —p. ej. un `cliente` con nombre+email+teléfono pegados— no rompa la estructura de la tabla markdown.
 
+### Analítica avanzada (pre-flights deterministas, resúmenes derivados)
+
+Todos por pre-flight (sin tool en el modelo: son resúmenes agregados que se calculan al vuelo, como `generarResumenCombinadoMd`), gateados por `puedeFacturas`, combinables con periodo + moneda, y **siempre por moneda** (nunca se restan/comparan divisas distintas). Reusan `totalesFacturado`. Van **antes** de los pre-flights de totales/rankings para que su intención específica gane. Orden: factura-por-importe → ticket medio → IVA → balance → comparativa → clientes → proveedores.
+- **Beneficio / balance neto** (`generarResumenNetoMd`): "cuánto he ganado", "mi beneficio de abril", "balance del trimestre", "ventas menos compras" → ingresos (ventas) − gastos (compras) por moneda, etiquetando "Beneficio" o "Pérdida" según el signo.
+- **IVA** (`generarResumenIvaMd`, con `modo`): "cuánto IVA he cobrado/repercutido" (ventas), "IVA pagado/soportado" (compras), "IVA a declarar/liquidar este trimestre" (repercutido − soportado; positivo = a ingresar, negativo = a compensar). El `modo` se decide por palabra clave; por defecto liquidación.
+- **Factura(s) por importe** (`facturasPorImporte`): "la factura más grande/cara/alta", "las 5 de mayor importe", "mi factura más pequeña" → ranking de facturas **individuales** por `total` (no de producto/cliente), con botón "Abrir". `orden` asc/desc por palabra (menor/pequeña/barata → asc); nº explícito fija el límite (un año de 4 dígitos no).
+- **Ticket medio** (`ticketMedioMd`): "cuál es mi factura media", "importe medio por factura", "ticket medio", "promedio por factura" → `total / nº facturas` por moneda (ventas por defecto; compras si se nombra gasto/compra).
+- **Comparativa de dos periodos** (`generarComparativaMd`): "¿vendí más en abril o en mayo?", "compara este trimestre con el anterior" → total por moneda de cada periodo + diferencia. `construirDosPeriodos` extrae dos meses nombrados o el par relativo "este X vs el X anterior" (trimestre/año/mes). Va **antes** de `esRankingVentas` porque "vendí más en abril o mayo" casa su patrón, pero con dos periodos lo pedido es compararlos.
+
+**Ranking de PROVEEDORES** (`proveedores_top`, espejo de `clientes_top`): "qué proveedor me factura más", "mi principal proveedor", "a quién/a qué proveedor le compro más". Antes no tenía pre-flight y "a quién le compro más" no lo captaba nadie (el de clientes exige vend/factur) mientras "compro" caía en el total de gasto. **Simétrico al de clientes**, que a su vez capta "a quién (le) vendimos/vendí/facturé más" (el destinatario de la venta ES el cliente, aunque no se nombre "cliente").
+
+**Trimestres/semestres** (`detectarTrimestreSemestre`, en `chat.deteccion.ts`, testeado): amplía la detección de periodo con "primer/…/cuarto trimestre", "trimestre 3"/"3er trimestre", "T3"/"Q1", "este trimestre"/"trimestre pasado", "primer/segundo semestre"/"S1". T1=ene-mar…T4=oct-dic; S1=ene-jun, S2=jul-dic. Al vivir en `detectarRangoPeriodo`, **todos** los pre-flights de periodo lo heredan (clave para el IVA trimestral). `ahora` inyectable para testear los relativos.
+
 ## Chat — leer_archivo
 
 `leerTextoArchivo` (`archivos.service.ts`) acepta texto plano directo, y para PDF/DOCX/imágenes **reutiliza `archivo.textoExtraido`** (el texto ya extraído al subir vía pdf-parse/mammoth/OCR) en vez de decodificar el binario como UTF-8. Antes rechazaba todo lo que no fuera texto. Para imágenes, lo que se lee es la descripción generada al subir (OCR o descripción manual).

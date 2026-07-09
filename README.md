@@ -293,6 +293,23 @@ con ejemplos reales de frases que entiende:
   - cuánto facturé de junio a julio
   - qué vendí más de 2005 a 2026
   - facturas con bombillas de junio 2026
+  - a quien vendimos mas?                       
+  - a quien le compro mas?                      
+  - cuanto he ganado en abril?                  
+  - mi beneficio del trimestre                  
+  - cuanto IVA me toca declarar este trimestre?  
+  - cuanto iva he cobrado?                      
+  - cual es mi factura mas cara?                
+  - las 5 facturas de mayor importe             
+  - cual es mi factura media?                   
+  - ticket medio de ventas                     
+  - vendi mas en abril o en mayo?               
+  - compara este trimestre con el anterior      
+  - que vendi mas?                              
+  - quien es mi mejor cliente?                  
+  - mi principal proveedor                      
+  - cuanto he gastado en marzo?                 
+  - cuanto he facturado?         
 - **Imágenes** — ver qué contienen, buscarlas por contenido, o tratarlas como factura:
   - "qué dice foto.jpg" / "muéstrame foto.jpg" (la descripción que se generó al
     subirla: el OCR automático si tenía texto real, o la escrita a mano si no lo tenía)

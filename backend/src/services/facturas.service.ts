@@ -1907,3 +1907,155 @@ export const generarResumenCombinadoMd = async (
 
   return { md: bloques.join("\n\n---\n\n"), desconocidas };
 };
+
+// --- Beneficio / balance neto (ventas − compras) ---
+// "¿cuánto he ganado?", "mi balance de abril", "beneficio del trimestre".
+// SIEMPRE por moneda: no se restan divisas distintas (una venta en USD y una
+// compra en EUR no se compensan). Si en una moneda solo hay ventas o solo
+// compras, el otro lado cuenta como 0.
+export const generarResumenNetoMd = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+  etiqueta?: string,
+): Promise<string> => {
+  const [ventas, compras] = await Promise.all([
+    totalesFacturado(usuarioId, { ...filtro, tipo: "venta" }),
+    totalesFacturado(usuarioId, { ...filtro, tipo: "compra" }),
+  ]);
+  const monedas = monedasDistintas([...ventas, ...compras]);
+  const en = etiqueta ? ` en ${etiqueta}` : "";
+  if (monedas.length === 0) {
+    return `No tienes facturas clasificadas${en} todavía, así que no puedo calcular el beneficio. Clasifica las facturas "Sin clasificar" en la página **Facturas**.`;
+  }
+  const varias = monedas.length > 1;
+  const secciones = monedas.map((m) => {
+    const v = ventas.find((t) => t.moneda === m);
+    const c = compras.find((t) => t.moneda === m);
+    const ingresos = v?.total ?? 0;
+    const gastos = c?.total ?? 0;
+    const neto = ingresos - gastos;
+    const etiquetaNeto = neto >= 0 ? "Beneficio" : "Pérdida";
+    return `${encabezadoMoneda(m, varias)}- **Ingresos (ventas):** ${dinero(ingresos, m)}${v ? ` — ${unidadesMd(v.numFacturas)} factura/s` : ""}
+- **Gastos (compras):** ${dinero(gastos, m)}${c ? ` — ${unidadesMd(c.numFacturas)} factura/s` : ""}
+- **${etiquetaNeto}:** ${dinero(Math.abs(neto), m)}`;
+  });
+  return `## Balance${etiqueta ? ` de ${etiqueta}` : ""}\n\n${secciones.join("\n\n")}`;
+};
+
+// --- IVA (repercutido / soportado / a liquidar) ---
+// "¿cuánto IVA he cobrado?" (repercutido, ventas) · "¿cuánto IVA he pagado?"
+// (soportado, compras) · "¿cuánto IVA me toca declarar/liquidar este trimestre?"
+// (repercutido − soportado). Todo por moneda. El resultado a liquidar positivo =
+// a ingresar a Hacienda; negativo = a compensar/devolver.
+export const generarResumenIvaMd = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+  etiqueta?: string,
+  modo: "cobrado" | "soportado" | "liquidacion" = "liquidacion",
+): Promise<string> => {
+  const [ventas, compras] = await Promise.all([
+    totalesFacturado(usuarioId, { ...filtro, tipo: "venta" }),
+    totalesFacturado(usuarioId, { ...filtro, tipo: "compra" }),
+  ]);
+  const relevantes =
+    modo === "cobrado" ? ventas : modo === "soportado" ? compras : [...ventas, ...compras];
+  const monedas = monedasDistintas(relevantes);
+  const en = etiqueta ? ` en ${etiqueta}` : "";
+  if (monedas.length === 0) {
+    return `No tengo IVA que mostrar${en}: no hay facturas ${modo === "soportado" ? "de compra" : modo === "cobrado" ? "de venta" : "clasificadas"} todavía.`;
+  }
+  const varias = monedas.length > 1;
+  const secciones = monedas.map((m) => {
+    const rep = ventas.find((t) => t.moneda === m)?.iva ?? 0;
+    const sop = compras.find((t) => t.moneda === m)?.iva ?? 0;
+    const cab = encabezadoMoneda(m, varias);
+    if (modo === "cobrado") return `${cab}- **IVA repercutido (cobrado en ventas):** ${dinero(rep, m)}`;
+    if (modo === "soportado") return `${cab}- **IVA soportado (pagado en compras):** ${dinero(sop, m)}`;
+    const liq = rep - sop;
+    const etiquetaLiq = liq >= 0 ? "A ingresar a Hacienda" : "A compensar/devolver";
+    return `${cab}- **IVA repercutido (ventas):** ${dinero(rep, m)}
+- **IVA soportado (compras):** ${dinero(sop, m)}
+- **${etiquetaLiq}:** ${dinero(Math.abs(liq), m)}`;
+  });
+  const titulo =
+    modo === "cobrado" ? "IVA repercutido" : modo === "soportado" ? "IVA soportado" : "Liquidación de IVA";
+  return `## ${titulo}${etiqueta ? ` de ${etiqueta}` : ""}\n\n${secciones.join("\n\n")}`;
+};
+
+// --- Facturas ordenadas por importe ("la factura más grande/cara", "las 5 de
+// menor importe"). Distinto de los rankings de producto/cliente: aquí cada fila
+// es una FACTURA individual. Se compara dentro del filtro dado (opcionalmente
+// acotado a venta/compra); las divisas conviven (cada fila lleva la suya).
+export const facturasPorImporte = async (
+  usuarioId: string,
+  filtro: FiltroFacturas = {},
+  opts: { orden?: "asc" | "desc"; limite?: number } = {},
+): Promise<FilaFactura[]> => {
+  const orden = opts.orden === "asc" ? "ASC" : "DESC";
+  const limite = Math.min(Math.max(1, opts.limite ?? 5), 50);
+  const { producto: _producto, ...rest } = filtro;
+  const { where, params } = construirFiltro(usuarioId, rest);
+  const filas: FilaRaw[] = await AppDataSource.query(
+    `SELECT f."id" AS id, a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
+            f."fecha"::text AS fecha, f."emisor" AS emisor, f."cliente" AS cliente, f."tipo" AS tipo,
+            f."subtotal" AS subtotal, f."iva" AS iva, f."total" AS total, f."moneda" AS moneda
+     FROM "facturas" f
+     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
+     WHERE ${where}
+     ORDER BY f."total" ${orden} NULLS LAST, f."fecha" DESC
+     LIMIT ${limite}`,
+    params,
+  );
+  return filas.map(aFilaFactura);
+};
+
+// --- Comparativa de dos periodos (ventas o compras) ---
+// "¿vendí más en abril o en mayo?", "compara este trimestre con el anterior".
+// Compara el TOTAL por moneda de cada periodo y marca la diferencia. Por moneda
+// (no se comparan divisas distintas).
+export const generarComparativaMd = async (
+  usuarioId: string,
+  a: { filtro: FiltroFacturas; etiqueta: string },
+  b: { filtro: FiltroFacturas; etiqueta: string },
+  tipo: "venta" | "compra" = "venta",
+): Promise<string> => {
+  const [ta, tb] = await Promise.all([
+    totalesFacturado(usuarioId, { ...a.filtro, tipo }),
+    totalesFacturado(usuarioId, { ...b.filtro, tipo }),
+  ]);
+  const concepto = tipo === "venta" ? "Ventas" : "Compras";
+  const monedas = monedasDistintas([...ta, ...tb]);
+  if (monedas.length === 0) {
+    return `No hay ${tipo === "venta" ? "ventas" : "compras"} en ninguno de los dos periodos para comparar.`;
+  }
+  const varias = monedas.length > 1;
+  const secciones = monedas.map((m) => {
+    const va = ta.find((t) => t.moneda === m)?.total ?? 0;
+    const vb = tb.find((t) => t.moneda === m)?.total ?? 0;
+    const dif = va - vb;
+    let veredicto: string;
+    if (dif === 0) veredicto = `Empate: lo mismo en ambos periodos.`;
+    else {
+      const mayor = dif > 0 ? a.etiqueta : b.etiqueta;
+      veredicto = `Más en **${mayor}** (diferencia de ${dinero(Math.abs(dif), m)}).`;
+    }
+    return `${encabezadoMoneda(m, varias)}- **${a.etiqueta}:** ${dinero(va, m)}
+- **${b.etiqueta}:** ${dinero(vb, m)}
+- ${veredicto}`;
+  });
+  return `## ${concepto}: ${a.etiqueta} vs ${b.etiqueta}\n\n${secciones.join("\n\n")}`;
+};
+
+// --- Ticket medio (importe medio por factura) ---
+// "¿cuál es mi factura media?", "importe medio por factura". Se deriva de los
+// totales ya agregados (total / nº de facturas), por moneda.
+export const ticketMedioMd = (filas: TotalesMoneda[], titulo: string): string => {
+  if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
+  const varias = filas.length > 1;
+  const secciones = filas.map((t) => {
+    const medio = t.numFacturas > 0 ? t.total / t.numFacturas : 0;
+    return `${encabezadoMoneda(t.moneda, varias)}- **Ticket medio:** ${dinero(medio, t.moneda)}
+- **Total:** ${dinero(t.total, t.moneda)} en ${unidadesMd(t.numFacturas)} factura/s`;
+  });
+  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
+};

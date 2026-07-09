@@ -240,6 +240,8 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 
 **Tools:** buscar/copiar/mover/renombrar/eliminar/crear archivo, crear/listar/eliminar/vaciar/mover/renombrar/copiar carpeta, borrar_todo/_todas_carpetas/_todos_archivos, listar_papelera, restaurar_archivo/_todo, borrar_permanente, vaciar_papelera, leer_archivo, estadisticas, buscar_semantica, escanear_factura/_todas, obtener_factura, ventas_top, totales_facturas, clientes_top, **compras_top, totales_compras, proveedores_top** (compras). Pre-flights de compras: "resumen de compras/gastos", "cuánto he gastado", "mis proveedores".
 
+**Analítica avanzada (solo pre-flight, resúmenes derivados; detalle en `NOTAS.md`):** beneficio/balance neto (ventas−compras), IVA (repercutido/soportado/a liquidar), factura(s) por importe ("la más cara"), ticket medio, comparativa de dos periodos ("¿vendí más en abril o mayo?"), ranking de proveedores ("a quién le compro más", espejo de clientes). Periodos ampliados con **trimestres/semestres** ("Q1", "primer trimestre", "este trimestre") vía `detectarTrimestreSemestre` (en `chat.deteccion.ts`, testeado) — clave para el IVA trimestral; lo heredan todos los pre-flights de periodo.
+
 ## OCR y RAG — resumen
 - **OCR imágenes** (`extraccion.service.ts`): cascada de 3 pasadas (granite → deepseek si parece factura → Tesseract si los VLM se quedan cortos), normalizando a PNG primero. Detalle completo en `NOTAS.md`.
 - **Tesseract multi-idioma**: `IDIOMAS_OCR = "spa+cat+eng"` (traineddata vendorizados en `backend/tessdata/`, copiados por el Dockerfile) — para facturas escaneadas/fotos en catalán/inglés, no solo castellano. Ampliar = editar la cadena + añadir el `.traineddata`.

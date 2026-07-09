@@ -6,6 +6,7 @@ import {
   detectarRestaurarTodo,
   detectarVaciarPapelera,
   clasificarBorradoMasivo,
+  detectarTrimestreSemestre,
 } from "../src/services/chat.deteccion";
 
 // Tests PUROS de la capa de detección de intenciones del chat (#7): no tocan BD
@@ -105,5 +106,51 @@ describe("clasificarBorradoMasivo", () => {
     "mueve todos los archivos a la carpeta x",
   ])("null: %s", (frase) => {
     expect(clasificarBorradoMasivo(norm(frase))).toBeNull();
+  });
+});
+
+describe("detectarTrimestreSemestre", () => {
+  // Fecha fija para los relativos: 9 jul 2026 → T3 (jul-sep), S2 (jul-dic).
+  const AHORA = new Date(2026, 6, 9);
+  const det = (frase: string) => detectarTrimestreSemestre(norm(frase), AHORA);
+
+  it.each([
+    ["primer trimestre", "2026-01-01", "2026-03-31"],
+    ["segundo trimestre de 2025", "2025-04-01", "2025-06-30"],
+    ["tercer trimestre", "2026-07-01", "2026-09-30"],
+    ["cuarto trimestre", "2026-10-01", "2026-12-31"],
+    ["T3 de 2026", "2026-07-01", "2026-09-30"],
+    ["Q1 2026", "2026-01-01", "2026-03-31"],
+    ["trimestre 2", "2026-04-01", "2026-06-30"],
+    ["primer semestre", "2026-01-01", "2026-06-30"],
+    ["segundo semestre de 2024", "2024-07-01", "2024-12-31"],
+    ["S1", "2026-01-01", "2026-06-30"],
+  ] as const)("%s → %s..%s", (frase, desde, hasta) => {
+    const r = det(frase);
+    expect(r).not.toBeNull();
+    expect(r!.desde).toBe(desde);
+    expect(r!.hasta).toBe(hasta);
+  });
+
+  it("relativos: este trimestre y trimestre pasado dependen de la fecha", () => {
+    expect(det("este trimestre")).toMatchObject({ desde: "2026-07-01", hasta: "2026-09-30" });
+    expect(det("trimestre pasado")).toMatchObject({ desde: "2026-04-01", hasta: "2026-06-30" });
+    expect(det("el trimestre anterior")).toMatchObject({ desde: "2026-04-01", hasta: "2026-06-30" });
+  });
+
+  it("trimestre pasado desde Q1 retrocede a Q4 del año anterior", () => {
+    const enero = new Date(2026, 0, 15); // Q1
+    expect(detectarTrimestreSemestre("trimestre pasado", enero)).toMatchObject({
+      desde: "2025-10-01",
+      hasta: "2025-12-31",
+    });
+  });
+
+  it.each([
+    "facturas de junio",
+    "cuanto he facturado en 2026",
+    "resumen de ventas",
+  ])("null cuando no hay trimestre/semestre: %s", (frase) => {
+    expect(det(frase)).toBeNull();
   });
 });

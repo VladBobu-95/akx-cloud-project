@@ -93,3 +93,57 @@ export const clasificarBorradoMasivo = (msgSinTildes: string): BorradoMasivo => 
   if (esSoloArchivos) return "archivos";
   return null;
 };
+
+// Detecta un TRIMESTRE o SEMESTRE (fiscal) en el texto y lo convierte a un rango
+// desde/hasta ISO. T1=ene-mar … T4=oct-dic; S1=ene-jun, S2=jul-dic. Cubre:
+// ordinales ("primer/segundo/tercer/cuarto trimestre"), numéricos ("trimestre 3",
+// "3er trimestre"), compactos ("T3", "Q1", "S2") y relativos ("este trimestre",
+// "trimestre pasado/anterior"). `texto` llega en minúsculas y SIN tildes. `ahora`
+// se inyecta para poder testear los relativos de forma determinista. Devuelve null
+// si no hay trimestre/semestre (el caller sigue con el resto de detección de periodo).
+export const detectarTrimestreSemestre = (
+  texto: string,
+  ahora: Date = new Date(),
+): { desde: string; hasta: string; etiqueta: string } | null => {
+  const anioTxt = texto.match(/\b(20\d{2})\b/);
+  const rango = (n: number, semestre: boolean, anio: number) => {
+    const mesIni = semestre ? (n - 1) * 6 + 1 : (n - 1) * 3 + 1;
+    const mesFin = semestre ? mesIni + 5 : mesIni + 2;
+    const ultimoDia = new Date(anio, mesFin, 0).getDate();
+    return {
+      desde: `${anio}-${String(mesIni).padStart(2, "0")}-01`,
+      hasta: `${anio}-${String(mesFin).padStart(2, "0")}-${ultimoDia}`,
+      etiqueta: `${n}º ${semestre ? "semestre" : "trimestre"} de ${anio}`,
+    };
+  };
+  // Relativos (dependen de la fecha actual) antes que los explícitos.
+  if (/\btrimestre\s+(pasado|anterior)\b/.test(texto) || /\b(el|del)\s+trimestre\s+anterior\b/.test(texto)) {
+    const actual = Math.floor(ahora.getMonth() / 3) + 1;
+    const n = actual === 1 ? 4 : actual - 1;
+    const anio = actual === 1 ? ahora.getFullYear() - 1 : ahora.getFullYear();
+    return rango(n, false, anio);
+  }
+  if (/\b(este|el)\s+trimestre\b/.test(texto) || /\btrimestre\s+actual\b/.test(texto)) {
+    return rango(Math.floor(ahora.getMonth() / 3) + 1, false, ahora.getFullYear());
+  }
+  const anio = anioTxt ? Number(anioTxt[1]) : ahora.getFullYear();
+  const ordinalDe = (s: string): number | null =>
+    /\bprimer/.test(s) ? 1 : /\bsegundo/.test(s) ? 2 : /\btercer/.test(s) ? 3 : /\bcuarto/.test(s) ? 4 : null;
+  if (/\bsemestre\b/.test(texto)) {
+    let n = ordinalDe(texto);
+    const num = texto.match(/semestre\s+([12])\b|\b([12])\s*(?:er|o|º|ª)?\s*semestre/);
+    if (!n && num) n = Number(num[1] || num[2]);
+    if (n === 1 || n === 2) return rango(n, true, anio);
+  }
+  if (/\btrimestre\b/.test(texto)) {
+    let n = ordinalDe(texto);
+    const num = texto.match(/trimestre\s+([1-4])\b|\b([1-4])\s*(?:er|o|º|ª)?\s*trimestre/);
+    if (!n && num) n = Number(num[1] || num[2]);
+    if (n && n >= 1 && n <= 4) return rango(n, false, anio);
+  }
+  const compactoTQ = texto.match(/\b[tq]\s*([1-4])\b/);
+  if (compactoTQ) return rango(Number(compactoTQ[1]), false, anio);
+  const compactoS = texto.match(/\bs\s*([12])\b/);
+  if (compactoS) return rango(Number(compactoS[1]), true, anio);
+  return null;
+};
