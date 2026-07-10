@@ -71,6 +71,7 @@ export const listarTodasCarpetas = async (usuarioId: string): Promise<{ ruta: st
     .createQueryBuilder("a")
     .select("DISTINCT a.carpeta", "carpeta")
     .where("a.propietarioId = :u", { u: usuarioId })
+    .andWhere("a.carpetaCompartidaId IS NULL") // no derivar carpetas personales de copias compartidas
     .getRawMany<{ carpeta: string }>();
 
   const set = new Set<string>();
@@ -102,6 +103,7 @@ export const carpetaExiste = async (usuarioId: string, ruta: string): Promise<bo
   const conArchivos = await AppDataSource.getRepository(Archivo)
     .createQueryBuilder("a")
     .where("a.propietarioId = :u", { u: usuarioId })
+    .andWhere("a.carpetaCompartidaId IS NULL") // solo cuenta como carpeta personal el contenido personal
     .andWhere("a.eliminadoEn IS NULL")
     .andWhere("(a.carpeta = :r OR a.carpeta LIKE :p)", { r, p: `${r}/%` })
     .getCount();
@@ -123,7 +125,12 @@ export const vaciarCarpeta = (usuarioId: string, ruta: string): Promise<{ borrad
     const query = AppDataSource.getRepository(Archivo)
       .createQueryBuilder()
       .softDelete()
-      .where("propietarioId = :u", { u: usuarioId });
+      .where("propietarioId = :u", { u: usuarioId })
+      // Nunca tocar copias que viven en carpetas compartidas: aunque el archivo
+      // conserve `propietario` (autor) y una `carpeta` que coincida con la ruta
+      // personal, es contenido compartido y no debe caer en operaciones del
+      // espacio personal (si no, borrar/mover la carpeta personal lo arrastraría).
+      .andWhere("carpetaCompartidaId IS NULL");
     if (r === "/") {
       query.andWhere("carpeta = '/'");
     } else {
@@ -161,6 +168,7 @@ export const eliminarCarpetaConContenido = (
       .createQueryBuilder()
       .softDelete()
       .where("propietarioId = :u", { u: usuarioId })
+      .andWhere("carpetaCompartidaId IS NULL") // no arrastrar copias compartidas
       .andWhere("(carpeta = :r OR carpeta LIKE :p)", { r, p: `${r}/%` })
       .execute();
     await eliminarCarpeta(usuarioId, r);
@@ -178,6 +186,7 @@ export const vaciarTodo = (
       .createQueryBuilder()
       .softDelete()
       .where("propietarioId = :u", { u: usuarioId })
+      .andWhere("carpetaCompartidaId IS NULL") // no vaciar copias compartidas
       .andWhere("eliminadoEn IS NULL")
       .execute();
     const resCarpetas = await repo()
@@ -203,6 +212,7 @@ export const eliminarTodasCarpetas = (
       .createQueryBuilder()
       .softDelete()
       .where("propietarioId = :u", { u: usuarioId })
+      .andWhere("carpetaCompartidaId IS NULL") // no arrastrar copias compartidas
       .andWhere("eliminadoEn IS NULL")
       .andWhere("carpeta <> '/'")
       .execute();
@@ -235,6 +245,7 @@ export const moverCarpetaConContenido = (
     const archivos = await archivosRepo
       .createQueryBuilder("a")
       .where("a.propietarioId = :u", { u: usuarioId })
+      .andWhere("a.carpetaCompartidaId IS NULL") // no re-prefijar copias compartidas
       .andWhere("(a.carpeta = :o OR a.carpeta LIKE :p)", { o, p: `${o}/%` })
       .getMany();
     for (const a of archivos) {
@@ -265,6 +276,7 @@ export const copiarCarpetaConContenido = async (
   const archivos = await archivosRepo
     .createQueryBuilder("a")
     .where("a.propietarioId = :u", { u: usuarioId })
+    .andWhere("a.carpetaCompartidaId IS NULL") // no copiar copias compartidas como personales
     .andWhere("(a.carpeta = :o OR a.carpeta LIKE :p)", { o, p: `${o}/%` })
     .getMany();
   for (const a of archivos) {

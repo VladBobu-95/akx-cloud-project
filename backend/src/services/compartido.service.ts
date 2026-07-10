@@ -609,12 +609,37 @@ export const copiarArchivoCompartido = async (
   }
 };
 
+// Devuelve un nombre PERSONAL libre en `carpeta`: el deseado tal cual si no
+// colisiona; si ya hay un archivo con ese nombre en esa carpeta del usuario, añade
+// " (copia)", " (copia 2)"… (misma convención que `copiarArchivo` del explorador).
+const nombrePersonalUnico = async (
+  usuarioId: string,
+  carpeta: string,
+  nombreDeseado: string,
+): Promise<string> => {
+  const existe = (nombre: string) =>
+    archivoRepo().findOne({
+      where: { nombre, carpeta, propietario: { id: usuarioId }, carpetaCompartidaId: IsNull() },
+    });
+  if (!(await existe(nombreDeseado))) return nombreDeseado;
+  const punto = nombreDeseado.lastIndexOf(".");
+  const base = punto > 0 ? nombreDeseado.slice(0, punto) : nombreDeseado;
+  const ext = punto > 0 ? nombreDeseado.slice(punto) : "";
+  let intento = 1;
+  let candidato = `${base} (copia)${ext}`;
+  while (await existe(candidato)) {
+    intento++;
+    candidato = `${base} (copia ${intento})${ext}`;
+  }
+  return candidato;
+};
+
 // Copia un archivo compartido al espacio PERSONAL de quien la pide (fuera de la
-// carpeta compartida). El original PERMANECE en compartido. Se comporta como una
-// subida propia: nombre EXACTO (sin "(copia)"), dedup por hash con lo que ya tienes
-// en personal, y auto-escaneo de factura si procede (la analítica de facturas es
-// personal, así que ahora sí se atribuye a este usuario). Reutiliza el binario y los
-// fragmentos RAG ya calculados del compartido: no re-OCR ni re-embeddings.
+// carpeta compartida). El original PERMANECE en compartido. Copia SIEMPRE (no
+// deduplica): conserva el nombre exacto y solo añade "(copia)" si ya existe uno con
+// ese nombre en la carpeta destino, y auto-escaneo de factura si procede (la
+// analítica de facturas es personal, así que ahora sí se atribuye a este usuario).
+// Reutiliza el binario y los fragmentos RAG ya calculados: no re-OCR ni re-embeddings.
 export const copiarCompartidoAPersonal = async (
   archivoId: string,
   usuarioId: string,
@@ -622,24 +647,15 @@ export const copiarCompartidoAPersonal = async (
 ): Promise<{ archivo: Archivo; duplicado: boolean }> => {
   const original = await cargarCompartidoConAcceso(archivoId, usuarioId);
 
-  // Dedup por hash contra tus archivos PERSONALES vivos. El filtro
-  // carpetaCompartidaId IS NULL es imprescindible: sin él, si quien copia es el
-  // mismo que subió el compartido, el mismo hash + propietario casaría con el
-  // propio archivo compartido y "reutilizaría" ese en vez de crear la copia personal.
-  if (original.hashSha256) {
-    const yaExiste = await archivoRepo().findOne({
-      where: {
-        propietario: { id: usuarioId },
-        hashSha256: original.hashSha256,
-        eliminadoEn: IsNull(),
-        carpetaCompartidaId: IsNull(),
-      },
-    });
-    if (yaExiste) return { archivo: yaExiste, duplicado: true };
-  }
-
   // Carpeta y clave con el formato PERSONAL (${usuarioId}/...), no el de compartido.
   const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+
+  // Copiar SIEMPRE crea una copia nueva (no se deduplica por hash): si ya hay un
+  // archivo con ese nombre en la carpeta destino, se añade " (copia)", " (copia 2)"…
+  // igual que el copiar/pegar del explorador (`copiarArchivo`). Así copiar una
+  // carpeta compartida entera puebla el destino aunque ya tengas ese contenido.
+  const nombreFinal = await nombrePersonalUnico(usuarioId, carpetaFinal, original.nombre);
+
   const carpetaLimpia = carpetaFinal === "/" ? "raiz" : carpetaFinal.slice(1);
   const nuevaClave = `${usuarioId}/${carpetaLimpia}/${randomUUID()}`;
 
@@ -650,7 +666,7 @@ export const copiarCompartidoAPersonal = async (
   );
 
   const copia = archivoRepo().create({
-    nombre: original.nombre, // nombre EXACTO, sin sufijo "(copia)"
+    nombre: nombreFinal, // exacto, con sufijo "(copia)" solo si ya existe en el destino
     carpeta: carpetaFinal,
     mimeType: original.mimeType,
     tamanoBytes: original.tamanoBytes,
