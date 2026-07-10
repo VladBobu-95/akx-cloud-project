@@ -3226,6 +3226,16 @@ export const chatear = async (
   // factura CONCRETA (ej. "resumen de factura_03"), ya cubierta por obtener_factura.
   const tieneResumen = puedeFacturas && /\bresumen(es)?\b/.test(msgSinTildes);
   const nombraFacturaConcreta = /\bfacturas?[\d_-]/.test(msgSinTildes);
+  // Un token como "2026-40892.pdf" o "2026-40892" es un NOMBRE DE ARCHIVO /
+  // referencia, no un periodo: contiene un año (que periodoDelMensaje leería como
+  // "2026") pero pegado a una extensión o a más dígitos. El botón "📄 Resumen" de
+  // las tablas del chat manda justo "resumen <archivo>", así que sin esto el
+  // resumen de una factura cuyo nombre lleva el año (ej. "2026-40892.pdf") caía en
+  // el resumen combinado de TODO el año en vez de en su propio resumen. Lo resuelve
+  // el pre-flight de "resumen de <archivo concreto>" de más abajo.
+  const nombreResumenEsArchivo =
+    !!nombreResumen &&
+    (/\.[a-z0-9]{1,5}$/i.test(nombreResumen) || /\b20\d{2}[-/]\d/.test(nombreResumen));
   const perResumen = periodoDelMensaje();
   const filtroResumen: FiltroFacturas = perResumen.desde
     ? { desde: perResumen.desde, hasta: perResumen.hasta }
@@ -3263,7 +3273,8 @@ export const chatear = async (
   const esResumenCombinado =
     tieneResumen &&
     !nombraFacturaConcreta &&
-    (/\b(de\s+todo|general)\b/.test(msgSinTildes) || !!perResumen.desde);
+    (/\b(de\s+todo|general)\b/.test(msgSinTildes) ||
+      (!!perResumen.desde && !nombreResumenEsArchivo));
   if (esResumenCombinado) {
     const { md, desconocidas } = await generarResumenCombinadoMd(
       usuarioId,
