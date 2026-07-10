@@ -609,18 +609,13 @@ export const copiarArchivoCompartido = async (
   }
 };
 
-// Devuelve un nombre PERSONAL libre en `carpeta`: el deseado tal cual si no
-// colisiona; si ya hay un archivo con ese nombre en esa carpeta del usuario, añade
+// Núcleo del sufijo "(copia)": dado un nombre deseado y un predicado de existencia
+// en el destino, devuelve el nombre libre — el exacto si no choca; si no, añade
 // " (copia)", " (copia 2)"… (misma convención que `copiarArchivo` del explorador).
-const nombrePersonalUnico = async (
-  usuarioId: string,
-  carpeta: string,
+const nombreLibre = async (
   nombreDeseado: string,
+  existe: (nombre: string) => Promise<Archivo | null>,
 ): Promise<string> => {
-  const existe = (nombre: string) =>
-    archivoRepo().findOne({
-      where: { nombre, carpeta, propietario: { id: usuarioId }, carpetaCompartidaId: IsNull() },
-    });
   if (!(await existe(nombreDeseado))) return nombreDeseado;
   const punto = nombreDeseado.lastIndexOf(".");
   const base = punto > 0 ? nombreDeseado.slice(0, punto) : nombreDeseado;
@@ -633,6 +628,20 @@ const nombrePersonalUnico = async (
   }
   return candidato;
 };
+
+// Nombre libre en la CARPETA PERSONAL destino del usuario.
+const nombrePersonalUnico = (usuarioId: string, carpeta: string, nombreDeseado: string) =>
+  nombreLibre(nombreDeseado, (nombre) =>
+    archivoRepo().findOne({
+      where: { nombre, carpeta, propietario: { id: usuarioId }, carpetaCompartidaId: IsNull() },
+    }),
+  );
+
+// Nombre libre en la CARPETA COMPARTIDA destino (almacenamiento único por rol).
+const nombreCompartidoUnico = (carpetaCompartidaId: string, carpeta: string, nombreDeseado: string) =>
+  nombreLibre(nombreDeseado, (nombre) =>
+    archivoRepo().findOne({ where: { nombre, carpeta, carpetaCompartidaId } }),
+  );
 
 // Copia un archivo compartido al espacio PERSONAL de quien la pide (fuera de la
 // carpeta compartida). El original PERMANECE en compartido. Copia SIEMPRE (no
@@ -811,30 +820,14 @@ export const moverCompartidoAPersonal = async (
   const ccOrigen = original.carpetaCompartidaId!;
   const rutaAntes = original.carpeta;
 
-  // Dedup por hash contra tus archivos personales vivos.
-  if (original.hashSha256) {
-    const yaExiste = await archivoRepo().findOne({
-      where: {
-        propietario: { id: usuarioId },
-        hashSha256: original.hashSha256,
-        eliminadoEn: IsNull(),
-        carpetaCompartidaId: IsNull(),
-      },
-    });
-    if (yaExiste) {
-      // Ya lo tienes en personal → "mover" = quitarlo del compartido (afecta a todos).
-      await minioClient.removeObject(env.MINIO_BUCKET, original.claveMinio).catch(() => {});
-      await archivoRepo().delete(original.id); // fragmentos compartidos por CASCADE
-      await registrarEvento(ccOrigen, usuarioId, "eliminar", {
-        objeto: original.nombre,
-        ruta: rutaAntes,
-        detalle: "movido a Mis archivos (ya lo tenías)",
-      });
-      return { archivo: yaExiste, duplicado: true };
-    }
-  }
-
+  // Mover reasigna SIEMPRE el archivo en sitio (misma fila, misma claveMinio): sale
+  // del compartido y pasa a tu carpeta personal destino. No se deduplica por hash —
+  // así el archivo aterriza en la carpeta elegida aunque ya tengas ese contenido en
+  // otra parte, y NUNCA se borra contenido compartido salvo el que estás moviendo
+  // (antes, si ya lo tenías en personal, se borraba el compartido y la carpeta
+  // destino quedaba vacía). Si el nombre choca en el destino se añade "(copia)".
   const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  original.nombre = await nombrePersonalUnico(usuarioId, carpetaFinal, original.nombre);
   original.carpetaCompartidaId = null;
   original.carpeta = carpetaFinal;
   original.propietario = { id: usuarioId } as Usuario;
@@ -878,13 +871,11 @@ export const copiarPersonalACompartido = async (
   await verificarAcceso(usuarioId, carpetaCompartidaId);
   const original = await cargarPersonalPropio(archivoId, usuarioId);
 
-  // Dedup por (carpeta compartida, hash): si ya está, devolvemos el existente.
-  if (original.hashSha256) {
-    const existente = await buscarCompartidoPorHash(carpetaCompartidaId, original.hashSha256);
-    if (existente) return { archivo: existente, duplicado: true };
-  }
-
   const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  // Copiar SIEMPRE crea una copia (no se deduplica por hash): si ya hay un archivo
+  // con ese nombre en la carpeta destino, se añade "(copia)"/"(copia N)", igual que
+  // el resto de copias del explorador.
+  const nombreFinal = await nombreCompartidoUnico(carpetaCompartidaId, carpetaFinal, original.nombre);
   const carpetaLimpia = carpetaFinal === "/" ? "raiz" : carpetaFinal.slice(1);
   const nuevaClave = `compartido/${carpetaCompartidaId}/${carpetaLimpia}/${randomUUID()}`;
 
@@ -895,7 +886,7 @@ export const copiarPersonalACompartido = async (
   );
 
   const copia = archivoRepo().create({
-    nombre: original.nombre, // nombre EXACTO (dedup por hash cubre las repeticiones)
+    nombre: nombreFinal, // exacto, con "(copia)" solo si ya existe ese nombre en el destino
     carpeta: carpetaFinal,
     mimeType: original.mimeType,
     tamanoBytes: original.tamanoBytes,
@@ -1025,13 +1016,10 @@ export const copiarCompartidoACompartido = async (
     return { archivo, duplicado: false };
   }
 
-  // Dedup por (carpeta compartida destino, hash): si ya está, devolvemos el existente.
-  if (original.hashSha256) {
-    const existente = await buscarCompartidoPorHash(ccDestinoId, original.hashSha256);
-    if (existente) return { archivo: existente, duplicado: true };
-  }
-
   const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  // Copiar SIEMPRE crea una copia (no se deduplica por hash): "(copia)"/"(copia N)"
+  // si el nombre ya existe en la carpeta compartida destino.
+  const nombreFinal = await nombreCompartidoUnico(ccDestinoId, carpetaFinal, original.nombre);
   const carpetaLimpia = carpetaFinal === "/" ? "raiz" : carpetaFinal.slice(1);
   const nuevaClave = `compartido/${ccDestinoId}/${carpetaLimpia}/${randomUUID()}`;
 
@@ -1042,7 +1030,7 @@ export const copiarCompartidoACompartido = async (
   );
 
   const copia = archivoRepo().create({
-    nombre: original.nombre, // nombre EXACTO (dedup por hash cubre las repeticiones)
+    nombre: nombreFinal, // exacto, con "(copia)" solo si ya existe ese nombre en el destino
     carpeta: carpetaFinal,
     mimeType: original.mimeType,
     tamanoBytes: original.tamanoBytes,
