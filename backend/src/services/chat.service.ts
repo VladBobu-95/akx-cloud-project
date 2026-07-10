@@ -64,7 +64,6 @@ import { guardarPendiente, tomarPendiente } from "./chatPendientes.service";
 // Capa de detección de intenciones (pura y testeable, #7).
 import {
   quitarTildes,
-  distanciaDamerau,
   contieneFactura,
   VERBO_BORRAR,
   VERBO_RESTAURAR,

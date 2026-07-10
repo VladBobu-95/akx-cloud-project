@@ -193,9 +193,6 @@ export const carpetasAccesibles = async (usuarioId: string): Promise<CarpetaComp
     .getMany();
 };
 
-export const idsCompartidasAccesibles = async (usuarioId: string): Promise<string[]> =>
-  (await carpetasAccesibles(usuarioId)).map((c) => c.id);
-
 // Resumen por carpeta compartida para el listado de "Compartido": tamaño total
 // (suma de bytes de sus archivos) y última actualización (subida más reciente).
 // Una sola query agregada para todas las carpetas dadas.
@@ -922,6 +919,153 @@ export const copiarPersonalACompartido = async (
     objeto: guardado.nombre,
     ruta: carpetaFinal,
     detalle: "desde Mis archivos",
+  });
+
+  return { archivo: guardado, duplicado: false };
+};
+
+// ===================== MOVER/COPIAR ENTRE CARPETAS COMPARTIDAS =====================
+// Reubicar un archivo de una carpeta compartida a OTRA (ambas accesibles por el
+// usuario). Mover reasigna en sitio (misma claveMinio, sin re-subir el binario) y lo
+// saca del compartido de origen para TODOS los del rol; copiar duplica el binario y
+// deja el original. Dedup por (carpeta compartida destino, hash).
+
+// MOVER compartido → compartido: cambia el `carpetaCompartidaId` del archivo (y sus
+// fragmentos RAG) al destino. Desaparece del compartido de origen para todos.
+export const moverCompartidoACompartido = async (
+  archivoId: string,
+  usuarioId: string,
+  ccDestinoId: string,
+  carpetaDestino?: string,
+): Promise<{ archivo: Archivo; duplicado: boolean }> => {
+  const original = await cargarCompartidoConAcceso(archivoId, usuarioId);
+  const ccOrigen = original.carpetaCompartidaId!;
+  await verificarAcceso(usuarioId, ccDestinoId);
+  // Mover dentro de la MISMA carpeta compartida = reubicar en su árbol de subcarpetas.
+  if (ccDestinoId === ccOrigen) {
+    const archivo = await actualizarArchivoCompartido(archivoId, usuarioId, { carpeta: carpetaDestino });
+    return { archivo, duplicado: false };
+  }
+  const rutaAntes = original.carpeta;
+
+  // Dedup por (carpeta compartida destino, hash): si ese contenido ya está en el
+  // destino, "mover" = quitarlo del origen y quedarnos con el existente.
+  if (original.hashSha256) {
+    const existente = await buscarCompartidoPorHash(ccDestinoId, original.hashSha256);
+    if (existente) {
+      await minioClient.removeObject(env.MINIO_BUCKET, original.claveMinio).catch(() => {});
+      await archivoRepo().delete(original.id); // fragmentos por CASCADE
+      await registrarEvento(ccOrigen, usuarioId, "eliminar", {
+        objeto: original.nombre,
+        ruta: rutaAntes,
+        detalle: "movido a otra carpeta compartida (ya existía)",
+      });
+      return { archivo: existente, duplicado: true };
+    }
+  }
+
+  const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  original.carpetaCompartidaId = ccDestinoId;
+  original.carpeta = carpetaFinal;
+  const guardado = await archivoRepo().save(original);
+
+  // Reasignar los fragmentos RAG al espacio compartido destino (búsqueda por rol).
+  await AppDataSource.query(
+    `UPDATE "fragmentos" SET "carpetaCompartidaId" = $1 WHERE "archivoId" = $2`,
+    [ccDestinoId, original.id],
+  ).catch((err) => console.error(`[mover] fragmentos de "${original.nombre}":`, err));
+
+  if (carpetaFinal !== "/") {
+    await crearSubcarpetaCompartida(usuarioId, ccDestinoId, carpetaFinal, false).catch(() => {});
+  }
+
+  await registrarEvento(ccOrigen, usuarioId, "eliminar", {
+    objeto: guardado.nombre,
+    ruta: rutaAntes,
+    detalle: "movido a otra carpeta compartida",
+  });
+  await registrarEvento(ccDestinoId, usuarioId, "subir", {
+    objeto: guardado.nombre,
+    ruta: carpetaFinal,
+    detalle: "movido desde otra carpeta compartida",
+  });
+
+  return { archivo: guardado, duplicado: false };
+};
+
+// COPIAR compartido → compartido: duplica el binario a una clave nueva del destino.
+// El original permanece en su compartido. Reutiliza texto + fragmentos RAG.
+export const copiarCompartidoACompartido = async (
+  archivoId: string,
+  usuarioId: string,
+  ccDestinoId: string,
+  carpetaDestino?: string,
+): Promise<{ archivo: Archivo; duplicado: boolean }> => {
+  const original = await cargarCompartidoConAcceso(archivoId, usuarioId);
+  await verificarAcceso(usuarioId, ccDestinoId);
+  // Copiar dentro de la MISMA carpeta compartida = duplicar en su árbol.
+  if (ccDestinoId === original.carpetaCompartidaId) {
+    const archivo = await copiarArchivoCompartido(archivoId, usuarioId, { carpeta: carpetaDestino });
+    return { archivo, duplicado: false };
+  }
+
+  // Dedup por (carpeta compartida destino, hash): si ya está, devolvemos el existente.
+  if (original.hashSha256) {
+    const existente = await buscarCompartidoPorHash(ccDestinoId, original.hashSha256);
+    if (existente) return { archivo: existente, duplicado: true };
+  }
+
+  const carpetaFinal = normalizarCarpeta(carpetaDestino ?? "/");
+  const carpetaLimpia = carpetaFinal === "/" ? "raiz" : carpetaFinal.slice(1);
+  const nuevaClave = `compartido/${ccDestinoId}/${carpetaLimpia}/${randomUUID()}`;
+
+  await minioClient.copyObject(
+    env.MINIO_BUCKET,
+    nuevaClave,
+    `/${env.MINIO_BUCKET}/${original.claveMinio}`,
+  );
+
+  const copia = archivoRepo().create({
+    nombre: original.nombre, // nombre EXACTO (dedup por hash cubre las repeticiones)
+    carpeta: carpetaFinal,
+    mimeType: original.mimeType,
+    tamanoBytes: original.tamanoBytes,
+    claveMinio: nuevaClave,
+    hashSha256: original.hashSha256,
+    textoExtraido: original.textoExtraido,
+    propietario: { id: usuarioId } as Usuario, // autor/auditoría
+    carpetaCompartidaId: ccDestinoId,
+    estadoIndexado: "indexado", // reutilizamos texto + fragmentos ya calculados
+    indexadoEn: new Date(),
+  });
+
+  let guardado: Archivo;
+  try {
+    guardado = await archivoRepo().save(copia);
+  } catch (err) {
+    await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
+    throw err;
+  }
+
+  // Fragmentos RAG copiados al espacio compartido destino (reutiliza embeddings).
+  try {
+    await AppDataSource.query(
+      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
+       SELECT $1, $2, $3, "indice", "texto", "embedding" FROM "fragmentos" WHERE "archivoId" = $4`,
+      [guardado.id, usuarioId, ccDestinoId, original.id],
+    );
+  } catch (errFrag) {
+    console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
+  }
+
+  if (carpetaFinal !== "/") {
+    await crearSubcarpetaCompartida(usuarioId, ccDestinoId, carpetaFinal, false).catch(() => {});
+  }
+
+  await registrarEvento(ccDestinoId, usuarioId, "copiar", {
+    objeto: guardado.nombre,
+    ruta: carpetaFinal,
+    detalle: "desde otra carpeta compartida",
   });
 
   return { archivo: guardado, duplicado: false };

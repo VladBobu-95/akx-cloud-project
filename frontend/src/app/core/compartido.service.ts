@@ -52,18 +52,6 @@ export class CompartidoService {
     return this.http.get<CarpetaCompartidaAccesible[]>(this.base);
   }
 
-  listarArchivos(
-    carpetaCompartidaId: string,
-    carpeta?: string,
-  ): Observable<{ archivos: Archivo[]; subcarpetas: string[] }> {
-    let params = new HttpParams();
-    if (carpeta) params = params.set('carpeta', carpeta);
-    return this.http.get<{ archivos: Archivo[]; subcarpetas: string[] }>(
-      `${this.base}/${carpetaCompartidaId}/archivos`,
-      { params },
-    );
-  }
-
   subir(carpetaCompartidaId: string, file: File, carpeta?: string): Observable<Archivo> {
     const fd = new FormData();
     fd.append('archivo', file);
@@ -184,6 +172,31 @@ export class CompartidoService {
   ): Observable<Archivo & { duplicado?: boolean }> {
     return this.http.post<Archivo & { duplicado?: boolean }>(
       `${this.base}/${carpetaCompartidaId}/copiar-desde-personal`,
+      { archivoId, carpeta: carpetaDestino },
+    );
+  }
+
+  // MUEVE un archivo de OTRA carpeta compartida a esta (`carpetaCompartidaId` =
+  // destino; desaparece del compartido de origen para todos los del rol).
+  moverEntreCompartidas(
+    carpetaCompartidaId: string,
+    archivoId: string,
+    carpetaDestino: string,
+  ): Observable<Archivo & { duplicado?: boolean }> {
+    return this.http.post<Archivo & { duplicado?: boolean }>(
+      `${this.base}/${carpetaCompartidaId}/mover-desde-compartido`,
+      { archivoId, carpeta: carpetaDestino },
+    );
+  }
+
+  // COPIA un archivo de OTRA carpeta compartida a esta (el original permanece).
+  copiarEntreCompartidas(
+    carpetaCompartidaId: string,
+    archivoId: string,
+    carpetaDestino: string,
+  ): Observable<Archivo & { duplicado?: boolean }> {
+    return this.http.post<Archivo & { duplicado?: boolean }>(
+      `${this.base}/${carpetaCompartidaId}/copiar-desde-compartido`,
       { archivoId, carpeta: carpetaDestino },
     );
   }

@@ -107,8 +107,8 @@ class FuenteCompartida implements FuenteArchivos {
         [datos]="fuente()!"
         [opciones]="opciones()!"
         (totalCambio)="total.set($event)"
-        (moverAExterno)="exportarAPersonal($event, 'mover')"
-        (copiarAExterno)="exportarAPersonal($event, 'copiar')"
+        (moverAExterno)="exportarAExterno($event, 'mover')"
+        (copiarAExterno)="exportarAExterno($event, 'copiar')"
       />
     }
   `,
@@ -170,6 +170,12 @@ export class CompartidoComponent {
   abrir(c: { id: string; nombre: string }) {
     this.total.set(0);
     this.fuente.set(new FuenteCompartida(this.svc, c.id));
+    // Destinos externos de "Mover a…"/"Copiar en…": Mis archivos (id null) + las OTRAS
+    // carpetas compartidas accesibles (excluida ésta). Cada una es un destino con su
+    // ccId; solo se ofrece su raíz (sin subcarpetas, v1), como el caso personal→compartido.
+    const otras = this.carpetas()
+      .filter((cc) => cc.id !== c.id)
+      .map((cc) => ({ id: cc.id, etiqueta: cc.nombre }));
     this.opciones.set({
       etiquetaRaiz: c.nombre,
       soportaBusqueda: true, // buscador acotado a esta carpeta compartida (solo su contenido)
@@ -178,12 +184,16 @@ export class CompartidoComponent {
       mostrarEstado: false, // el estado de indexado no aporta al usuario en compartido
       etiquetaFecha: 'Última actualización',
       campoFecha: 'actualizadoEn', // mostrar la última modificación, no la subida
-      // Mover (arrastre / "Mover a…") y copiar ("Copiar en…") al espacio personal.
-      // Un único destino: Mis archivos (id null) + sus subcarpetas.
+      // Mover (arrastre / "Mover a…") y copiar ("Copiar en…") a otro espacio: Mis
+      // archivos o cualquier OTRA carpeta compartida. La zona de drop del arrastre es
+      // el toggle "Personales"; con varios destinos, soltar ahí abre un selector.
       destinoExterno: {
-        etiqueta: 'Mis archivos',
+        etiqueta: otras.length > 0 ? 'otro espacio' : 'Mis archivos',
         dropAttr: 'data-drop-personal',
-        destinos: [{ id: null, etiqueta: 'Mis archivos', carpetas: this.carpetasPersonales() }],
+        destinos: [
+          { id: null, etiqueta: 'Mis archivos', carpetas: this.carpetasPersonales() },
+          ...otras,
+        ],
       },
     });
     this.carpeta.set(c);
@@ -195,23 +205,40 @@ export class CompartidoComponent {
     this.opciones.set(null);
   }
 
-  // Mover o copiar archivos/carpetas compartidos al espacio PERSONAL (arrastre sobre
-  // "Personales", o "Mover a…"/"Copiar en…"). En 'mover' el original DESAPARECE del
-  // compartido (afecta a todos los del rol); en 'copiar' permanece. Cada archivo lleva
-  // su ruta destino ya resuelta por el explorador; las subcarpetas vacías se recrean.
-  // Dedup por hash en el backend (campo `duplicado`).
-  exportarAPersonal(pet: PeticionExportar, modo: 'mover' | 'copiar') {
-    // Carpetas vacías primero, de menos a más profundas (padres antes que hijas).
+  // Mover o copiar archivos/carpetas compartidos a otro espacio (arrastre sobre
+  // "Personales", o "Mover a…"/"Copiar en…"). El destino sale de `pet.destinoId`:
+  // null = Mis archivos (espacio personal); un ccId = OTRA carpeta compartida. En
+  // 'mover' el original DESAPARECE del compartido de origen (afecta a todos los del
+  // rol); en 'copiar' permanece. Cada archivo lleva su ruta destino ya resuelta por
+  // el explorador; las subcarpetas vacías se recrean. Dedup por hash en el backend.
+  exportarAExterno(pet: PeticionExportar, modo: 'mover' | 'copiar') {
+    const destinoId = pet.destinoId;
+    const nombre =
+      destinoId === null
+        ? 'Mis archivos'
+        : this.carpetas().find((c) => c.id === destinoId)?.nombre ?? 'la carpeta compartida';
+
+    // Crear las carpetas vacías en el destino (padres antes que hijas).
+    const crearCarpeta = (r: string) =>
+      destinoId === null ? this.archivos.crearCarpetaApi(r) : this.svc.crearCarpeta(destinoId, r);
     const crearOps = [...pet.carpetasVacias]
       .sort((a, b) => a.length - b.length)
       .map((r) =>
-        this.archivos.crearCarpetaApi(r).pipe(
+        crearCarpeta(r).pipe(
           map(() => 'carpeta' as const),
           catchError(() => of('error' as const)),
         ),
       );
-    const llamada = (id: string, carpeta: string) =>
-      modo === 'mover' ? this.svc.moverAPersonal(id, carpeta) : this.svc.copiarAPersonal(id, carpeta);
+
+    // Mover/copiar cada archivo: al espacio personal o a la otra carpeta compartida.
+    const llamada = (id: string, carpeta: string) => {
+      if (destinoId === null) {
+        return modo === 'mover' ? this.svc.moverAPersonal(id, carpeta) : this.svc.copiarAPersonal(id, carpeta);
+      }
+      return modo === 'mover'
+        ? this.svc.moverEntreCompartidas(destinoId, id, carpeta)
+        : this.svc.copiarEntreCompartidas(destinoId, id, carpeta);
+    };
     const fileOps = pet.archivos.map((a) =>
       llamada(a.id, a.carpetaDestino).pipe(
         map((res) => (res.duplicado ? ('dup' as const) : ('nuevo' as const))),
@@ -230,15 +257,17 @@ export class CompartidoComponent {
       if (fallidos > 0) {
         this.toast.error(
           nuevos + dups === 0
-            ? `No se pudo ${modo} a Mis archivos`
-            : `${nuevos} ${verbo}(s) a Mis archivos, ${fallidos} fallaron`,
+            ? `No se pudo ${modo} a ${nombre}`
+            : `${nuevos} ${verbo}(s) a ${nombre}, ${fallidos} fallaron`,
         );
       } else if (nuevos === 0 && dups > 0) {
-        this.toast.exito(dups === 1 ? 'Ya lo tenías en Mis archivos' : `${dups} ya los tenías en Mis archivos`);
+        this.toast.exito(dups === 1 ? `Ya estaba en ${nombre}` : `${dups} ya estaban en ${nombre}`);
       } else if (dups > 0) {
-        this.toast.exito(`${nuevos} ${verbo}(s) a Mis archivos; ${dups} ya los tenías`);
+        this.toast.exito(`${nuevos} ${verbo}(s) a ${nombre}; ${dups} ya estaban`);
       } else {
-        this.toast.exito(nuevos === 1 ? `${verbo[0].toUpperCase()}${verbo.slice(1)} a Mis archivos` : `${nuevos} ${verbos} a Mis archivos`);
+        this.toast.exito(
+          nuevos === 1 ? `${verbo[0].toUpperCase()}${verbo.slice(1)} a ${nombre}` : `${nuevos} ${verbos} a ${nombre}`,
+        );
       }
       // Al mover, el explorador de compartido debe refrescar (el original ya no está).
       if (modo === 'mover') this.explorador()?.recargar();

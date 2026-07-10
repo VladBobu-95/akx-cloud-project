@@ -778,7 +778,7 @@ export const escanearFactura = async (
           }) as LineaFactura,
       ),
     });
-    const guardada = await facturaRepo.save(factura); // cascade guarda las líneas
+    await facturaRepo.save(factura); // cascade guarda las líneas
     await archivoRepo.update(archivo.id, { estadoEscaneo: "escaneada" });
 
     // Aprende el CIF de la empresa por corroboración (≥2 facturas con el mismo NIF
@@ -879,20 +879,6 @@ export const encolarEscaneoManual = async (
     prioridad: P_ALTA,
     pista,
   });
-};
-
-// Auto-escaneo al subir: si el archivo parece una factura, intenta escanearlo en
-// segundo plano. Solo persiste si la extracción tiene pinta de factura (soloSiFactura).
-// Pensado para llamarse "fire-and-forget"; los errores se logean, no se propagan.
-export const autoEscanearArchivo = async (
-  usuarioId: string,
-  archivo: Archivo,
-): Promise<void> => {
-  if (!esArchivoFactura(archivo)) return;
-  const r = await escanearFactura(usuarioId, archivo.id, { soloSiFactura: true });
-  if (!r.omitida) {
-    console.log(`[facturas] Auto-escaneada "${archivo.nombre}" (${r.lineas} línea/s)`);
-  }
 };
 
 const resumenFacturaMd = (d: DatosFactura): string => {
@@ -1636,7 +1622,7 @@ export const asegurarFacturasEscaneadas = async (
 // la papelera — antes este conteo iba por su cuenta con un COUNT(*) directo
 // sobre "facturas" sin ese JOIN/exclusión, así que una factura borrada (o
 // restaurada) no movía nunca este número.
-export type ResumenMoneda = {
+type ResumenMoneda = {
   moneda: string;
   numFacturas: number;
   subtotal: number;
@@ -1647,7 +1633,7 @@ export type ResumenMoneda = {
   clientes: { cliente: string; moneda: string; numFacturas: number; importe: number }[];
 };
 
-export const resumenVentas = async (
+const resumenVentas = async (
   usuarioId: string,
   filtro: FiltroFacturas = {},
 ): Promise<{

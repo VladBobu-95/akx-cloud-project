@@ -162,7 +162,7 @@ Ya **no** hay modal obligatorio al subir. Con la cascada, una foto sin texto se 
 
 ## Auto-escaneo de facturas al subir
 
-Al subir PDF/imagen, además del RAG, `ctrlSubir` dispara `autoEscanearArchivo` en segundo plano:
+Al subir PDF/imagen, además del RAG, `ctrlSubir` encola una tarea durable `autoescanear` (`tareas.service.ts`) que se procesa en segundo plano:
 1. Si es PDF/imagen, se escanea con `escanearFactura(..., { soloSiFactura: true })`.
 2. Guardia: solo persiste la factura si la extracción parece factura (líneas o importes > 0).
 

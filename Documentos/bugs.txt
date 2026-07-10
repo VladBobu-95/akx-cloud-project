@@ -1,5 +1,3 @@
-- si le doy resumen a la devolucion de 00 me da el resumen total
-- borrar el cambio hecho en facturas_service
 - mover de compartido a otra carpeta compartida
 - pasa imagenes/ pasa las imagenes que tengo 
 - Paginacion registro

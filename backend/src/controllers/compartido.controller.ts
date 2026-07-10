@@ -25,6 +25,8 @@ import {
   moverCompartidoAPersonal,
   moverPersonalACompartido,
   copiarPersonalACompartido,
+  moverCompartidoACompartido,
+  copiarCompartidoACompartido,
   prepararDescargaCarpetaCompartida,
   schemaCrearCarpetaCompartida,
   schemaActualizarCarpetaCompartida,
@@ -329,6 +331,46 @@ export const ctrlCopiarDesdePersonal = async (req: Request, res: Response, next:
     if (!archivoId) throw new AppError(400, "Falta el archivoId");
     const carpeta = req.body?.carpeta !== undefined ? String(req.body.carpeta) : undefined;
     const { archivo, duplicado } = await copiarPersonalACompartido(
+      archivoId,
+      req.usuario!.id,
+      String(req.params.id),
+      carpeta,
+    );
+    res.status(duplicado ? 200 : 201).json({ ...archivo, duplicado });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /:id/mover-desde-compartido  { archivoId, carpeta? }
+// MUEVE un archivo de OTRA carpeta compartida a esta (`:id` = destino). Desaparece
+// del compartido de origen para todos los del rol. duplicado=true si ya existía aquí.
+export const ctrlMoverDesdeCompartido = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const archivoId = String(req.body?.archivoId ?? "");
+    if (!archivoId) throw new AppError(400, "Falta el archivoId");
+    const carpeta = req.body?.carpeta !== undefined ? String(req.body.carpeta) : undefined;
+    const { archivo, duplicado } = await moverCompartidoACompartido(
+      archivoId,
+      req.usuario!.id,
+      String(req.params.id),
+      carpeta,
+    );
+    res.status(200).json({ ...archivo, duplicado });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /:id/copiar-desde-compartido  { archivoId, carpeta? }
+// COPIA un archivo de OTRA carpeta compartida a esta (`:id` = destino). El original
+// permanece en su compartido. duplicado=true si ya existía aquí (dedup por hash).
+export const ctrlCopiarDesdeCompartido = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const archivoId = String(req.body?.archivoId ?? "");
+    if (!archivoId) throw new AppError(400, "Falta el archivoId");
+    const carpeta = req.body?.carpeta !== undefined ? String(req.body.carpeta) : undefined;
+    const { archivo, duplicado } = await copiarCompartidoACompartido(
       archivoId,
       req.usuario!.id,
       String(req.params.id),

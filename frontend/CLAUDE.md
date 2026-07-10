@@ -39,37 +39,51 @@ Para que funcione hay que tener el backend corriendo (`docker compose up -d` en 
 
 ## Estructura
 
+Los componentes tienen `.ts` + `.html` + `.scss` separados (salvo los pequeños de
+`core/`/`shared/`, que son inline). Todo standalone, sin NgModule.
+
 ```
 src/
   app/
     core/
-      archivos.service.ts   ← CRUD archivos, carpetas, búsqueda semántica, escanear factura, describir imagen
-      auth.service.ts       ← Login, registro, token en localStorage, signal usuario
-      auth.guard.ts         ← Redirige a /login si no hay token
-      auth.interceptor.ts   ← Añade Authorization: Bearer <token> a todas las peticiones
-      chat.service.ts       ← Envía mensajes al bot, historial en signal + localStorage
-      models.ts             ← Interfaces: Usuario, Archivo, ListaArchivos, ResultadoBusqueda
-      theme.service.ts      ← Toggle dark mode (clase body.dark)
-      toast.service.ts      ← Notificaciones toast (signal de cola)
+      archivos.service.ts    ← CRUD archivos, carpetas, búsqueda semántica, escanear factura, describir imagen
+      compartido.service.ts  ← Carpetas compartidas por rol (uso miembro + gestión admin + logs)
+      facturas.service.ts    ← Listado/detalle/edición de facturas, reclasificar
+      equipo.service.ts      ← Admin: miembros, roles configurables, datos de empresa (CIF)
+      plataforma.service.ts  ← Superadmin: alta/edición/borrado de empresas
+      auth.service.ts        ← Login (sin registro público), token en localStorage, signals usuario + capacidades
+      auth.guard.ts          ← Redirige a /login si no hay token
+      admin.guard.ts / superadmin.guard.ts ← Gatean /equipo y /plataforma por rol
+      chat.guard.ts          ← Bloquea /inicio si el rol no tiene la capacidad `chat`
+      auth.interceptor.ts    ← Añade Authorization: Bearer <token> a todas las peticiones
+      chat.service.ts        ← Envía mensajes al bot, historial en signal + localStorage
+      models.ts              ← Interfaces: Usuario, Empresa, Rol, CarpetaCompartida, Miembro, Archivo, FilaFactura, FacturaDetalle...
+      theme.service.ts       ← Toggle dark mode (clase body.dark)
+      toast.service.ts       ← Notificaciones toast (signal de cola)
     layout/
-      shell.ts              ← Navbar (logo + nav + avatar + cerrar sesión)
+      shell.ts               ← Navbar (logo + nav según rol + avatar + cerrar sesión)
     pages/
-      login/login.ts        ← Login + registro en una sola vista (tabs)
-      inicio/inicio.ts      ← Chat con el asistente IA
-      archivos/archivos.ts  ← Explorador de archivos (tabla + carpetas + drag&drop)
-      papelera/papelera.ts  ← Papelera con restaurar/borrar permanente/vaciar
-      perfil/perfil.ts      ← Editar nombre y avatar
+      login/login.ts         ← Iniciar sesión (no hay auto-registro)
+      inicio/inicio.ts       ← Chat con el asistente IA
+      archivos/              ← Explorador: archivos.ts (toggle Personales/Compartido) + explorador.ts (árbol/tabla/drag&drop, reutilizado) + compartido.ts + fuente.ts (adaptador de datos) + rutas.util.ts
+      facturas/facturas.ts   ← Tabla venta/compra/sin clasificar + editor de factura
+      papelera/papelera.ts   ← Papelera con restaurar/borrar permanente/vaciar
+      perfil/perfil.ts       ← Editar nombre, avatar y (admin) CIF de la empresa
+      equipo/equipo.ts       ← Admin: miembros, roles, carpetas compartidas + registro de actividad
+      plataforma/plataforma.ts ← Superadmin: gestión de empresas
     shared/
-      file-size.pipe.ts     ← Formatea bytes a KB/MB/GB
-      toasts.component.ts   ← Renderiza la cola de toasts
-      errores.ts            ← mensajeError(err): extrae string legible de HttpErrorResponse
-    app.ts                  ← Componente raíz
-    app.html                ← Template raíz (router-outlet + toasts)
-    app.routes.ts           ← Rutas: /login, /inicio, /archivos, /papelera, /perfil
-    app.config.ts           ← provideRouter, provideHttpClient con interceptor
+      file-size.pipe.ts      ← Formatea bytes a KB/MB/GB
+      tipos-archivo.ts       ← Extensiones/tamaño permitidos (criba en cliente antes de subir)
+      password-input.component.ts ← Input de contraseña con toggle (ControlValueAccessor)
+      toasts.component.ts    ← Renderiza la cola de toasts
+      errores.ts             ← mensajeError(err): extrae string legible de HttpErrorResponse
+    app.ts                   ← Componente raíz
+    app.html                 ← Template raíz (router-outlet + toasts)
+    app.routes.ts            ← Rutas: /login, /inicio, /archivos, /facturas, /papelera, /perfil, /equipo, /plataforma
+    app.config.ts            ← provideRouter, provideHttpClient con interceptor
   environments/
-    environment.ts          ← { apiUrl: '' } (vacío → nginx proxy en Docker; localhost:3000 en dev)
-  styles.scss               ← Tema global: CSS vars verde/blanco + modo oscuro
+    environment.ts           ← { apiUrl: '' } (vacío → nginx proxy en Docker; localhost:3000 en dev)
+  styles.scss                ← Tema global: CSS vars verde/blanco + modo oscuro
   index.html
 ```
 
@@ -78,8 +92,9 @@ src/
 ## Páginas principales
 
 ### `/login`
-- Tabs "Iniciar sesión" / "Crear cuenta" en un único componente
-- Toggle para mostrar/ocultar contraseña
+- Solo iniciar sesión: **no hay auto-registro** (multi-tenant; el superadmin crea empresas
+  y su admin, el admin crea miembros)
+- Toggle para mostrar/ocultar contraseña (`password-input.component`)
 
 ### `/inicio` — Chat
 - Historial de mensajes en signal, persistido en `localStorage` (clave `akx_chat`)
@@ -141,8 +156,14 @@ Componente más complejo. Características:
 
 ### `AuthService`
 - Token en `localStorage` (clave `akx_token`)
-- `usuario` signal (computed del token decodificado)
-- `login()`, `registrar()`, `logout()` (borra token + navega a `/login`)
+- `usuario` signal (del token decodificado) + capacidades del rol (para ocultar lo que no puede hacer)
+- `login()`, `logout()` (borra token + navega a `/login`) — **no hay `registrar()`**
+- `puedeChat()` y demás helpers de capacidad; refresca el perfil (`GET /api/auth/perfil`) al arrancar
+
+### Otros servicios
+- `CompartidoService` — carpetas compartidas: uso (miembro), gestión (admin) y registro de actividad (`logs`)
+- `FacturasService` — listado paginado, detalle, edición manual y reclasificar venta/compra
+- `EquipoService` (admin) / `PlataformaService` (superadmin) — gestión de equipo y de empresas
 
 ---
 
@@ -175,6 +196,8 @@ Clases CSS globales (definidas en cada componente vía `styles: [...]`):
 
 - **No hay NgRx ni stores**: el estado se gestiona con signals de Angular 22.
 - **Standalone components**: todos los componentes usan `imports: [...]` en lugar de NgModule.
-- **El chat no muestra `acciones`**: el array de acciones que devuelve la API (ej: "Factura escaneada (FAC-001): 3 líneas") no se renderiza en la UI actual. Si se quiere mostrar, hay que añadirlo en `inicio.ts`.
+- **El chat sí muestra `acciones`**: `inicio.ts` concatena el array `acciones` de la API al texto de la respuesta como líneas `✓ ...`.
+- **Consciente del rol (RBAC)**: las capacidades del usuario (del login / `GET /api/auth/perfil`) ocultan lo que su rol no puede hacer; el `chatGuard` bloquea `/inicio` sin la capacidad `chat`; `adminGuard`/`superadminGuard` gatean `/equipo` y `/plataforma`.
+- **El explorador es un único componente reutilizado** (`explorador.ts`): sirve tanto "Mis archivos" (personal) como cada carpeta compartida, cambiando solo la fuente de datos (`fuente.ts`).
 - **archivos.ts no usa paginación**: carga todos los archivos en memoria para construir el árbol de carpetas localmente. Si un usuario tiene miles de archivos, podría ser lento.
 - **Subida de archivos**: un archivo a la vez por petición; si se seleccionan varios, se hacen peticiones paralelas con `forkJoin`.
