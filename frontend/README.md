@@ -20,6 +20,12 @@ Requiere el backend en `http://localhost:3000` (`docker compose up -d` desde la 
 monorepo). El dev server usa `proxy.conf.json` para reenviar `/api/**` al backend (mismo
 origen en el navegador → sin CORS y con las cabeceras de paginación `X-Total-*`).
 
+WEB_PORT_HOST=80        # la web
+API_PORT_HOST=3000      # la API
+DB_PORT_HOST=5433       # postgres
+MINIO_PORT_HOST=9000    # minio API
+MINIO_CONSOLE_HOST=9001 # minio consol
+
 ## Flujo
 
 ```
