@@ -1,0 +1,130 @@
+.auth-content {
+  --background: radial-gradient(1200px 500px at 50% -10%, #eef7dc, transparent), #f8fafc;
+}
+
+.auth-wrap {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 30px rgba(15, 23, 42, 0.05);
+  padding: 32px 28px;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  font-weight: 800;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+  margin-bottom: 18px;
+  color: #111;
+}
+
+.logo-badge {
+  display: inline-flex;
+  width: 72px;
+  height: 72px;
+  padding: 13px;
+  border-radius: 18px;
+  background: #172740;
+}
+
+.logo-badge img {
+  width: 100%;
+  height: 100%;
+}
+
+.green {
+  color: #84cc16;
+}
+
+.auth-title {
+  text-align: center;
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 0 0 20px;
+  color: #111;
+}
+
+label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #6b7280;
+  margin: 0 0 6px;
+}
+
+.input {
+  width: 100%;
+  font: inherit;
+  color: #111;
+  padding: 12px 13px;
+  border: 1px solid #e5e7eb;
+  border-radius: 9px;
+  background: #f8fafc;
+  margin-bottom: 14px;
+  caret-color: #84cc16;
+}
+
+.input:focus {
+  outline: none;
+  border-color: #84cc16;
+  box-shadow: 0 0 0 3px #eef7dc;
+}
+
+.pwd-wrap {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.pwd-wrap .input {
+  margin-bottom: 0;
+  padding-right: 72px;
+}
+
+.pwd-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: none;
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.error-msg {
+  text-align: center;
+  color: #e5484d;
+  font-size: 0.95rem;
+  margin: 12px 0 0;
+}
+
+.btn-entrar {
+  width: 100%;
+  margin-top: 16px;
+  padding: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: #84cc16;
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.btn-entrar:disabled {
+  opacity: 0.55;
+}

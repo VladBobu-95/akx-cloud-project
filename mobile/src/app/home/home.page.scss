@@ -1,0 +1,93 @@
+.topbar {
+  --background: #0f172a;
+  --color: #f8fafc;
+}
+
+.logo-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.logo-row img {
+  width: 26px;
+  height: 26px;
+}
+
+.green {
+  color: #84cc16;
+}
+
+.home-content {
+  --background: #f8fafc;
+}
+
+.card {
+  margin: 28px 18px;
+  padding: 28px 22px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+  text-align: center;
+}
+
+.avatar {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: #84cc16;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 1.4rem;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 1.35rem;
+}
+
+.muted {
+  color: #6b7280;
+  margin: 0 0 18px;
+}
+
+dl {
+  text-align: left;
+  margin: 0 0 22px;
+}
+
+dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+dt {
+  color: #6b7280;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.btn-salir {
+  width: 100%;
+  padding: 12px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #e5484d;
+  font-weight: 700;
+}

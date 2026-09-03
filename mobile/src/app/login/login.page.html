@@ -1,0 +1,52 @@
+<ion-content [fullscreen]="true" class="auth-content">
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="brand">
+        <span class="logo-badge">
+          <img src="assets/ateka-logo.png" alt="ATEKA" />
+        </span>
+        <span>ATEKA <span class="green">Cloud</span></span>
+      </div>
+      <h1 class="auth-title">Iniciar sesión</h1>
+
+      <form (ngSubmit)="enviar()">
+        <label for="email">Email</label>
+        <input
+          id="email"
+          class="input"
+          type="email"
+          name="email"
+          [(ngModel)]="email"
+          placeholder="tucorreo@ejemplo.com"
+          required
+          autocomplete="username"
+        />
+
+        <label for="password">Contraseña</label>
+        <div class="pwd-wrap">
+          <input
+            id="password"
+            class="input"
+            [type]="mostrarPass ? 'text' : 'password'"
+            name="password"
+            [(ngModel)]="password"
+            placeholder="Tu contraseña"
+            required
+            autocomplete="current-password"
+          />
+          <button type="button" class="pwd-toggle" (click)="mostrarPass = !mostrarPass">
+            {{ mostrarPass ? 'Ocultar' : 'Ver' }}
+          </button>
+        </div>
+
+        @if (error) {
+          <p class="error-msg">{{ error }}</p>
+        }
+
+        <button class="btn-entrar" type="submit" [disabled]="cargando || !email || !password">
+          {{ cargando ? 'Procesando…' : 'Entrar' }}
+        </button>
+      </form>
+    </div>
+  </div>
+</ion-content>

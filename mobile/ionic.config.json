@@ -1,0 +1,7 @@
+{
+  "name": "ATEKA Cloud",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "angular"
+}

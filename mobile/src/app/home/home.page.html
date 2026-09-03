@@ -1,0 +1,23 @@
+<ion-header class="ion-no-border">
+  <ion-toolbar class="topbar">
+    <ion-title>
+      <span class="logo-row">
+        <img src="assets/ateka-logo.png" alt="" />
+        ATEKA <span class="green">Cloud</span>
+      </span>
+    </ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="home-content">
+  <div class="card">
+    <div class="avatar">{{ inicial() }}</div>
+    <h1>Sesión iniciada</h1>
+    <dl>
+      <div><dt>Email</dt><dd>{{ usuario?.email }}</dd></div>
+      <div><dt>Nombre</dt><dd>{{ usuario?.nombre || '—' }}</dd></div>
+      <div><dt>Rol</dt><dd>{{ usuario?.rol }}</dd></div>
+    </dl>
+    <button type="button" class="btn-salir" (click)="salir()">Cerrar sesión</button>
+  </div>
+</ion-content>
