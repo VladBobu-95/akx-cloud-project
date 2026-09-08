@@ -1,4 +1,4 @@
-- mover de compartido a otra carpeta compartida
+- One remaining asymmetry I left in place (benign): mover-desde-personal (personal→shared move) still dedups by hash. Unlike the shared→personal case, this only removes your own personal file being moved (it ends up in shared either way) — no data loss for other users — so it's the mild version and wasn't in scope. Say the word if you want it made uniform too
 - pasa imagenes/ pasa las imagenes que tengo 
 - Paginacion registro
 - Un boton mover a compartido o mover a mis archivos (chatbot)
@@ -15,8 +15,6 @@
 - al subir factura_1 en compartido se subio tambien al personal y esta escaneando todo el rato
 - separar por devoluciones/cliente/emisor
 - quien me ha facturado en juio
-- factura.pdf emisor mal
-- personalizar acceso a chatbot
 - fecha esta mal en invoice.pdf
 - si hay menos en factura no lo cuenta
 - poder escribir otro comando y cancelar el anterior

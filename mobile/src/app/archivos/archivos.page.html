@@ -1,0 +1,203 @@
+<ion-header class="ion-no-border">
+  <ion-toolbar class="topbar">
+    <ng-container *ngIf="!haySel">
+      <ion-buttons slot="start">
+        <ion-icon class="icono-cabecera" name="folder-outline"></ion-icon>
+      </ion-buttons>
+      <ion-title>{{ tituloCabecera }}</ion-title>
+      <app-avatar-btn slot="end"></app-avatar-btn>
+    </ng-container>
+    <ng-container *ngIf="haySel">
+      <ion-buttons slot="start">
+        <ion-button (click)="limpiarSel()" aria-label="Cancelar selección">
+          <ion-icon slot="icon-only" name="close"></ion-icon>
+        </ion-button>
+      </ion-buttons>
+      <ion-title>{{ etiquetaSel }}</ion-title>
+    </ng-container>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="arch-content" [class.arrastrando]="!!drag">
+  <input #fileInput type="file" hidden (change)="onFile($event)" />
+
+  <div class="page">
+    <div class="ambito-toggle">
+      <button type="button" [class.active]="ambito === 'personal'" (click)="setAmbito('personal')">Personales</button>
+      <button type="button" [class.active]="ambito === 'compartido'" (click)="setAmbito('compartido')">Compartido</button>
+    </div>
+
+    <div class="card upload" *ngIf="!enRaizCompartido">
+      <button type="button" class="btn btn-primary" (click)="elegirArchivo()" [disabled]="subiendo">
+        {{ subiendo ? 'Subiendo…' : 'Subir archivo' }}
+      </button>
+      <button type="button" class="btn btn-outline" (click)="nuevaCarpeta()">Nueva carpeta</button>
+    </div>
+
+    <div class="card buscador" *ngIf="!enRaizCompartido">
+      <form class="buscar-row" (ngSubmit)="buscar()">
+        <input
+          class="input"
+          type="text"
+          name="consulta"
+          [(ngModel)]="consulta"
+          placeholder="Buscar por contenido…"
+          autocomplete="off"
+        />
+        <button class="btn btn-primary" type="submit" [disabled]="buscando || !consulta.trim()">
+          {{ buscando ? 'Buscando…' : 'Buscar' }}
+        </button>
+        <button class="btn btn-ghost" type="button" *ngIf="resultados !== null" (click)="limpiarBusqueda()">Limpiar</button>
+      </form>
+
+      <div class="resultados" *ngIf="resultados !== null">
+        <div class="empty" *ngIf="resultados.length === 0">Sin resultados para "{{ consulta }}".</div>
+        <button type="button" class="res" *ngFor="let r of resultados" (click)="abrirResultado(r)">
+          <div class="res-head">
+            <strong>{{ r.nombre }}</strong>
+            <span class="muted">{{ r.carpeta }}</span>
+          </div>
+          <p class="res-frag">{{ r.fragmento }}</p>
+        </button>
+      </div>
+    </div>
+
+    <div
+      class="back-bar"
+      *ngIf="puedeVolver"
+      [attr.data-drop]="ruta ? '..' : null"
+      [class.drop]="destinoHover === '..'"
+    >
+      <button type="button" class="btn-back" (click)="volver()" aria-label="Volver">←</button>
+      <span class="back-label">{{ titulo }}</span>
+    </div>
+
+    <p class="error-msg" *ngIf="error">{{ error }}</p>
+    <p class="muted" *ngIf="abriendo">Abriendo…</p>
+
+    <div class="card list" *ngIf="enRaizCompartido">
+      <div class="empty" *ngIf="cargando">Cargando…</div>
+      <div class="empty" *ngIf="!cargando && !espacios.length">
+        <div class="icon">📁</div>
+        No tienes carpetas compartidas. El administrador puede crearlas y darte acceso por rol.
+      </div>
+      <div class="tabla-wrap" *ngIf="!cargando && espacios.length">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th class="col-tamano">Tamaño</th>
+              <th class="col-subido">Actualizado</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="fila-carpeta" *ngFor="let e of espacios" (click)="abrirEspacio(e)">
+              <td class="nombre">📁 {{ e.nombre }}</td>
+              <td class="col-tamano">{{ e.tamano ? tamanoHumano(e.tamano) : '—' }}</td>
+              <td class="col-subido muted">{{ fechaCorta(e.actualizado) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card list" *ngIf="!enRaizCompartido">
+      <div class="empty" *ngIf="cargando">Cargando…</div>
+      <div class="empty" *ngIf="!cargando && !carpetas.length && !archivos.length">
+        <div class="icon">🗂️</div>
+        Esta carpeta está vacía. Sube un archivo o crea una subcarpeta.
+      </div>
+      <div class="tabla-wrap" *ngIf="!cargando && (carpetas.length || archivos.length)">
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="col-check">
+                <input type="checkbox" [checked]="todosMarcados" (change)="toggleTodo()" />
+              </th>
+              <th>Nombre</th>
+              <th class="col-tamano">Tamaño</th>
+              <th class="col-subido">Subido</th>
+              <th class="col-estado">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              class="fila-carpeta"
+              *ngFor="let c of carpetas"
+              [class.seleccionada]="marcadoC(c)"
+              [class.drop]="destinoHover === c"
+              [attr.data-drop]="c"
+              (click)="clickCarpeta(c)"
+              (pointerdown)="iniciarPosibleArrastre($event, 'carpeta', c, tituloHoja(c))"
+            >
+              <td class="col-check" (click)="$event.stopPropagation()" (pointerdown)="$event.stopPropagation()">
+                <input type="checkbox" [checked]="marcadoC(c)" (change)="toggleC(c, $event)" />
+              </td>
+              <td class="nombre">📁 {{ tituloHoja(c) }}</td>
+              <td class="col-tamano muted">{{ tamanoCarpeta(c) }}</td>
+              <td class="col-subido muted">{{ fechaCarpeta(c) }}</td>
+              <td class="col-estado"></td>
+            </tr>
+            <tr
+              *ngFor="let a of archivos"
+              [class.seleccionada]="marcadoA(a.id)"
+              (click)="clickArchivo(a)"
+              (pointerdown)="iniciarPosibleArrastre($event, 'archivo', a.id, a.nombre)"
+            >
+              <td class="col-check" (click)="$event.stopPropagation()" (pointerdown)="$event.stopPropagation()">
+                <input type="checkbox" [checked]="marcadoA(a.id)" (change)="toggleA(a.id, $event)" />
+              </td>
+              <td class="nombre">📄 {{ a.nombre }}</td>
+              <td class="col-tamano">{{ tamanoDe(a) }}</td>
+              <td class="col-subido muted">{{ fechaCorta(a.subidoEn) }}</td>
+              <td class="col-estado">
+                <span class="estado-prog" *ngIf="archivosApi.procesando(a)">Procesando</span>
+                <span class="estado-ok" *ngIf="!archivosApi.procesando(a) && estadoDe(a) === 'Listo'">✓</span>
+                <span class="estado-error" *ngIf="estadoDe(a) === 'Error'">✕</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</ion-content>
+
+<ion-footer *ngIf="haySel" class="ion-no-border sel-footer">
+  <div class="sel-actions">
+    <button type="button" (click)="abrirDesdeBarra()" [disabled]="!puedeAbrir">
+      <ion-icon name="open-outline"></ion-icon>
+      <span>Abrir</span>
+    </button>
+    <button type="button" (click)="bulkCopiar()">
+      <ion-icon name="copy-outline"></ion-icon>
+      <span>Copiar</span>
+    </button>
+    <button type="button" (click)="bulkMover()">
+      <ion-icon name="move-outline"></ion-icon>
+      <span>Mover</span>
+    </button>
+    <button type="button" class="peligro" (click)="bulkBorrar()">
+      <ion-icon name="trash-outline"></ion-icon>
+      <span>Borrar</span>
+    </button>
+    <button type="button" (click)="masAcciones()" [disabled]="!hayMas">
+      <ion-icon name="ellipsis-horizontal"></ion-icon>
+      <span>Más</span>
+    </button>
+  </div>
+</ion-footer>
+
+<div class="visor" *ngIf="visor as v">
+  <div class="visor-bar">
+    <strong>{{ v.nombre }}</strong>
+    <button type="button" class="btn btn-ghost btn-sm" (click)="cerrarVisor()">Cerrar</button>
+  </div>
+  <img *ngIf="esImagen(v)" [src]="v.url" [alt]="v.nombre" />
+  <pre *ngIf="v.texto != null">{{ v.texto }}</pre>
+</div>
+
+<div class="ghost" *ngIf="drag as d" [style.left.px]="d.x + 14" [style.top.px]="d.y + 14">
+  {{ d.items.length > 1 ? (d.items.length + ' elementos') : d.nombre }}
+</div>

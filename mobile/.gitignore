@@ -23,13 +23,6 @@ log.txt
 /platforms
 /plugins
 
-# Capacitor Android (build local; no hace falta en el servidor)
-/android/app/build/
-/android/build/
-/android/.gradle/
-/android/local.properties
-/android/app/src/main/assets/public/
-
 # Compiled output
 /dist
 /tmp

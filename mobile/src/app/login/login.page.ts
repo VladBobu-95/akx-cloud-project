@@ -26,7 +26,7 @@ export class LoginPage {
   async ionViewWillEnter() {
     await this.auth.hidratar();
     if (this.auth.estaAutenticado()) {
-      await this.router.navigateByUrl('/home', { replaceUrl: true });
+      await this.router.navigateByUrl('/tabs/chat', { replaceUrl: true });
     }
   }
 
@@ -45,7 +45,7 @@ export class LoginPage {
           this.cdr.detectChanges();
         }
       });
-    }, 10000);
+    }, 35000);
 
     this.auth.login(this.email, this.password).subscribe({
       next: () => {
@@ -53,7 +53,7 @@ export class LoginPage {
           if (this.tope) clearTimeout(this.tope);
           this.cargando = false;
           this.cdr.detectChanges();
-          void this.router.navigateByUrl('/home', { replaceUrl: true });
+          void this.router.navigateByUrl('/tabs/chat', { replaceUrl: true });
         });
       },
       error: (err) => {

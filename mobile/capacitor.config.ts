@@ -6,8 +6,15 @@ const config: CapacitorConfig = {
   webDir: 'www',
   server: {
     // HTTP al gateway del PC (emulador). Android bloquea cleartext si no.
+    // No pongas `url` aquí: eso es live reload. Usa `npm start` + `npm run android:live`.
     androidScheme: 'http',
     cleartext: true,
+  },
+  plugins: {
+    Keyboard: {
+      resize: 'body',
+      resizeOnFullScreen: true,
+    },
   },
 };
 

@@ -1,0 +1,7 @@
+<button type="button" class="perfil-chip" (click)="abrir()" aria-label="Perfil" *ngIf="auth.usuario | async as u">
+  <span class="avatar-btn">
+    <img *ngIf="u.avatar" [src]="u.avatar" alt="" />
+    <span *ngIf="!u.avatar">{{ inicial(u.nombre, u.email) }}</span>
+  </span>
+  <span class="nombre">{{ etiqueta(u.nombre, u.email) }}</span>
+</button>

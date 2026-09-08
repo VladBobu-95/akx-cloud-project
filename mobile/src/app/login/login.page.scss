@@ -1,5 +1,5 @@
 .auth-content {
-  --background: radial-gradient(1200px 500px at 50% -10%, #eef7dc, transparent), #f8fafc;
+  --background: radial-gradient(1200px 500px at 50% -22%, var(--green-soft) 0%, transparent 78%), var(--bg);
 }
 
 .auth-wrap {
@@ -13,8 +13,8 @@
 .auth-card {
   width: 100%;
   max-width: 420px;
-  background: #f8fafc;
-  border: 1px solid #e5e7eb;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 30px rgba(15, 23, 42, 0.05);
   padding: 32px 28px;
@@ -29,7 +29,7 @@
   font-size: 2rem;
   letter-spacing: -0.02em;
   margin-bottom: 18px;
-  color: #111;
+  color: var(--text);
 }
 
 .logo-badge {
@@ -47,7 +47,7 @@
 }
 
 .green {
-  color: #84cc16;
+  color: var(--green);
 }
 
 .auth-title {
@@ -55,33 +55,33 @@
   font-size: 1.2rem;
   font-weight: 700;
   margin: 0 0 20px;
-  color: #111;
+  color: var(--text);
 }
 
 label {
   display: block;
   font-size: 0.82rem;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--muted);
   margin: 0 0 6px;
 }
 
 .input {
   width: 100%;
   font: inherit;
-  color: #111;
+  color: var(--text);
   padding: 12px 13px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 9px;
-  background: #f8fafc;
+  background: var(--bg);
   margin-bottom: 14px;
-  caret-color: #84cc16;
+  caret-color: var(--green);
 }
 
 .input:focus {
   outline: none;
-  border-color: #84cc16;
-  box-shadow: 0 0 0 3px #eef7dc;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px var(--green-soft);
 }
 
 .pwd-wrap {
@@ -101,14 +101,14 @@ label {
   transform: translateY(-50%);
   border: 0;
   background: none;
-  color: #6b7280;
+  color: var(--muted);
   font-weight: 600;
   font-size: 0.82rem;
 }
 
 .error-msg {
   text-align: center;
-  color: #e5484d;
+  color: var(--danger);
   font-size: 0.95rem;
   margin: 12px 0 0;
 }
@@ -119,7 +119,7 @@ label {
   padding: 14px;
   border: 0;
   border-radius: 999px;
-  background: #84cc16;
+  background: var(--green);
   color: #fff;
   font-weight: 700;
   font-size: 1.05rem;

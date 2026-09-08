@@ -34,4 +34,104 @@
 
 /* @import "@ionic/angular/css/palettes/dark.always.css"; */
 /* @import "@ionic/angular/css/palettes/dark.class.css"; */
-/* Sin paleta oscura automática: el look es el de ATEKA Cloud (lima / blanco). */
+/* Tema ATEKA: claro por defecto, oscuro con body.dark. */
+
+:root {
+  --green: #84cc16;
+  --green-dark: #65a30d;
+  --green-soft: #eef7dc;
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --text: #111111;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --danger: #e5484d;
+  --danger-soft: #fee2e2;
+  --bar: #0f172a;
+  --radius: 12px;
+}
+
+body.dark {
+  --green-soft: #3f6d1250;
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --text: #e7ecf3;
+  --muted: #94a3b8;
+  --border: #2b384d;
+  --danger-soft: #7f1d1d;
+  --bar: #020617;
+
+  --ion-background-color: var(--bg);
+  --ion-text-color: var(--text);
+  --ion-text-color-rgb: 231, 236, 243;
+  --ion-overlay-background-color: var(--surface);
+  --ion-item-background: var(--surface);
+  --ion-placeholder-color: var(--muted);
+  --ion-color-primary: var(--green);
+}
+
+.icono-cabecera {
+  font-size: 24px;
+  margin-left: 10px;
+  color: #f8fafc;
+}
+
+body.dark {
+  color-scheme: dark;
+}
+
+body.dark ion-alert,
+body.dark ion-action-sheet {
+  --background: #1e293b;
+  --ion-background-color: #1e293b;
+  --ion-overlay-background-color: #1e293b;
+  --ion-item-background: #1e293b;
+  --ion-item-color: #e7ecf3;
+  --ion-text-color: #e7ecf3;
+  --ion-text-color-rgb: 231, 236, 243;
+  --ion-color-step-50: #e7ecf3;
+  --ion-color-step-550: #94a3b8;
+  --ion-color-step-600: #cbd5e1;
+  --ion-color-step-700: #e7ecf3;
+  --ion-color-step-850: #e7ecf3;
+  --ion-text-color-step-150: #e7ecf3;
+  --ion-text-color-step-300: #e7ecf3;
+  --ion-text-color-step-400: #cbd5e1;
+  --ion-text-color-step-450: #94a3b8;
+  --ion-placeholder-color: #94a3b8;
+  color: #e7ecf3;
+}
+
+body.dark ion-action-sheet {
+  --button-background: #1e293b;
+  --button-color: #e7ecf3;
+  --button-color-selected: #e7ecf3;
+  --color: #94a3b8;
+}
+
+body.dark ion-toast {
+  --background: #1e293b;
+  --color: #e7ecf3;
+}
+
+ion-content {
+  --background: var(--bg);
+  --color: var(--text);
+}
+
+ion-toolbar.topbar {
+  --min-height: 56px;
+  --padding-top: 0;
+  --padding-bottom: 0;
+}
+
+ion-toolbar.topbar ion-title {
+  display: flex;
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+ion-toolbar.topbar ion-buttons {
+  align-items: center;
+}

@@ -1,7 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { IonicModule } from '@ionic/angular/lazy';
+import { provideHttpClient } from '@angular/common/http';
 
 import { HomePage } from './home.page';
+import { AuthService } from '../core/auth.service';
+import { ChatService } from '../core/chat.service';
 
 describe('HomePage', () => {
   let component: HomePage;
@@ -10,7 +13,8 @@ describe('HomePage', () => {
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       declarations: [HomePage],
-      imports: [IonicModule.forRoot()]
+      imports: [IonicModule.forRoot()],
+      providers: [provideHttpClient(), AuthService, ChatService],
     }).compileComponents();
 
     fixture = TestBed.createComponent(HomePage);

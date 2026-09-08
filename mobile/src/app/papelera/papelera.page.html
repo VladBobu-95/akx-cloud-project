@@ -1,0 +1,106 @@
+<ion-header class="ion-no-border">
+  <ion-toolbar class="topbar">
+    <ng-container *ngIf="!haySel">
+      <ion-buttons slot="start">
+        <ion-icon class="icono-cabecera" name="trash-outline"></ion-icon>
+      </ion-buttons>
+      <ion-title>Papelera</ion-title>
+      <app-avatar-btn slot="end"></app-avatar-btn>
+    </ng-container>
+    <ng-container *ngIf="haySel">
+      <ion-buttons slot="start">
+        <ion-button (click)="limpiarSel()" aria-label="Cancelar selección">
+          <ion-icon slot="icon-only" name="close"></ion-icon>
+        </ion-button>
+      </ion-buttons>
+      <ion-title>{{ etiquetaSel }}</ion-title>
+    </ng-container>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="pap-content">
+  <div class="page">
+    <div class="back-bar" *ngIf="puedeVolver">
+      <button type="button" class="btn-back" (click)="volver()" aria-label="Volver">←</button>
+      <span class="back-label">{{ titulo }}</span>
+    </div>
+
+    <p class="error-msg" *ngIf="error">{{ error }}</p>
+
+    <div class="card list">
+      <div class="empty" *ngIf="cargando">Cargando…</div>
+      <div class="empty" *ngIf="!cargando && !todos.length">
+        <div class="icon">🧹</div>
+        La papelera está vacía.
+      </div>
+      <div class="empty" *ngIf="!cargando && todos.length && !carpetas.length && !archivos.length">
+        <div class="icon">🗂️</div>
+        Esta carpeta está vacía.
+      </div>
+
+      <div class="tabla-wrap" *ngIf="!cargando && (carpetas.length || archivos.length)">
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="col-check">
+                <input type="checkbox" [checked]="todosMarcados" (change)="toggleTodo()" />
+              </th>
+              <th>Nombre</th>
+              <th class="col-tamano">Tamaño</th>
+              <th class="col-subido">Eliminado</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              class="fila-carpeta"
+              *ngFor="let c of carpetas"
+              [class.seleccionada]="marcadoC(c)"
+              (click)="clickCarpeta(c)"
+            >
+              <td class="col-check" (click)="$event.stopPropagation()">
+                <input type="checkbox" [checked]="marcadoC(c)" (change)="toggleC(c, $event)" />
+              </td>
+              <td class="nombre">📁 {{ tituloHoja(c) }}</td>
+              <td class="col-tamano muted">{{ tamanoCarpeta(c) }}</td>
+              <td class="col-subido muted">{{ fechaCarpeta(c) }}</td>
+            </tr>
+            <tr
+              *ngFor="let a of archivos"
+              [class.seleccionada]="marcadoA(a.id)"
+              (click)="clickArchivo(a.id)"
+            >
+              <td class="col-check" (click)="$event.stopPropagation()">
+                <input type="checkbox" [checked]="marcadoA(a.id)" (change)="toggleA(a.id, $event)" />
+              </td>
+              <td class="nombre">📄 {{ a.nombre }}</td>
+              <td class="col-tamano">{{ tamanoDe(a) }}</td>
+              <td class="col-subido muted">{{ fechaCorta(a.eliminadoEn) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <button
+      type="button"
+      class="btn btn-danger btn-vaciar"
+      *ngIf="todos.length && !haySel && !cargando"
+      (click)="vaciar()"
+    >
+      Vaciar papelera
+    </button>
+  </div>
+</ion-content>
+
+<ion-footer *ngIf="haySel" class="ion-no-border sel-footer">
+  <div class="sel-actions">
+    <button type="button" (click)="restaurarSel()">
+      <ion-icon name="arrow-undo-outline"></ion-icon>
+      <span>Restaurar</span>
+    </button>
+    <button type="button" class="peligro" (click)="borrarSel()">
+      <ion-icon name="trash-outline"></ion-icon>
+      <span>Borrar</span>
+    </button>
+  </div>
+</ion-footer>

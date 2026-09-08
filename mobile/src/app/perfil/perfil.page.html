@@ -1,0 +1,121 @@
+<ion-header class="ion-no-border">
+  <ion-toolbar class="topbar">
+    <ion-buttons slot="start">
+      <button type="button" class="btn-back" (click)="volver()" aria-label="Volver">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 12H5M5 12l7 7M5 12l7-7" />
+        </svg>
+      </button>
+    </ion-buttons>
+    <ion-title>Perfil</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="per-content">
+  <input #fileInput type="file" accept="image/*" hidden (change)="seleccionarAvatar($event)" />
+
+  <div class="page">
+    <p class="error-msg" *ngIf="error">{{ error }}</p>
+
+    <div class="card">
+      <h2>Imagen de perfil</h2>
+      <div class="avatar-row">
+        <span class="avatar-grande">
+          <img *ngIf="usuario?.avatar" [src]="usuario.avatar" alt="" />
+          <ng-container *ngIf="!usuario?.avatar">{{ inicial }}</ng-container>
+        </span>
+        <div class="avatar-acciones">
+          <button type="button" class="btn btn-outline" (click)="elegirAvatar()" [disabled]="subiendo">
+            {{ subiendo ? 'Guardando…' : 'Cambiar imagen' }}
+          </button>
+          <button type="button" class="btn btn-ghost" *ngIf="usuario?.avatar" (click)="quitarAvatar()">Quitar</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Apariencia</h2>
+      <label class="switch-row">
+        <span>Modo oscuro</span>
+        <input type="checkbox" [checked]="theme.oscuro" (change)="alternarTema()" />
+      </label>
+    </div>
+
+    <div class="card">
+      <h2>Nombre</h2>
+      <label class="field">
+        Nombre de usuario
+        <input class="input" type="text" [(ngModel)]="nombre" name="nombre" placeholder="Tu nombre" />
+      </label>
+      <button type="button" class="btn btn-primary" (click)="guardarNombre()" [disabled]="!nombre.trim() || guardandoNombre">
+        {{ guardandoNombre ? 'Guardando…' : 'Guardar nombre' }}
+      </button>
+    </div>
+
+    <div class="card" *ngIf="auth.esSuperadmin()">
+      <h2>Contraseña</h2>
+      <label class="field">
+        Nueva contraseña (mín. 8)
+        <div class="pwd-wrap">
+          <input
+            class="input"
+            [type]="mostrarPass ? 'text' : 'password'"
+            [(ngModel)]="password"
+            name="password"
+            placeholder="Nueva contraseña"
+            autocomplete="new-password"
+          />
+          <button type="button" class="pwd-toggle" (click)="mostrarPass = !mostrarPass">
+            {{ mostrarPass ? 'Ocultar' : 'Ver' }}
+          </button>
+        </div>
+      </label>
+      <button
+        type="button"
+        class="btn btn-primary"
+        (click)="guardarPassword()"
+        [disabled]="password.length < 8 || guardandoPass"
+      >
+        {{ guardandoPass ? 'Guardando…' : 'Cambiar contraseña' }}
+      </button>
+    </div>
+
+    <div class="card">
+      <h2>Cuenta</h2>
+      <p class="info"><span class="muted">Email:</span> {{ usuario?.email }}</p>
+      <p class="info"><span class="muted">Rol:</span> {{ etiquetaRol(usuario?.rol) }}</p>
+      <p class="info"><span class="muted">Miembro desde:</span> {{ fechaAlta(usuario?.creadoEn) }}</p>
+
+      <ng-container *ngIf="auth.esAdmin()">
+        <p class="info"><span class="muted">CIF/NIF de la empresa:</span> {{ empresaNif || '—' }}</p>
+        <label class="field">
+          CIF/NIF
+          <input class="input" type="text" [(ngModel)]="nifEdit" name="nif" placeholder="B12345678" />
+        </label>
+        <button
+          type="button"
+          class="btn btn-primary"
+          (click)="guardarNif()"
+          [disabled]="guardandoNif || nifEdit.trim() === (empresaNif || '')"
+        >
+          {{ guardandoNif ? 'Guardando…' : 'Guardar CIF' }}
+        </button>
+      </ng-container>
+    </div>
+
+    <div class="card">
+      <button type="button" class="btn btn-salir" (click)="pedirSalir()">Salir</button>
+    </div>
+  </div>
+</ion-content>
+
+<div class="modal-backdrop" *ngIf="confirmandoSalir" (click)="confirmandoSalir = false">
+  <div class="card modal" (click)="$event.stopPropagation()">
+    <h2>Cerrar sesión</h2>
+    <p class="muted">¿Seguro que quieres salir?</p>
+    <div class="acciones">
+      <button type="button" class="btn btn-ghost" (click)="confirmandoSalir = false">Cancelar</button>
+      <button type="button" class="btn btn-salir" (click)="confirmarSalir()">Salir</button>
+    </div>
+  </div>
+</div>
