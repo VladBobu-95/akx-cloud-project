@@ -61,7 +61,13 @@ export const ctrlListarFacturas = async (
     if (req.query.tipo === "venta" || req.query.tipo === "compra" || req.query.tipo === "desconocido") {
       filtro.tipo = req.query.tipo;
     }
-    res.json(await listarFacturas(req.usuario!.id, filtro, { pagina, limite }));
+    if (typeof req.query.q === "string" && req.query.q.trim()) filtro.q = req.query.q.trim();
+    const orden =
+      req.query.orden === "emisor" || req.query.orden === "cliente" || req.query.orden === "total"
+        ? req.query.orden
+        : "fecha";
+    const dir = req.query.dir === "asc" ? "asc" : "desc";
+    res.json(await listarFacturas(req.usuario!.id, filtro, { pagina, limite, orden, dir }));
   } catch (error) {
     next(error);
   }

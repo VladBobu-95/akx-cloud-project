@@ -960,6 +960,8 @@ export type FiltroFacturas = {
   // de compras a "compra"; la página de Facturas la usa además con "desconocido"
   // para la pestaña "Sin clasificar". Sin este filtro, cuenta todas.
   tipo?: "venta" | "compra" | "desconocido";
+  // Texto libre (página Facturas): nº, emisor, cliente o nombre de archivo.
+  q?: string;
 }
 
 // Construye las condiciones WHERE y los parámetros posicionales a partir del filtro.
@@ -1013,6 +1015,12 @@ const construirFiltro = (
   if (filtro.moneda?.trim())
     cond.push(`f."moneda" = ${add(filtro.moneda.trim().toUpperCase())}`);
   if (filtro.tipo) cond.push(`f."tipo" = ${add(filtro.tipo)}`);
+  if (filtro.q?.trim()) {
+    const p = add(`%${filtro.q.trim()}%`);
+    cond.push(
+      `(unaccent(coalesce(f."numero",'')) ILIKE unaccent(${p}) OR unaccent(coalesce(f."emisor",'')) ILIKE unaccent(${p}) OR unaccent(coalesce(f."cliente",'')) ILIKE unaccent(${p}) OR unaccent(coalesce(a."nombre",'')) ILIKE unaccent(${p}))`,
+    );
+  }
 
   return { where: cond.join(" AND "), params };
 };
@@ -1181,7 +1189,7 @@ export type FilaFactura = {
 export const listarFacturas = async (
   usuarioId: string,
   filtro: FiltroFacturas = {},
-  opts: { pagina?: number; limite?: number } = {},
+  opts: { pagina?: number; limite?: number; orden?: string; dir?: string } = {},
 ): Promise<{ filas: FilaFactura[]; total: number; paginas: number }> => {
   const pagina = Math.max(1, opts.pagina ?? 1);
   const limite = Math.min(Math.max(1, opts.limite ?? 20), 100);
@@ -1192,6 +1200,15 @@ export const listarFacturas = async (
     params.push(`%${producto.trim()}%`);
     filtroWhere += ` AND EXISTS (SELECT 1 FROM "lineas_factura" l WHERE l."facturaId" = f."id" AND unaccent(l."descripcion") ILIKE unaccent($${params.length}))`;
   }
+  const dir = opts.dir === "asc" ? "ASC" : "DESC";
+  const ordenSql =
+    opts.orden === "emisor"
+      ? `lower(unaccent(coalesce(f."emisor",''))) ${dir} NULLS LAST, f."fecha" DESC`
+      : opts.orden === "cliente"
+        ? `lower(unaccent(coalesce(f."cliente",''))) ${dir} NULLS LAST, f."fecha" DESC`
+        : opts.orden === "total"
+          ? `f."total" ${dir} NULLS LAST, f."fecha" DESC`
+          : `f."fecha" ${dir} NULLS LAST, f."creadoEn" DESC`;
   const [{ total }] = await AppDataSource.query(
     `SELECT COUNT(*)::int AS total FROM "facturas" f LEFT JOIN "archivos" a ON a."id" = f."archivoId" WHERE ${filtroWhere}`,
     params,
@@ -1203,7 +1220,7 @@ export const listarFacturas = async (
      FROM "facturas" f
      LEFT JOIN "archivos" a ON a."id" = f."archivoId"
      WHERE ${filtroWhere}
-     ORDER BY f."fecha" DESC NULLS LAST, f."creadoEn" DESC
+     ORDER BY ${ordenSql}
      LIMIT ${limite} OFFSET ${(pagina - 1) * limite}`,
     params,
   );
