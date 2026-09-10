@@ -1,8 +1,18 @@
-import { env } from "../config/env";
+import { env } from "./env";
 
 interface OllamaTagsResponse {
   models?: { name: string }[];
 }
+
+// Headers comunes a todas las llamadas a Ollama. Si hay OLLAMA_API_KEY, se
+// manda Bearer (proxy/apikey delante de Ollama). Si no, queda como antes.
+export const ollamaHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (env.OLLAMA_API_KEY) {
+    headers.Authorization = `Bearer ${env.OLLAMA_API_KEY}`;
+  }
+  return headers;
+};
 
 // Compara contra el nombre exacto y también sin el sufijo ":tag" (ollama list
 // puede devolver "deepseek-ocr:latest" cuando en .env solo se puso "deepseek-ocr").
@@ -16,7 +26,7 @@ const coincide = (instalado: string, esperado: string): boolean =>
 export const verificarModelosOllama = async (): Promise<void> => {
   let data: OllamaTagsResponse;
   try {
-    const res = await fetch(`${env.OLLAMA_URL}/api/tags`);
+    const res = await fetch(`${env.OLLAMA_URL}/api/tags`, { headers: ollamaHeaders() });
     data = (await res.json()) as OllamaTagsResponse;
   } catch (err) {
     console.warn(`⚠️  No se pudo conectar con Ollama (${env.OLLAMA_URL}) para verificar los modelos:`, err);

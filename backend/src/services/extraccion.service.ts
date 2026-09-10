@@ -4,6 +4,7 @@ import { PDFParse } from "pdf-parse";
 import sharp from "sharp";
 import { createWorker, OEM, PSM, type Worker } from "tesseract.js";
 import { env } from "../config/env";
+import { ollamaHeaders } from "../config/ollama";
 
 // MIME de un .docx (Word moderno).
 const DOCX_MIME =
@@ -19,7 +20,7 @@ const MAX_TOKENS_OCR = 800;
 const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): Promise<string> => {
   const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: ollamaHeaders(),
     body: JSON.stringify({
       model: modelo,
       messages: [
@@ -368,7 +369,7 @@ const traducirAlEspanol = async (texto: string): Promise<string> => {
   try {
     const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: ollamaHeaders(),
       body: JSON.stringify({
         model: env.OLLAMA_MODEL,
         messages: [

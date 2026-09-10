@@ -1,4 +1,5 @@
 import { env } from "../config/env";
+import { ollamaHeaders } from "../config/ollama";
 import { AppError } from "../utils/errors";
 import { Archivo } from "../entities/Archivo";
 import {
@@ -1255,7 +1256,7 @@ const llamarOllama = async (
   try {
     res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: ollamaHeaders(),
       body: JSON.stringify({
         model: env.OLLAMA_MODEL,
         messages,

@@ -1,6 +1,7 @@
 import { AppDataSource } from "../config/database";
 import { Archivo } from "../entities/Archivo";
 import { env } from "../config/env";
+import { ollamaHeaders } from "../config/ollama";
 import { extraerTexto } from "./extraccion.service";
 import { combinarContenido } from "./archivos.service";
 
@@ -32,7 +33,7 @@ export const embeddings = async (
   try {
     res = await fetch(`${env.OLLAMA_URL}/api/embed`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: ollamaHeaders(),
       // keep_alive mantiene bge-m3 cargado entre búsquedas: sin esto Ollama lo
       // descarga a los 5 min (default) y cada búsqueda en frío paga varios
       // segundos de recarga del modelo. Es pequeño (~1-2 GB), barato de tener fijo.

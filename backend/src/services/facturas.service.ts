@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AppDataSource } from "../config/database";
 import { env } from "../config/env";
+import { ollamaHeaders } from "../config/ollama";
 import { Archivo } from "../entities/Archivo";
 import { Usuario } from "../entities/Usuario";
 import { Empresa } from "../entities/Empresa";
@@ -107,7 +108,7 @@ const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => 
   try {
     res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: ollamaHeaders(),
       body: JSON.stringify({
         model: env.OLLAMA_MODEL,
         messages,

@@ -38,6 +38,12 @@ const envSchema = z.object({
   // del front (uno o varios separados por coma) para reducir superficie.
   CORS_ORIGIN: z.string().default("*"),
   OLLAMA_URL: z.string().default("http://localhost:11434"),
+  // Si Ollama (o un proxy delante) exige API key. Vacío = sin header Authorization
+  // (Ollama local sin autenticación). En el servidor GPU va en .env.
+  OLLAMA_API_KEY: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().optional(),
+  ),
   // Modelo del chat (function calling). Por defecto el de la familia documentada
   // para el servidor; en máquinas pequeñas se sobreescribe por .env.
   OLLAMA_MODEL: z.string().default("qwen2.5-coder:14b"),
