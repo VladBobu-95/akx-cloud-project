@@ -21,6 +21,32 @@ export const calcularHashSha256 = (buffer: Buffer): string =>
 
 // Busca un archivo VIVO (no en papelera) del mismo usuario con idéntico hash.
 // Si existe, la subida es un duplicado: se reutiliza en vez de reprocesar.
+// "Factura.pdf" → "Factura copia.pdf"; si ya existe, "Factura copia 2.pdf", etc.
+export const nombreUnicoConCopia = async (
+  usuarioId: string,
+  carpeta: string,
+  nombre: string,
+): Promise<string> => {
+  const punto = nombre.lastIndexOf(".");
+  const base = punto > 0 ? nombre.slice(0, punto) : nombre;
+  const ext = punto > 0 ? nombre.slice(punto) : "";
+  const carpetaFinal = carpeta.replace(/^\/|\/$/g, "") ? `/${carpeta.replace(/^\/|\/$/g, "")}` : "/";
+  let n = 1;
+  for (;;) {
+    const candidato = n === 1 ? `${base} copia${ext}` : `${base} copia ${n}${ext}`;
+    const choque = await repo().findOne({
+      where: {
+        nombre: candidato,
+        carpeta: carpetaFinal,
+        propietario: { id: usuarioId },
+        eliminadoEn: IsNull(),
+      },
+    });
+    if (!choque) return candidato;
+    n++;
+  }
+};
+
 export const buscarArchivoPorHash = async (
   usuarioId: string,
   hash: string,

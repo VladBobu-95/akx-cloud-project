@@ -11,6 +11,9 @@ declare global {
         rol: string;   // "superadmin" | "admin" | "miembro"
         empresaId: string | null; // tenant; null solo para superadmin
       };
+      // Solo POST /api/n8n/facturas: si el hash ya existe, sube copia con
+      // " copia" en el nombre en vez de devolver duplicado:true.
+      permitirCopiaN8n?: boolean;
     }
   }
 }

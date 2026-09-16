@@ -63,6 +63,17 @@ describe("n8n light (API key)", () => {
     expect(listado.body.some((a: { id: string }) => a.id === res.body.id)).toBe(true);
   });
 
+  it("mismo PDF otra vez -> 201 con 'copia' en el nombre", async () => {
+    const body = Buffer.from("%PDF-1.4 n8n copia");
+    const primero = await subir({ nombre: "factura.pdf", tipo: "application/pdf", body });
+    expect(primero.status).toBe(201);
+    const segundo = await subir({ nombre: "factura.pdf", tipo: "application/pdf", body });
+    expect(segundo.status).toBe(201);
+    expect(segundo.body.id).not.toBe(primero.body.id);
+    expect(segundo.body.nombre).toBe("factura copia.pdf");
+    expect(segundo.body.duplicado).toBeFalsy();
+  });
+
   it("PDF con magic bytes -> 201", async () => {
     const res = await subir({
       nombre: "factura.pdf",
