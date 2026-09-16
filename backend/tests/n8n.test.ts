@@ -87,6 +87,27 @@ describe("n8n light (API key)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("chat sin key -> 401", async () => {
+    const res = await request(app).post("/api/n8n/chat").send({ mensaje: "hola" });
+    expect(res.status).toBe(401);
+  });
+
+  it("chat con mensajes vacíos -> 400", async () => {
+    const res = await request(app)
+      .post("/api/n8n/chat")
+      .set("X-Api-Key", CLAVE)
+      .send({ mensajes: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it("chat sin missatge (solo ids de Telegram) -> 400", async () => {
+    const res = await request(app)
+      .post("/api/n8n/chat")
+      .set("X-Api-Key", CLAVE)
+      .send({ chat_id: "123", user_id: "456" });
+    expect(res.status).toBe(400);
+  });
+
   it("empresa suspendida -> 403", async () => {
     const u = await crearUsuario(`n8n_susp_${Date.now()}@test.com`, {
       rol: "admin",

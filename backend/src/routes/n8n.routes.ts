@@ -1,8 +1,9 @@
 import { Router } from "express";
 import multer from "multer";
 import { verificarApiKeyN8n } from "../middlewares/n8n.middleware";
-import { limitadorSubida, limiteBacklogUsuario } from "../middlewares/limites.middleware";
+import { limitadorChat, limitadorSubida, limiteBacklogUsuario } from "../middlewares/limites.middleware";
 import { ctrlSubir } from "../controllers/archivos.controller";
+import { ctrlChatN8n } from "../controllers/n8n.controller";
 import { AppError } from "../utils/errors";
 import { TIPOS_PERMITIDOS, MENSAJE_TIPO_NO_PERMITIDO } from "../utils/tiposArchivo";
 
@@ -31,5 +32,9 @@ router.post(
   upload.single("archivo"),
   ctrlSubir,
 );
+
+// POST /api/n8n/chat  JSON { "mensaje": "..." } (o el body de /api/chat).
+// Misma tubería que el chatbot de la app, con la cuenta de N8N_USER_EMAIL.
+router.post("/chat", verificarApiKeyN8n, limitadorChat, ctrlChatN8n);
 
 export default router;
