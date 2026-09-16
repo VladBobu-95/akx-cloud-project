@@ -37,6 +37,17 @@ const envSchema = z.object({
   // auth por Bearer token, sin cookies). En producción conviene fijar el dominio
   // del front (uno o varios separados por coma) para reducir superficie.
   CORS_ORIGIN: z.string().default("*"),
+  // Integración n8n (versión light): una sola API key de instancia + el email
+  // de la cuenta ATEKA donde aterrizan los archivos. Vacío = endpoint desactivado
+  // (503). No es multi-empresa: todas las subidas van a ese usuario.
+  N8N_API_KEY: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().min(16).optional(),
+  ),
+  N8N_USER_EMAIL: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().email().optional(),
+  ),
   OLLAMA_URL: z.string().default("http://localhost:11434"),
   // Si Ollama (o un proxy delante) exige API key. Vacío = sin header Authorization
   // (Ollama local sin autenticación). En el servidor GPU va en .env.
