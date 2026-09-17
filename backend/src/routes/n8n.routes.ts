@@ -27,10 +27,6 @@ const upload = multer({
 router.post(
   "/facturas",
   verificarApiKeyN8n,
-  (req, _res, next) => {
-    req.permitirCopiaN8n = true;
-    next();
-  },
   limitadorSubida,
   limiteBacklogUsuario,
   upload.single("archivo"),

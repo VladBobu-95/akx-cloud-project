@@ -18,7 +18,6 @@ import {
   schemaActualizarArchivo,
   calcularHashSha256,
   buscarArchivoPorHash,
-  nombreUnicoConCopia,
 } from "../services/archivos.service";
 import {
   listarCarpetas,
@@ -152,16 +151,9 @@ export const ctrlSubir = async (
     // front avise. Evita además duplicar facturas en la analítica.
     const hash = calcularHashSha256(req.file.buffer);
     const existente = await buscarArchivoPorHash(req.usuario!.id, hash);
-    if (existente && !req.permitirCopiaN8n) {
+    if (existente) {
       res.status(200).json({ ...existente, duplicado: true });
       return;
-    }
-    if (existente && req.permitirCopiaN8n) {
-      req.file.originalname = await nombreUnicoConCopia(
-        req.usuario!.id,
-        carpeta,
-        req.file.originalname,
-      );
     }
 
     const archivo = await subirArchivo(req.file, carpeta, req.usuario!.id, hash);
