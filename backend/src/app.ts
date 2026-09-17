@@ -14,6 +14,7 @@ import plataformaRoutes from "./routes/plataforma.routes";
 import equipoRoutes from "./routes/equipo.routes";
 import compartidoRoutes from "./routes/compartido.routes";
 import n8nRoutes from "./routes/n8n.routes";
+import clavesRoutes from "./routes/claves.routes";
 
 export const app = express();
 
@@ -56,6 +57,7 @@ app.use("/api/plataforma", plataformaRoutes);
 app.use("/api/equipo", equipoRoutes);
 app.use("/api/compartido", compartidoRoutes);
 app.use("/api/n8n", n8nRoutes);
+app.use("/api/claves", clavesRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });

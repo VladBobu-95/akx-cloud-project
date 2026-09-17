@@ -56,3 +56,42 @@
       .info {
         margin-bottom: 6px;
       }
+      .seccion-claves {
+        max-width: 560px;
+      }
+      .clave-nueva {
+        background: var(--green-softer);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 12px;
+        margin-bottom: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .clave-texto {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.82rem;
+        word-break: break-all;
+      }
+      .lista-claves {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .lista-claves li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+        border-top: 1px solid var(--border);
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .mini {
+        font-size: 0.85rem;
+        margin: 2px 0 0;
+      }

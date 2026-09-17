@@ -5,6 +5,7 @@ import { AuthService } from '../../core/auth.service';
 import { ToastService } from '../../core/toast.service';
 import { ThemeService } from '../../core/theme.service';
 import { EquipoService } from '../../core/equipo.service';
+import { ClavesService, ClaveApi } from '../../core/claves.service';
 import { mensajeError } from '../../shared/errores';
 import { PasswordInputComponent } from '../../shared/password-input.component';
 
@@ -19,6 +20,7 @@ export class PerfilPage {
   protected theme = inject(ThemeService);
   private toast = inject(ToastService);
   private equipo = inject(EquipoService);
+  private clavesSvc = inject(ClavesService);
 
   protected nombre = this.auth.usuario()?.nombre ?? '';
   protected password = '';
@@ -31,6 +33,12 @@ export class PerfilPage {
   protected nifEdit = '';
   protected guardandoNif = signal(false);
 
+  protected claves = signal<ClaveApi[]>([]);
+  protected claveNueva = signal<string | null>(null);
+  protected nombreClave = 'n8n';
+  protected creandoClave = signal(false);
+  protected confirmacion = signal<{ titulo: string; mensaje: string; onOk: () => void } | null>(null);
+
   constructor() {
     if (this.esAdmin) {
       this.equipo.obtenerEmpresa().subscribe({
@@ -40,6 +48,58 @@ export class PerfilPage {
         error: (err) => this.toast.error(mensajeError(err)),
       });
     }
+    this.cargarClaves();
+  }
+
+  private cargarClaves() {
+    this.clavesSvc.listar().subscribe({
+      next: (lista) => this.claves.set(lista),
+      error: (err) => this.toast.error(mensajeError(err)),
+    });
+  }
+
+  generarClave() {
+    this.creandoClave.set(true);
+    this.claveNueva.set(null);
+    this.clavesSvc.crear(this.nombreClave.trim() || undefined).subscribe({
+      next: (c) => {
+        this.creandoClave.set(false);
+        this.claveNueva.set(c.clave);
+        this.cargarClaves();
+        this.toast.exito('Copia la clave ahora: no se volverá a mostrar');
+      },
+      error: (err) => {
+        this.creandoClave.set(false);
+        this.toast.error(mensajeError(err));
+      },
+    });
+  }
+
+  copiarClave() {
+    const v = this.claveNueva();
+    if (!v) return;
+    void navigator.clipboard.writeText(v).then(
+      () => this.toast.exito('Clave copiada'),
+      () => this.toast.error('No se pudo copiar'),
+    );
+  }
+
+  pedirRevocar(c: ClaveApi) {
+    this.confirmacion.set({
+      titulo: 'Revocar clave',
+      mensaje: `n8n dejará de funcionar con ${c.prefijo}…`,
+      onOk: () => {
+        this.clavesSvc.revocar(c.id).subscribe({
+          next: () => {
+            this.confirmacion.set(null);
+            if (this.claveNueva()?.startsWith(c.prefijo)) this.claveNueva.set(null);
+            this.cargarClaves();
+            this.toast.exito('Clave revocada');
+          },
+          error: (err) => this.toast.error(mensajeError(err)),
+        });
+      },
+    });
   }
 
   guardarNif() {

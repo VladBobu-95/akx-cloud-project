@@ -44,11 +44,11 @@ describe("n8n light (API key)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("sin configurar -> 503", async () => {
+  it("sin key de .env (y sin clave de BD) -> 401", async () => {
     env.N8N_API_KEY = undefined;
     const res = await subir();
     env.N8N_API_KEY = CLAVE;
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(401);
   });
 
   it("subir con key válida -> 201 y el archivo es del usuario mapeado", async () => {

@@ -97,3 +97,63 @@
         </div>
       }
     </div>
+
+    <!-- API n8n: cada usuario (admin o miembro) tiene las suyas. El secreto
+         solo se muestra al generar. -->
+    <div class="card seccion seccion-claves">
+      <h2>API n8n</h2>
+      <p class="muted">
+        Genera una clave para que n8n suba facturas y use el chat como tu cuenta.
+        Se muestra una vez; luego solo verás el recorte.
+      </p>
+      <div class="row" style="align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
+        <div class="field" style="flex: 1 1 180px; margin: 0;">
+          <label for="nombreClave">Nombre</label>
+          <input id="nombreClave" class="input" [(ngModel)]="nombreClave" placeholder="n8n" />
+        </div>
+        <button class="btn btn-primary" (click)="generarClave()" [disabled]="creandoClave()">
+          {{ creandoClave() ? 'Generando…' : 'Generar clave' }}
+        </button>
+      </div>
+      @if (claveNueva(); as k) {
+        <div class="clave-nueva">
+          <p class="muted" style="margin-bottom: 6px;">Cópiala ahora. No se volverá a mostrar.</p>
+          <code class="clave-texto">{{ k }}</code>
+          <button class="btn btn-outline btn-sm" (click)="copiarClave()">Copiar</button>
+        </div>
+      }
+      @if (claves().length === 0) {
+        <p class="muted">Aún no tienes claves.</p>
+      } @else {
+        <ul class="lista-claves">
+          @for (c of claves(); track c.id) {
+            <li>
+              <div>
+                <strong>{{ c.nombre }}</strong>
+                <span class="muted mono"> {{ c.prefijo }}…</span>
+                <p class="muted mini">
+                  Creada {{ c.creadoEn | date: 'dd/MM/yyyy' }}
+                  @if (c.ultimoUso) {
+                    · último uso {{ c.ultimoUso | date: 'dd/MM/yyyy HH:mm' }}
+                  }
+                </p>
+              </div>
+              <button class="btn btn-ghost btn-sm" (click)="pedirRevocar(c)">Revocar</button>
+            </li>
+          }
+        </ul>
+      }
+    </div>
+
+    @if (confirmacion(); as conf) {
+      <div class="modal-backdrop">
+        <div class="card modal" (click)="$event.stopPropagation()">
+          <h2>{{ conf.titulo }}</h2>
+          <p class="muted" style="margin-bottom: 16px;">{{ conf.mensaje }}</p>
+          <div class="row" style="justify-content: flex-end;">
+            <button class="btn btn-ghost" (click)="confirmacion.set(null)">Cancelar</button>
+            <button class="btn btn-danger" (click)="conf.onOk()">Revocar</button>
+          </div>
+        </div>
+      </div>
+    }
