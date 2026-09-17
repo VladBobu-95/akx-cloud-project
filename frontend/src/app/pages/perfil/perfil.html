@@ -101,15 +101,16 @@
     <!-- API n8n: cada usuario (admin o miembro) tiene las suyas. El secreto
          solo se muestra al generar. -->
     <div class="card seccion seccion-claves">
-      <h2>API n8n</h2>
+      <h2>Api Keys</h2>
       <p class="muted">
-        Genera una clave para que n8n suba facturas y use el chat como tu cuenta.
-        Se muestra una vez; luego solo verás el recorte.
+        Para conectar otra aplicación que
+        suba facturas o use el chat en tu nombre. Cópiala al crearla; después
+        solo verás un recorte.
       </p>
       <div class="row" style="align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
         <div class="field" style="flex: 1 1 180px; margin: 0;">
           <label for="nombreClave">Nombre</label>
-          <input id="nombreClave" class="input" [(ngModel)]="nombreClave" placeholder="n8n" />
+          <input id="nombreClave" class="input" [(ngModel)]="nombreClave" placeholder="Nombre (opcional)" />
         </div>
         <button class="btn btn-primary" (click)="generarClave()" [disabled]="creandoClave()">
           {{ creandoClave() ? 'Generando…' : 'Generar clave' }}

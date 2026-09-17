@@ -35,7 +35,7 @@ export class PerfilPage {
 
   protected claves = signal<ClaveApi[]>([]);
   protected claveNueva = signal<string | null>(null);
-  protected nombreClave = 'n8n';
+  protected nombreClave = '';
   protected creandoClave = signal(false);
   protected confirmacion = signal<{ titulo: string; mensaje: string; onOk: () => void } | null>(null);
 
