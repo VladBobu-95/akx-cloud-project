@@ -3,13 +3,9 @@ import { Preferences } from '@capacitor/preferences';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capacitor-community/file-opener';
+import { atekaUrl } from './urls';
 
 const TOKEN_KEY = 'akx_mobile_token';
-
-export const atekaUrl = (): string => {
-  if (Capacitor.getPlatform() === 'android') return 'http://10.0.2.2:3000';
-  return 'http://localhost:3000';
-};
 
 export type Archivo = {
   id: string;

@@ -4,15 +4,11 @@ import { Preferences } from '@capacitor/preferences';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { firstValueFrom } from 'rxjs';
 import { timeout } from 'rxjs/operators';
+import { atekaUrl } from './urls';
 
 const TOKEN_KEY = 'akx_mobile_token';
 const CHAT_KEY = 'akx_mobile_chat';
 const CHAT_MS = 120_000;
-
-const atekaUrl = (): string => {
-  if (Capacitor.getPlatform() === 'android') return 'http://10.0.2.2:3000';
-  return 'http://localhost:3000';
-};
 
 export type Mensaje = {
   de: 'usuario' | 'bot';

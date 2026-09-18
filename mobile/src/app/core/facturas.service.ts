@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { Preferences } from '@capacitor/preferences';
 import { CapacitorHttp } from '@capacitor/core';
-import { atekaUrl } from './archivos.service';
+import { atekaUrl } from './urls';
 
 const TOKEN_KEY = 'akx_mobile_token';
 

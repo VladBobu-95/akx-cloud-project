@@ -5,21 +5,9 @@ import { Preferences } from '@capacitor/preferences';
 import { BehaviorSubject, firstValueFrom, from } from 'rxjs';
 import { switchMap, tap, timeout } from 'rxjs/operators';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import { environment } from '../../environments/environment';
 import { idDispositivo } from './dispositivo';
+import { atekaUrl, gatewayUrl } from './urls';
 import { ChatService } from './chat.service';
-
-const PLESK_CONNECTED = 'https://mid-cloud.akx-server.es/connected';
-
-const filtroUrl = (): string => {
-  if (Capacitor.getPlatform() === 'android') return PLESK_CONNECTED;
-  return environment.apiUrl;
-};
-
-const atekaUrl = (): string => {
-  if (Capacitor.getPlatform() === 'android') return 'http://10.0.2.2:3000';
-  return 'http://localhost:3000';
-};
 
 export type Usuario = {
   id: string;
@@ -152,7 +140,7 @@ export class AuthService {
         }),
       );
     }
-    return this.http.get<{ ok: boolean; error?: string; ip?: string }>(`${filtroUrl()}/gate`).pipe(
+    return this.http.get<{ ok: boolean; error?: string; ip?: string }>(`${gatewayUrl()}/gate`).pipe(
       switchMap((g) => {
         if (g && g.ok === false) {
           throw new HttpErrorResponse({ status: 403, error: g });
@@ -181,7 +169,7 @@ export class AuthService {
   private async loginAndroid(email: string, password: string): Promise<LoginRes> {
     const gate = await this.conTope(
       CapacitorHttp.get({
-        url: `${PLESK_CONNECTED}/gate`,
+        url: `${gatewayUrl()}/gate`,
       }),
       15000,
     );
@@ -259,7 +247,7 @@ export class AuthService {
       if (Capacitor.getPlatform() === 'android') {
         const gate = await this.conTope(
           CapacitorHttp.get({
-            url: `${PLESK_CONNECTED}/gate`,
+            url: `${gatewayUrl()}/gate`,
             headers,
           }),
           8000,
@@ -269,7 +257,7 @@ export class AuthService {
         if (gate.status === 403) return { ok: false, motivo: data.motivo, ip: data.ip };
       } else {
         data = await firstValueFrom(
-          this.http.get<{ ok?: boolean; motivo?: string; ip?: string }>(`${filtroUrl()}/gate`, {
+          this.http.get<{ ok?: boolean; motivo?: string; ip?: string }>(`${gatewayUrl()}/gate`, {
             headers,
           }).pipe(timeout(8000)),
         );
@@ -315,13 +303,13 @@ export class AuthService {
     const una = async (): Promise<void> => {
       if (Capacitor.getPlatform() === 'android') {
         await this.conTope(
-          CapacitorHttp.get({ url: `${PLESK_CONNECTED}/salida?${q}`, headers }),
+          CapacitorHttp.get({ url: `${gatewayUrl()}/salida?${q}`, headers }),
           8000,
         );
         return;
       }
       await firstValueFrom(
-        this.http.get(`${filtroUrl()}/salida?${q}`, { headers }).pipe(timeout(8000)),
+        this.http.get(`${gatewayUrl()}/salida?${q}`, { headers }).pipe(timeout(8000)),
       );
     };
     try {

@@ -13,6 +13,7 @@ App de almacenamiento en la nube con chatbot IA. Backend Node/TypeScript + front
 akx-cloud-project/
   backend/                    ← API REST (Express + TypeORM + pgvector + MinIO + Ollama)
   frontend/                   ← SPA Angular 22
+  mobile/                     ← App Android (Ionic 9 + Capacitor 8). URLs de ATEKA y del gateway en src/environments/ (vía core/urls.ts)
   docker-compose.yml          ← Producción: db, minio, api, web
   docker-compose.override.yml ← Solo local: añade ollama y adminer
   .env                        ← Secretos (no commitear, ver .env.example)
@@ -80,6 +81,7 @@ OLLAMA_MODEL=qwen2.5-coder:14b                                 # chat (7b/3b en 
 OLLAMA_EMBED_MODEL=bge-m3
 OLLAMA_CAPTION_MODEL=granite3.2-vision                         # 1ª pasada visión
 OLLAMA_OCR_MODEL=deepseek-ocr                                  # 2ª pasada (solo si parece factura)
+N8N_API_KEY, N8N_USER_EMAIL                                    # opcional: key fija de pruebas para /api/n8n (actúa como ese usuario)
 ```
 `env.ts` valida con Zod y **falla al arrancar** si falta algo. Cambiar de modelo: editar
 `.env` + `docker compose up -d api` (recarga .env, sin rebuild).
@@ -110,12 +112,13 @@ docker compose logs -f api
 ```
 config/      database.ts (TypeORM+pgvector), env.ts (Zod), minio.ts
 controllers/ entrada HTTP, delegan en services
-entities/    Empresa, Rol, CarpetaCompartida, Archivo, Carpeta, Factura, LineaFactura, Usuario
-middlewares/ auth (JWT→req.usuario; verificarToken/soloAdmin/soloSuperadmin), errorHandler (AppError→JSON)
+entities/    Empresa, Rol, CarpetaCompartida, Archivo, Carpeta, Factura, LineaFactura, Usuario, ClaveApi, Tarea, ChatPendiente, EventoCompartido
+middlewares/ auth (JWT→req.usuario; verificarToken/soloAdmin/soloSuperadmin), n8n (X-Api-Key→req.usuario), limites, validarUUID, errorHandler (AppError→JSON)
 migrations/  TypeORM, se ejecutan al arrancar
 services/
   archivos.service.ts    CRUD, papelera, carpetas zip, leerTextoArchivo (RAG)
   auth.service.ts        login JWT (sin registro público)
+  claves.service.ts      claves API de n8n por usuario: crear/listar/revocar (máx 5 activas; solo se guarda el hash SHA-256)
   plataforma.service.ts  superadmin: alta/edición/borrado de empresas + su admin
   equipo.service.ts      admin: miembros CRUD, roles configurables, capacidadesDe, archivos de un miembro
   seed.service.ts        siembra el superadmin al arrancar (multi-tenant)
@@ -215,6 +218,21 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | GET | `/:id` | detalle completo (cabecera + `lineas[]`) para el editor |
 | PATCH | `/:id` | **edición manual** `{numero?,fecha?,emisor?,emisorNif?,cliente?,clienteNif?,tipo?,moneda?,subtotal?,iva?,total?,lineas?}` — corrige lo que la IA sacó mal y **regenera** el resumen individual + los agregados |
 
+### `/api/claves` 🔒 (cualquier usuario, sobre SUS claves)
+Claves API para n8n. El secreto (`akx_live_…`) se devuelve **solo al crear**; en BD va el hash SHA-256 (comparación en tiempo constante). En el front: página **Perfil**.
+| Método | Ruta | Notas |
+|---|---|---|
+| GET | `/` | claves activas → `{id,nombre,prefijo,ultimoUso,creadoEn}[]` (nunca el secreto) |
+| POST | `/` | `{nombre?}` (default `"n8n"`) → 201 con `{...,clave}`. Máx **5 activas** por usuario |
+| DELETE | `/:id` | revoca (204). Solo las propias |
+
+### `/api/n8n` (auth por cabecera `X-Api-Key`, **no** JWT)
+La petición actúa **como el usuario dueño de la clave** (mismos permisos/capacidades; empresa suspendida → 403). Valida primero `N8N_API_KEY` del `.env` (→ usuario `N8N_USER_EMAIL`, para pruebas) y si no, las claves de `claves_api` (actualiza `ultimoUso`).
+| Método | Ruta | Notas |
+|---|---|---|
+| POST | `/facturas` | multipart `archivo` + `carpeta` opcional — **misma tubería** que `/api/archivos/subir` (dedup, indexado, auto-escaneo de factura). Límites de subida y backlog |
+| POST | `/chat` | `{mensaje}` (o `missatge`, o `{mensajes:[...]}` como `/api/chat`) + `chat_id`/`user_id` opcionales que se **devuelven tal cual** (para responder en Telegram). Mismo `chatear()` que el chatbot |
+
 ---
 
 ## Schema de BD
@@ -226,6 +244,7 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 - **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256` (dedup al subir: idéntico contenido vivo → se reutiliza, no se reprocesa), `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `estadoIndexado`/`indexadoEn` (estado del indexado RAG), `carpetaCompartidaId` (nullable, FK CASCADE — si va set, el archivo vive en una carpeta compartida en vez de en las carpetas personales del `propietario`), `eliminadoEn` (soft delete), `propietario` CASCADE.
 - **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
 - **tareas** (cola durable): `id`, `tipo` (`indexar`|`autoescanear`), `archivoId`/`usuarioId` CASCADE, `estado` (`pendiente`|`en_proceso`|`ok`|`error`), `prioridad`, `intentos`/`maxIntentos`, `disponibleEn` (backoff), `pista`, `error`. La procesa el worker (`tareas.service.ts`), que relee los bytes de MinIO → sobrevive a reinicios, reintenta y limita la concurrencia hacia Ollama (sustituye a las colas en memoria).
+- **claves_api**: `id`, `nombre`, `prefijo` (recorte visible), `hash` unique (SHA-256 del secreto), `usuarioId` (FK CASCADE), `empresaId` (FK CASCADE, null), `ultimoUso`, `creadoEn`, `revocadaEn` (null = activa). Índice `(usuarioId, revocadaEn)`.
 - **chat_pendientes**: `usuarioId` PK, `tipo` (`aclaracion`|`valor`|`confirmacion`), `payload` jsonb, `expiraEn`. Estado conversacional del chat fuera de memoria (aclaraciones, valores que faltan, y confirmación de operaciones masivas irreversibles como vaciar la papelera).
 - **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `emisorNif`, `cliente`, `clienteNif`, `tipo` (`venta`|`compra`|`desconocido`, default `desconocido` — ver "Facturas: venta/compra" abajo), `moneda` (código ISO 4217, default `EUR`; la IA la extrae de la factura), `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade. La analítica se **separa por tipo**: ventas (`ventas_top`/`clientes_top`/`totales_facturas`) vs compras (`compras_top`/`proveedores_top`/`totales_compras`); todo **agrupa por moneda** — nunca se suman divisas distintas. Los **resúmenes** (ventas/compras) son datos **derivados**: se generan al vuelo desde la BD cuando el chat los pide (`generarResumenVentasMd`/`generarResumenComprasMd`); **ya no** se materializan como archivos `resumen-*.md` en una carpeta `/facturas` (esa carpeta oculta se eliminó — ver `NOTAS.md`).
 - **lineas_factura**: `descripcion`, `cantidad`, `precioUnit`, `total`.
