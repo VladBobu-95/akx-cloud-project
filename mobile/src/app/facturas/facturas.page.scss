@@ -26,6 +26,105 @@
   margin-bottom: 14px;
 }
 
+.buscador .buscar-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.buscador .input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font: inherit;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.filtro-card {
+  display: inline-flex;
+  width: auto;
+  padding: 0;
+  overflow: hidden;
+}
+
+.btn-filtro {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text);
+  padding: 4px 10px;
+  text-align: left;
+}
+
+.btn-filtro ion-icon {
+  font-size: 1.15rem;
+  color: var(--green-dark);
+}
+
+.btn-filtro.active {
+  color: var(--green-dark);
+}
+
+.sel-footer {
+  background: var(--bar);
+}
+
+.sel-actions {
+  display: flex;
+  width: 100%;
+  justify-content: space-around;
+  padding: 8px 4px 10px;
+}
+
+.sel-actions button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 0;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.sel-actions ion-icon {
+  font-size: 1.1rem;
+  color: var(--green);
+}
+
+.sel-actions button.active {
+  color: #fff;
+}
+
+.sel-actions button.active ion-icon {
+  color: var(--green);
+}
+
+.grupo-head {
+  padding: 8px 16px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
 .ambito-toggle {
   display: inline-flex;
   background: var(--surface);
@@ -60,6 +159,11 @@
   border-radius: 12px;
   padding: 14px 16px;
   margin-bottom: 14px;
+}
+
+.card.filtro-card {
+  padding: 0;
+  margin-bottom: 10px;
 }
 
 .upload {

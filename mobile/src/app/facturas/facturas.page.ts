@@ -1,7 +1,14 @@
 import { ChangeDetectorRef, Component, NgZone } from '@angular/core';
-import { ToastController } from '@ionic/angular/lazy';
+import { ActionSheetController, ToastController } from '@ionic/angular/lazy';
 import { addIcons } from 'ionicons';
-import { receiptOutline } from 'ionicons/icons';
+import {
+  chevronDown,
+  chevronUp,
+  ellipsisVertical,
+  funnelOutline,
+  receiptOutline,
+  refreshOutline,
+} from 'ionicons/icons';
 import {
   FacturaDetalle,
   FacturasService,
@@ -10,8 +17,8 @@ import {
   TipoFactura,
 } from '../core/facturas.service';
 
-
 type Pestana = 'todas' | TipoFactura;
+type CampoOrden = 'fecha' | 'emisor' | 'cliente' | 'total';
 
 @Component({
   selector: 'app-facturas',
@@ -38,15 +45,33 @@ export class FacturasPage {
   reclasificando = false;
   form: FacturaDetalle | null = null;
   guardando = false;
+  consulta = '';
+  consultaActiva = '';
+  filtroAbierto = false;
+  ordenCampo: CampoOrden = 'fecha';
+  ordenDir: 'asc' | 'desc' = 'desc';
+
+  readonly camposFiltro: { id: CampoOrden; etiqueta: string }[] = [
+    { id: 'fecha', etiqueta: 'Fecha' },
+    { id: 'emisor', etiqueta: 'Emisor' },
+    { id: 'cliente', etiqueta: 'Cliente' },
+    { id: 'total', etiqueta: 'Total' },
+  ];
 
   constructor(
     private api: FacturasService,
     private toasts: ToastController,
+    private sheets: ActionSheetController,
     private zone: NgZone,
     private cdr: ChangeDetectorRef,
   ) {
     addIcons({
       'receipt-outline': receiptOutline,
+      'ellipsis-vertical': ellipsisVertical,
+      'funnel-outline': funnelOutline,
+      'chevron-up': chevronUp,
+      'chevron-down': chevronDown,
+      'refresh-outline': refreshOutline,
     });
   }
 
@@ -66,7 +91,14 @@ export class FacturasPage {
     this.error = null;
     try {
       const tipo = this.pestana === 'todas' ? undefined : this.pestana;
-      const r = await this.api.listar({ tipo, pagina: this.pagina, limite: this.limite });
+      const r = await this.api.listar({
+        tipo,
+        pagina: this.pagina,
+        limite: this.limite,
+        q: this.consultaActiva || undefined,
+        orden: this.ordenCampo,
+        dir: this.ordenDir,
+      });
       this.filas = r.filas;
       this.total = r.total;
       this.paginas = r.paginas;
@@ -77,6 +109,64 @@ export class FacturasPage {
       this.cargando = false;
       this.zone.run(() => this.cdr.detectChanges());
     }
+  }
+
+  get grupos(): { clave: string; filas: FilaFactura[] }[] {
+    if (this.ordenCampo !== 'emisor' && this.ordenCampo !== 'cliente') {
+      return [{ clave: '', filas: this.filas }];
+    }
+    const map = new Map<string, FilaFactura[]>();
+    for (const f of this.filas) {
+      const k = ((this.ordenCampo === 'emisor' ? f.emisor : f.cliente) || 'Sin nombre').trim() || 'Sin nombre';
+      const arr = map.get(k) ?? [];
+      arr.push(f);
+      map.set(k, arr);
+    }
+    return [...map.entries()].map(([clave, filas]) => ({ clave, filas }));
+  }
+
+  buscar() {
+    this.consultaActiva = this.consulta.trim();
+    this.pagina = 1;
+    void this.cargar();
+  }
+
+  limpiaBusqueda() {
+    this.consulta = '';
+    this.consultaActiva = '';
+    this.pagina = 1;
+    void this.cargar();
+  }
+
+  toggleFiltro() {
+    this.filtroAbierto = !this.filtroAbierto;
+  }
+
+  elegirOrden(campo: CampoOrden) {
+    if (this.ordenCampo === campo) {
+      this.ordenDir = this.ordenDir === 'desc' ? 'asc' : 'desc';
+    } else {
+      this.ordenCampo = campo;
+      this.ordenDir = campo === 'emisor' || campo === 'cliente' ? 'asc' : 'desc';
+    }
+    this.pagina = 1;
+    void this.cargar();
+  }
+
+  async abrirMenu() {
+    const sheet = await this.sheets.create({
+      buttons: [
+        {
+          text: this.reclasificando ? 'Reclasificando…' : 'Reclasificar',
+          icon: 'refresh-outline',
+          handler: () => {
+            if (!this.reclasificando) void this.reclasificar();
+          },
+        },
+        { text: 'Cancelar', role: 'cancel' },
+      ],
+    });
+    await sheet.present();
   }
 
   irPagina(p: number) {

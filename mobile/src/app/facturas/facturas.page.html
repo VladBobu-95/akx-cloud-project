@@ -4,6 +4,11 @@
       <ion-icon class="icono-cabecera" name="receipt-outline"></ion-icon>
     </ion-buttons>
     <ion-title>Facturas</ion-title>
+    <ion-buttons slot="end">
+      <ion-button (click)="abrirMenu()" aria-label="Más acciones">
+        <ion-icon slot="icon-only" name="ellipsis-vertical"></ion-icon>
+      </ion-button>
+    </ion-buttons>
     <app-avatar-btn slot="end"></app-avatar-btn>
   </ion-toolbar>
 </ion-header>
@@ -21,8 +26,29 @@
           {{ p.etiqueta }}
         </button>
       </div>
-      <button type="button" class="btn btn-outline btn-sm" (click)="reclasificar()" [disabled]="reclasificando">
-        {{ reclasificando ? 'Reclasificando…' : 'Reclasificar' }}
+    </div>
+
+    <div class="card buscador">
+      <form class="buscar-row" (ngSubmit)="buscar()">
+        <input
+          class="input"
+          type="text"
+          name="consulta"
+          [(ngModel)]="consulta"
+          placeholder="Buscar por nº, emisor o cliente…"
+          autocomplete="off"
+        />
+        <button class="btn btn-primary" type="submit" [disabled]="cargando || !consulta.trim()">
+          {{ cargando && consultaActiva ? 'Buscando…' : 'Buscar' }}
+        </button>
+        <button class="btn btn-ghost" type="button" *ngIf="consultaActiva" (click)="limpiaBusqueda()">Limpiar</button>
+      </form>
+    </div>
+
+    <div class="card filtro-card">
+      <button type="button" class="btn-filtro" (click)="toggleFiltro()" [class.active]="filtroAbierto">
+        <ion-icon name="funnel-outline"></ion-icon>
+        Filtrar
       </button>
     </div>
 
@@ -32,28 +58,33 @@
       <div class="empty" *ngIf="cargando">Cargando…</div>
       <div class="empty" *ngIf="!cargando && !filas.length">
         <div class="icon">🧾</div>
-        <ng-container *ngIf="pestana === 'desconocido'">No hay facturas sin clasificar.</ng-container>
-        <ng-container *ngIf="pestana !== 'desconocido'">
+        <ng-container *ngIf="consultaActiva">Sin resultados para "{{ consultaActiva }}".</ng-container>
+        <ng-container *ngIf="!consultaActiva && pestana === 'desconocido'">No hay facturas sin clasificar.</ng-container>
+        <ng-container *ngIf="!consultaActiva && pestana !== 'desconocido'">
           No hay facturas aquí. Sube un PDF o imagen en Archivos y se escaneará sola.
         </ng-container>
       </div>
 
-      <button
-        type="button"
-        class="fila"
-        *ngFor="let f of filas; trackBy: trackFila"
-        (click)="abrir(f)"
-      >
-        <div class="fila-top">
-          <strong>{{ tituloFila(f) }}</strong>
-          <span class="badge" [ngClass]="'t-' + f.tipo">{{ etiquetaTipo(f.tipo) }}</span>
-        </div>
-        <div class="fila-meta muted">
-          <span>{{ fechaCorta(f.fecha) }}</span>
-          <span *ngIf="f.emisor"> · {{ f.emisor }}</span>
-        </div>
-        <div class="fila-imp">{{ dinero(f.total, f.moneda) }}</div>
-      </button>
+      <ng-container *ngFor="let g of grupos">
+        <div class="grupo-head" *ngIf="g.clave">{{ g.clave }}</div>
+        <button
+          type="button"
+          class="fila"
+          *ngFor="let f of g.filas; trackBy: trackFila"
+          (click)="abrir(f)"
+        >
+          <div class="fila-top">
+            <strong>{{ tituloFila(f) }}</strong>
+            <span class="badge" [ngClass]="'t-' + f.tipo">{{ etiquetaTipo(f.tipo) }}</span>
+          </div>
+          <div class="fila-meta muted">
+            <span>{{ fechaCorta(f.fecha) }}</span>
+            <span *ngIf="f.emisor"> · {{ f.emisor }}</span>
+            <span *ngIf="ordenCampo === 'cliente' && f.cliente"> · {{ f.cliente }}</span>
+          </div>
+          <div class="fila-imp">{{ dinero(f.total, f.moneda) }}</div>
+        </button>
+      </ng-container>
 
       <div class="paginacion" *ngIf="!cargando && total > 0">
         <button type="button" class="btn btn-outline btn-sm" [disabled]="pagina <= 1" (click)="irPagina(pagina - 1)">←</button>
@@ -63,6 +94,20 @@
     </div>
   </div>
 </ion-content>
+
+<ion-footer *ngIf="filtroAbierto && !form" class="ion-no-border sel-footer">
+  <div class="sel-actions">
+    <button
+      type="button"
+      *ngFor="let c of camposFiltro"
+      [class.active]="ordenCampo === c.id"
+      (click)="elegirOrden(c.id)"
+    >
+      <span>{{ c.etiqueta }}</span>
+      <ion-icon [name]="ordenCampo === c.id && ordenDir === 'asc' ? 'chevron-up' : 'chevron-down'"></ion-icon>
+    </button>
+  </div>
+</ion-footer>
 
 <div class="editor" *ngIf="form as f">
   <div class="editor-bar">

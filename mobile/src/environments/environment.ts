@@ -6,12 +6,12 @@ export const environment = {
   production: false,
   // Gateway cloud-mid: /gate (filtro IP/país) y /salida (presencia).
   gatewayUrl: {
-    web: 'http://localhost:8081/connected',
+    web: 'https://mid-cloud.akx-server.es/connected',
     android: 'https://mid-cloud.akx-server.es/connected',
   },
   // API de ATEKA (/api/...).
   atekaUrl: {
-    web: 'http://localhost:3000',
-    android: 'http://10.0.2.2:3000',
+    web: 'http://localhost:3001',
+    android: 'http://10.0.2.2:3001',
   },
 };

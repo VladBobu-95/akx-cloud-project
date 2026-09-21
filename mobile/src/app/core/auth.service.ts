@@ -137,6 +137,7 @@ export class AuthService {
         tap((r) => {
           this.cerrandoSesion = false;
           this.usuario.next(r.usuario);
+          void this.pingFiltro(true);
         }),
       );
     }
@@ -153,6 +154,7 @@ export class AuthService {
         await Preferences.set({ key: TOKEN_KEY, value: r.token });
         await Preferences.set({ key: USER_KEY, value: JSON.stringify(r.usuario) });
         this.usuario.next(r.usuario);
+        void this.pingFiltro(true);
       }),
     );
   }
@@ -223,11 +225,21 @@ export class AuthService {
   }
 
   private cerrandoSesion = false;
-  private pingEnVuelo: Promise<unknown> | null = null;
+  private pingEnVuelo: Promise<{ ok: boolean; motivo?: string; ip?: string }> | null = null;
+  private readonly onCerrarSesion: Array<() => void> = [];
 
-  async pingFiltro(): Promise<{ ok: boolean; motivo?: string; ip?: string }> {
+  alCerrarSesion(fn: () => void): () => void {
+    this.onCerrarSesion.push(fn);
+    return () => {
+      const i = this.onCerrarSesion.indexOf(fn);
+      if (i >= 0) this.onCerrarSesion.splice(i, 1);
+    };
+  }
+
+  async pingFiltro(alta = false): Promise<{ ok: boolean; motivo?: string; ip?: string }> {
     if (this.cerrandoSesion) return { ok: true };
-    const p = this.hacerPing();
+    if (this.pingEnVuelo) return this.pingEnVuelo;
+    const p = this.hacerPing(alta);
     this.pingEnVuelo = p;
     try {
       return await p;
@@ -236,13 +248,15 @@ export class AuthService {
     }
   }
 
-  private async hacerPing(): Promise<{ ok: boolean; motivo?: string; ip?: string }> {
+  private async hacerPing(alta = false): Promise<{ ok: boolean; motivo?: string; ip?: string }> {
     try {
       if (this.cerrandoSesion) return { ok: true };
       const deviceId = await idDispositivo();
       const token = await this.token();
+      if (this.cerrandoSesion) return { ok: true };
       const headers: Record<string, string> = { 'X-Device-Id': deviceId };
       if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (alta) headers['X-Presencia'] = 'alta';
       let data: { ok?: boolean; motivo?: string; ip?: string } = {};
       if (Capacitor.getPlatform() === 'android') {
         const gate = await this.conTope(
@@ -282,6 +296,13 @@ export class AuthService {
 
   async logout(): Promise<void> {
     this.cerrandoSesion = true;
+    for (const fn of this.onCerrarSesion) {
+      try {
+        fn();
+      } catch {
+        /* el ping de pestañas no debe bloquear el logout */
+      }
+    }
     try {
       await this.pingEnVuelo;
     } catch {
@@ -298,7 +319,9 @@ export class AuthService {
 
   private async avisarSalida(): Promise<void> {
     const deviceId = await idDispositivo();
-    const headers = { 'X-Device-Id': deviceId };
+    const token = await this.token();
+    const headers: Record<string, string> = { 'X-Device-Id': deviceId };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
     const q = `device=${encodeURIComponent(deviceId)}`;
     const una = async (): Promise<void> => {
       if (Capacitor.getPlatform() === 'android') {

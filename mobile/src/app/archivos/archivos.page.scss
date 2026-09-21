@@ -107,6 +107,7 @@
   font-size: 0.86rem;
   line-height: 1.35;
   display: -webkit-box;
+  line-clamp: 3;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -257,6 +258,11 @@
 .table tbody tr {
   cursor: pointer;
   user-select: none;
+  touch-action: none;
+}
+
+.arch-content.arrastrando {
+  --overflow: hidden;
 }
 
 .table tbody tr.seleccionada td {

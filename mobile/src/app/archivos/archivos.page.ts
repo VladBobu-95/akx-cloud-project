@@ -62,10 +62,11 @@ export class ArchivosPage {
 
   @ViewChild('fileInput') fileInput?: ElementRef<HTMLInputElement>;
   private poll: ReturnType<typeof setInterval> | null = null;
-  private dragStart: { x: number; y: number; tipo: 'archivo' | 'carpeta'; id: string; nombre: string } | null = null;
+  private dragStart: {  x: number; y: number;  tipo: 'archivo' | 'carpeta';  id: string; nombre: string;  pointerId: number; target: HTMLElement;} | null = null;
   private arrastreHecho = false;
   private onMove = (ev: PointerEvent) => this.enPointerMove(ev);
   private onUp = () => void this.enPointerUp();
+  private onCancel = () => this.abortarArrastre();
 
   constructor(
     public archivosApi: ArchivosService,
@@ -91,7 +92,7 @@ export class ArchivosPage {
   ionViewWillEnter() {
     document.addEventListener('pointermove', this.onMove, { passive: false });
     document.addEventListener('pointerup', this.onUp);
-    document.addEventListener('pointercancel', this.onUp);
+    document.addEventListener('pointercancel', this.onCancel);
     void this.cargar();
     this.poll = setInterval(() => {
       if (this.archivos.some((a) => this.archivosApi.procesando(a))) void this.cargar(true);
@@ -101,7 +102,7 @@ export class ArchivosPage {
   ionViewWillLeave() {
     document.removeEventListener('pointermove', this.onMove);
     document.removeEventListener('pointerup', this.onUp);
-    document.removeEventListener('pointercancel', this.onUp);
+    document.removeEventListener('pointercancel', this.onCancel);
     if (this.poll) {
       clearInterval(this.poll);
       this.poll = null;
@@ -589,10 +590,19 @@ export class ArchivosPage {
   }
 
   iniciarPosibleArrastre(ev: PointerEvent, tipo: 'archivo' | 'carpeta', id: string, nombre: string) {
-    if ((ev.target as HTMLElement).closest('.col-check')) return;
-    this.arrastreHecho = false;
-    this.dragStart = { x: ev.clientX, y: ev.clientY, tipo, id, nombre };
-  }
+  if ((ev.target as HTMLElement).closest('.col-check')) return;
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+  this.arrastreHecho = false;
+  this.dragStart = {
+    x: ev.clientX,
+    y: ev.clientY,
+    tipo,
+    id,
+    nombre,
+    pointerId: ev.pointerId,
+    target: ev.currentTarget as HTMLElement,
+  };
+}
 
   private itemsDeArrastre(tipo: 'archivo' | 'carpeta', id: string, nombre: string): DragItem[] {
     const seleccionado = tipo === 'archivo' ? this.sel.archivos.has(id) : this.sel.carpetas.has(id);
@@ -612,6 +622,10 @@ export class ArchivosPage {
       const dx = ev.clientX - this.dragStart.x;
       const dy = ev.clientY - this.dragStart.y;
       if (Math.hypot(dx, dy) < 14) return;
+      try {
+        this.dragStart.target.setPointerCapture(this.dragStart.pointerId);
+      } catch { }
+      ev.preventDefault();
       const items = this.itemsDeArrastre(this.dragStart.tipo, this.dragStart.id, this.dragStart.nombre);
       this.drag = {
         items,
@@ -661,6 +675,13 @@ export class ArchivosPage {
       this.cdr.detectChanges();
     }
   }
+
+  private abortarArrastre() {
+  this.dragStart = null;
+  this.drag = null;
+  this.destinoHover = null;
+  this.zone.run(() => this.cdr.detectChanges());
+}
 
   tamanoCarpeta(ruta: string): string {
     const pref = normalizarRuta(ruta);

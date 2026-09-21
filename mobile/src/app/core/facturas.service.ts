@@ -83,12 +83,24 @@ export class FacturasService {
     return body as T;
   }
 
-  async listar(opts: { tipo?: TipoFactura; pagina?: number; limite?: number } = {}): Promise<ListaFacturas> {
+  async listar(
+    opts: {
+      tipo?: TipoFactura;
+      pagina?: number;
+      limite?: number;
+      q?: string;
+      orden?: 'fecha' | 'emisor' | 'cliente' | 'total';
+      dir?: 'asc' | 'desc';
+    } = {},
+  ): Promise<ListaFacturas> {
     const q = new URLSearchParams({
       pagina: String(opts.pagina ?? 1),
       limite: String(opts.limite ?? 20),
     });
     if (opts.tipo) q.set('tipo', opts.tipo);
+    if (opts.q?.trim()) q.set('q', opts.q.trim());
+    if (opts.orden) q.set('orden', opts.orden);
+    if (opts.dir) q.set('dir', opts.dir);
     const data = await this.getJson<ListaFacturas>(`/api/facturas?${q.toString()}`);
     return {
       filas: Array.isArray(data?.filas) ? data.filas : [],

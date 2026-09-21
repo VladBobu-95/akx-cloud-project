@@ -49,9 +49,11 @@
   --danger-soft: #fee2e2;
   --bar: #0f172a;
   --radius: 12px;
+  color-scheme: light;
 }
 
 body.dark {
+  color-scheme: dark;
   --green-soft: #3f6d1250;
   --bg: #0f172a;
   --surface: #1e293b;

@@ -121,8 +121,13 @@ export class ChatService {
       }
       return data as RespuestaChat;
     }
-    return firstValueFrom(
-      this.http.post<RespuestaChat>(`${atekaUrl()}/api/chat`, body).pipe(timeout(CHAT_MS)),
+     return firstValueFrom(
+      this.http.post<RespuestaChat>(`${atekaUrl()}/api/chat`, body, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }).pipe(timeout(CHAT_MS)),
     );
   }
 

@@ -16,6 +16,7 @@ export class TabsPage {
   enPerfil = false;
   private ping: ReturnType<typeof setInterval> | null = null;
   private expulsando = false;
+  private quitarCerrar?: () => void;
 
   constructor(
     private auth: AuthService,
@@ -33,6 +34,10 @@ export class TabsPage {
     this.router.events.pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd)).subscribe((e) => {
       this.enPerfil = e.urlAfterRedirects.includes('/perfil');
     });
+    this.quitarCerrar = this.auth.alCerrarSesion(() => {
+      this.expulsando = true;
+      this.pararPing();
+    });
   }
 
   ionViewWillEnter() {
@@ -47,6 +52,7 @@ export class TabsPage {
   }
 
   ngOnDestroy() {
+    this.quitarCerrar?.();
     this.pararPing();
   }
 

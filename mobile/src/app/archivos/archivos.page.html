@@ -18,7 +18,7 @@
   </ion-toolbar>
 </ion-header>
 
-<ion-content class="arch-content" [class.arrastrando]="!!drag">
+<ion-content class="arch-content" [class.arrastrando]="!!drag" [scrollY]="!drag">
   <input #fileInput type="file" hidden (change)="onFile($event)" />
 
   <div class="page">
