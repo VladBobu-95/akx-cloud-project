@@ -16,6 +16,7 @@ import { FormsModule } from '@angular/forms';
 import { forkJoin, of, map, catchError, finalize } from 'rxjs';
 import { marked } from 'marked';
 import { ToastService } from '../../core/toast.service';
+import { AuthService } from '../../core/auth.service';
 import { Archivo, ResultadoBusqueda } from '../../core/models';
 import { FileSizePipe } from '../../shared/file-size.pipe';
 import { mensajeError } from '../../shared/errores';
@@ -63,6 +64,12 @@ export class ExploradorComponent implements OnInit {
   @Output() copiarAExterno = new EventEmitter<PeticionExportar>();
 
   private toast = inject(ToastService);
+  private auth = inject(AuthService);
+
+  // RBAC: sin la capacidad "gestion_archivos" el explorador es de solo lectura
+  // (se pueden ver y descargar archivos, pero no subir, mover, renombrar ni
+  // borrar). Esto solo oculta los botones; quien lo fuerce recibe un 403.
+  protected puedeGestionar = (): boolean => this.auth.puedeGestionArchivos();
 
   protected todos = signal<Archivo[]>([]);
   protected cargando = signal(false);
@@ -883,6 +890,7 @@ export class ExploradorComponent implements OnInit {
     nombre: string,
   ) {
     if (ev.button !== 0) return; // solo botón izquierdo
+    if (!this.puedeGestionar()) return; // sin permiso, el explorador es de solo lectura
     this.pendiente = { tipo, ref, nombre, x0: ev.clientX, y0: ev.clientY };
     document.body.classList.add('agarrando'); // mano cerrada al pulsar y mantener
   }

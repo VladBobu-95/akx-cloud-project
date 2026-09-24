@@ -4,7 +4,7 @@
         <p class="muted">{{ todos().length }} archivo(s) eliminado(s)</p>
       </div>
       <span class="spacer"></span>
-      @if (todos().length > 0) {
+      @if (todos().length > 0 && puedeGestionar()) {
         <button class="btn btn-danger" (click)="vaciar()">Vaciar papelera</button>
       }
     </div>
@@ -25,8 +25,10 @@
     @if (haySeleccion()) {
       <div class="bulk-bar">
         <span class="bulk-count">{{ numSeleccionados() }} seleccionado(s)</span>
-        <button class="btn btn-outline btn-sm" (click)="restaurarSeleccion()">↩️ Restaurar</button>
-        <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
+        @if (puedeGestionar()) {
+          <button class="btn btn-outline btn-sm" (click)="restaurarSeleccion()">↩️ Restaurar</button>
+          <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
+        }
         <span class="spacer"></span>
         <button class="btn btn-ghost btn-sm" (click)="limpiarSeleccion()">✕ Cancelar</button>
       </div>
@@ -70,8 +72,10 @@
                 <td class="muted">{{ fechaCarpeta(c) | date: 'dd/MM/yy HH:mm' }}</td>
                 <td>
                   <div class="acciones">
-                    <button class="btn btn-outline btn-sm" (click)="restaurarCarpeta(c)">Restaurar</button>
-                    <button class="btn btn-danger btn-sm" (click)="pedirBorrarCarpeta(c)">Borrar</button>
+                    @if (puedeGestionar()) {
+                      <button class="btn btn-outline btn-sm" (click)="restaurarCarpeta(c)">Restaurar</button>
+                      <button class="btn btn-danger btn-sm" (click)="pedirBorrarCarpeta(c)">Borrar</button>
+                    }
                   </div>
                 </td>
               </tr>
@@ -87,8 +91,10 @@
                 <td class="muted">{{ a.eliminadoEn | date: 'dd/MM/yy HH:mm' }}</td>
                 <td>
                   <div class="acciones">
-                    <button class="btn btn-outline btn-sm" (click)="restaurar(a)">Restaurar</button>
-                    <button class="btn btn-danger btn-sm" (click)="borrar(a)">Borrar</button>
+                    @if (puedeGestionar()) {
+                      <button class="btn btn-outline btn-sm" (click)="restaurar(a)">Restaurar</button>
+                      <button class="btn btn-danger btn-sm" (click)="borrar(a)">Borrar</button>
+                    }
                   </div>
                 </td>
               </tr>

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { verificarToken, soloAdmin } from "../middlewares/auth.middleware";
+import { verificarToken, soloAdmin, exigirGestionArchivos } from "../middlewares/auth.middleware";
 import { limitadorSubida, limiteBacklogUsuario } from "../middlewares/limites.middleware";
 import {
   ctrlListarAdmin,
@@ -54,13 +54,17 @@ router.get("/admin/:id/logs", soloAdmin, ctrlLogs);
 router.patch("/admin/:id", soloAdmin, ctrlActualizar);
 router.delete("/admin/:id", soloAdmin, ctrlEliminar);
 
+// El acceso a una carpeta compartida lo da el ROL (empresa + roles asignados a
+// la carpeta); además, MODIFICAR dentro de ella exige "gestion_archivos", igual
+// que en el espacio personal. Ver y descargar siguen abiertos a quien tenga acceso.
+
 // --- Operaciones sobre un archivo compartido concreto (van antes de "/:id/...") ---
 router.get("/archivo/:archivoId/descargar", ctrlDescargar);
-router.patch("/archivo/:archivoId", ctrlActualizarArchivo);
-router.post("/archivo/:archivoId/copiar", ctrlCopiarArchivo);
-router.post("/archivo/:archivoId/copiar-a-personal", ctrlCopiarAPersonal);
-router.post("/archivo/:archivoId/mover-a-personal", ctrlMoverAPersonal);
-router.delete("/archivo/:archivoId", ctrlEliminarArchivo);
+router.patch("/archivo/:archivoId", exigirGestionArchivos, ctrlActualizarArchivo);
+router.post("/archivo/:archivoId/copiar", exigirGestionArchivos, ctrlCopiarArchivo);
+router.post("/archivo/:archivoId/copiar-a-personal", exigirGestionArchivos, ctrlCopiarAPersonal);
+router.post("/archivo/:archivoId/mover-a-personal", exigirGestionArchivos, ctrlMoverAPersonal);
+router.delete("/archivo/:archivoId", exigirGestionArchivos, ctrlEliminarArchivo);
 
 // --- Uso (cualquier miembro con acceso) ---
 router.get("/", ctrlAccesibles);
@@ -68,14 +72,21 @@ router.get("/:id/todos", ctrlListarTodos);
 router.get("/:id/buscar", ctrlBuscar);
 router.get("/:id/carpeta/descargar", ctrlDescargarCarpetaZip);
 router.get("/:id/carpetas", ctrlListarSubcarpetas);
-router.post("/:id/carpetas", ctrlCrearSubcarpeta);
-router.patch("/:id/carpetas", ctrlReubicarSubcarpeta);
-router.delete("/:id/carpetas", ctrlEliminarSubcarpeta);
+router.post("/:id/carpetas", exigirGestionArchivos, ctrlCrearSubcarpeta);
+router.patch("/:id/carpetas", exigirGestionArchivos, ctrlReubicarSubcarpeta);
+router.delete("/:id/carpetas", exigirGestionArchivos, ctrlEliminarSubcarpeta);
 router.get("/:id/archivos", ctrlListarArchivos);
-router.post("/:id/mover-desde-personal", ctrlMoverDesdePersonal);
-router.post("/:id/copiar-desde-personal", ctrlCopiarDesdePersonal);
-router.post("/:id/mover-desde-compartido", ctrlMoverDesdeCompartido);
-router.post("/:id/copiar-desde-compartido", ctrlCopiarDesdeCompartido);
-router.post("/:id/subir", limitadorSubida, limiteBacklogUsuario, upload.single("archivo"), ctrlSubir);
+router.post("/:id/mover-desde-personal", exigirGestionArchivos, ctrlMoverDesdePersonal);
+router.post("/:id/copiar-desde-personal", exigirGestionArchivos, ctrlCopiarDesdePersonal);
+router.post("/:id/mover-desde-compartido", exigirGestionArchivos, ctrlMoverDesdeCompartido);
+router.post("/:id/copiar-desde-compartido", exigirGestionArchivos, ctrlCopiarDesdeCompartido);
+router.post(
+  "/:id/subir",
+  exigirGestionArchivos,
+  limitadorSubida,
+  limiteBacklogUsuario,
+  upload.single("archivo"),
+  ctrlSubir,
+);
 
 export default router;

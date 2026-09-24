@@ -51,6 +51,13 @@ export class AuthService {
     return this.tieneCapacidad('chat');
   }
 
+  // ¿Puede crear, subir, mover, renombrar y borrar archivos? Aquí solo se usa
+  // para ocultar los botones; la frontera real son las rutas que modifican en el
+  // backend (exigirGestionArchivos), que responden 403 sin esta capacidad.
+  puedeGestionArchivos(): boolean {
+    return this.tieneCapacidad('gestion_archivos');
+  }
+
   // Re-lee el perfil del backend y actualiza el usuario local (incl. capacidades).
   private refrescarPerfil(): void {
     this.http.get<{ usuario: Usuario }>(`${this.base}/perfil`).subscribe({

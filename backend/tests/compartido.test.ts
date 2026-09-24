@@ -36,11 +36,14 @@ describe("Carpetas compartidas (Fase 3)", () => {
     adminToken = admin.token;
     empresaId = admin.empresaId!;
 
+    // "gestion_archivos" hace falta para subir/mover/borrar también dentro de
+    // una carpeta compartida: el rol da ACCESO a la carpeta, la capacidad da
+    // permiso para MODIFICAR (ver o descargar no la necesitan).
     rolContaId = (
       await request(app)
         .post("/api/equipo/roles")
         .set(auth(adminToken))
-        .send({ nombre: "contabilidad", capacidades: ["facturas"] })
+        .send({ nombre: "contabilidad", capacidades: ["facturas", "gestion_archivos"] })
     ).body.id;
 
     miembroConToken = await crearMiembroConLogin(`cs_con_${Date.now()}@test.com`, [rolContaId]);

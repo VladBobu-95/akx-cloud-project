@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { forkJoin, of, catchError } from 'rxjs';
 import { ArchivosService } from '../../core/archivos.service';
 import { ToastService } from '../../core/toast.service';
+import { AuthService } from '../../core/auth.service';
 import { Archivo } from '../../core/models';
 import { FileSizePipe } from '../../shared/file-size.pipe';
 import { mensajeError } from '../../shared/errores';
@@ -24,6 +25,11 @@ import { normalizarRuta, padre, nombreHoja } from '../archivos/rutas.util';
 export class PapeleraPage {
   private svc = inject(ArchivosService);
   private toast = inject(ToastService);
+  private auth = inject(AuthService);
+
+  // RBAC: sin "gestion_archivos" la papelera se ve, pero no se puede restaurar
+  // ni borrar (el backend responde 403 a esas rutas).
+  protected puedeGestionar = (): boolean => this.auth.puedeGestionArchivos();
 
   protected todos = signal<Archivo[]>([]);
   protected cargando = signal(false);

@@ -495,10 +495,13 @@ const mensajeAclaracion = (opciones: OpcionAclaracion[], sugerencia?: boolean): 
 const TOOLS_LECTURA = new Set(["leer_archivo", "obtener_factura"]);
 
 // RBAC del chat: qué capacidad (vocabulario fijo de config/capacidades.ts) requiere
-// cada herramienta. Las que no aparecen no requieren ninguna (siempre disponibles:
-// p. ej. estadísticas, listar/crear/mover/eliminar archivos personales — gestión
-// básica de los propios archivos). El gating real lo aplica `ejecutarTool` (y se
-// filtra además la lista que ve el modelo). admin/superadmin tienen todas.
+// cada herramienta. Las que no aparecen no requieren ninguna (listar, buscar por
+// nombre, estadísticas: solo LECTURA). El gating real lo aplica `ejecutarTool` (y
+// se filtra además la lista que ve el modelo). admin/superadmin tienen todas.
+//
+// OJO al añadir una tool nueva que MODIFIQUE archivos o carpetas: hay que
+// apuntarla aquí con "gestion_archivos", o el chat se convierte en una puerta
+// trasera para saltarse el permiso que sí aplican las rutas REST.
 const TOOL_CAPACIDAD: Record<string, string> = {
   buscar_semantica: "busqueda",
   leer_archivo: "busqueda",
@@ -511,7 +514,30 @@ const TOOL_CAPACIDAD: Record<string, string> = {
   totales_compras: "facturas",
   compras_top: "facturas",
   proveedores_top: "facturas",
+  // Modifican archivos o carpetas (mismo permiso que en /api/archivos).
+  copiar_archivo: "gestion_archivos",
+  mover_archivo: "gestion_archivos",
+  renombrar_archivo: "gestion_archivos",
+  eliminar_archivo: "gestion_archivos",
+  crear_archivo: "gestion_archivos",
+  crear_carpeta: "gestion_archivos",
+  eliminar_carpeta: "gestion_archivos",
+  vaciar_carpeta: "gestion_archivos",
+  mover_carpeta: "gestion_archivos",
+  renombrar_carpeta: "gestion_archivos",
+  copiar_carpeta: "gestion_archivos",
+  borrar_todo: "gestion_archivos",
+  borrar_todas_carpetas: "gestion_archivos",
+  borrar_todos_archivos: "gestion_archivos",
+  restaurar_archivo: "gestion_archivos",
+  restaurar_todo: "gestion_archivos",
+  borrar_permanente: "gestion_archivos",
+  vaciar_papelera: "gestion_archivos",
 };
+
+// Aviso único cuando falta "gestion_archivos" (mismo texto que el 403 de la API).
+const MSG_SIN_GESTION =
+  "Tu rol no permite gestionar archivos. Pídele a un administrador de tu empresa un rol con la capacidad de gestión de archivos.";
 
 // Una fila de la tabla clicable de aclaración: `etiqueta` es lo que se muestra,
 // `valor` es lo que se manda como mensaje al pulsarla (para que la burbuja del
@@ -1378,6 +1404,11 @@ export const chatear = async (
     throw new AppError(403, "No tienes acceso al chatbot. Habla con el administrador de tu empresa.");
   }
   const puedeFacturas = capacidades.has("facturas");
+  const puedeGestion = capacidades.has("gestion_archivos");
+  // Los pre-flights que MODIFICAN no pasan por `ejecutarTool`, así que el mapa
+  // TOOL_CAPACIDAD no los cubre: cada uno llama a este veto antes de tocar nada.
+  const vetoGestion = (): { respuesta: string; acciones: string[] } | null =>
+    puedeGestion ? null : { respuesta: MSG_SIN_GESTION, acciones };
   const toolsPermitidas = TOOLS.filter((t) => {
     const cap = TOOL_CAPACIDAD[t.function.name];
     return !cap || capacidades.has(cap);
@@ -1770,6 +1801,8 @@ export const chatear = async (
     const msgConf = quitarTildes(msgLower).trim();
     if (ES_AFIRMACION.test(msgConf)) {
       if (pendienteConfirmacion.tool === "vaciar_papelera") {
+        const veto = vetoGestion();
+        if (veto) return veto;
         const r = await vaciarPapelera(usuarioId);
         acciones.push(`Papelera vaciada (${r.borrados} archivo/s)`);
         return {
@@ -2149,6 +2182,8 @@ export const chatear = async (
   // sin pasar por el modelo, igual que el resto de borrados/restauraciones masivas.
   const esRestaurarTodo = detectarRestaurarTodo(msgSinTildes);
   if (esRestaurarTodo) {
+    const veto = vetoGestion();
+    if (veto) return veto;
     const r = await restaurarTodo(usuarioId);
     acciones.push(`Restaurados ${r.restaurados} archivo/s de la papelera.`);
     return { respuesta: "Hecho.", acciones };
@@ -2163,6 +2198,10 @@ export const chatear = async (
   // resuelve el pre-flight específico de más abajo.
   const esVaciarPapelera = detectarVaciarPapelera(msgSinTildes);
   if (esVaciarPapelera) {
+    // Sin permiso se avisa YA, sin llegar a preguntar "¿seguro?" (el borrado en
+    // sí lo veta también el consumer de la confirmación, más arriba).
+    const veto = vetoGestion();
+    if (veto) return veto;
     const lista = await listarPapelera(usuarioId);
     if (lista.length === 0) return { respuesta: "La papelera ya está vacía.", acciones };
     const pregunta = await registrarConfirmacion(
@@ -2241,6 +2280,8 @@ export const chatear = async (
       new RegExp(`\\b(?:${VERBO_RESTAURAR}|${VERBO_BORRAR})\\b\\s+(?:el\\s+archivo\\s+)?["']?([\\wÀ-ÿ.-]+)`),
     );
     if (matchNombrePapelera && (tieneIntencionRestaurar || tieneIntencionBorrarDef)) {
+      const veto = vetoGestion();
+      if (veto) return veto;
       const res = await resolverEnPapelera(usuarioId, grupoOriginal(msgLower, matchNombrePapelera));
       if (res.error) return { respuesta: res.error, acciones };
       if (res.opciones) {
@@ -3406,6 +3447,8 @@ export const chatear = async (
     })();
   const esBorrarUnArchivo = !!matchNombreArchivoABorrar && !/carpeta|papelera/.test(msgSinTildes);
   if (esBorrarUnArchivo && matchNombreArchivoABorrar) {
+    const veto = vetoGestion();
+    if (veto) return veto;
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchNombreArchivoABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
@@ -3425,6 +3468,8 @@ export const chatear = async (
   );
   const esBorrarUnaCarpeta = !!matchNombreCarpetaABorrar && !/papelera/.test(msgSinTildes);
   if (esBorrarUnaCarpeta && matchNombreCarpetaABorrar) {
+    const veto = vetoGestion();
+    if (veto) return veto;
     const res = await resolverCarpeta(usuarioId, grupoOriginal(msgLower, matchNombreCarpetaABorrar));
     if (res.error) return { respuesta: res.error, acciones };
     if (res.opciones) {
@@ -3469,6 +3514,8 @@ export const chatear = async (
     !STOPWORDS_NOMBRE.has(quitarTildes(nombreCopiar.toLowerCase())) &&
     !/\bcarpeta\b/.test(quitarTildes(nombreCopiar.toLowerCase()));
   if (esCopiarUnArchivo && matchCopiar) {
+    const veto = vetoGestion();
+    if (veto) return veto;
     const destinoCrudo = matchCopiar[2] ? grupoOriginal(msgLower, matchCopiar, 2).trim() : undefined;
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchCopiar, 1).trim());
     if (res.error) return { respuesta: res.error, acciones };
@@ -3514,6 +3561,8 @@ export const chatear = async (
     !STOPWORDS_NOMBRE.has(quitarTildes(nombreMover.toLowerCase())) &&
     !/\bcarpeta\b/.test(quitarTildes(nombreMover.toLowerCase()));
   if (esMoverUnArchivo && matchMover) {
+    const veto = vetoGestion();
+    if (veto) return veto;
     const destinoCrudo = matchMover[2] ? grupoOriginal(msgLower, matchMover, 2).trim() : undefined;
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchMover, 1).trim());
     if (res.error) return { respuesta: res.error, acciones };
@@ -3571,6 +3620,8 @@ export const chatear = async (
     !STOPWORDS_NOMBRE.has(quitarTildes(nombreRenombrar.toLowerCase())) &&
     !/\bcarpeta\b/.test(quitarTildes(nombreRenombrar.toLowerCase()));
   if (esRenombrarUnArchivo && matchRenombrar) {
+    const veto = vetoGestion();
+    if (veto) return veto;
     const res = await resolverArchivo(usuarioId, grupoOriginal(msgLower, matchRenombrar, 1).trim());
     if (res.error) return { respuesta: res.error, acciones };
     const nuevoNombre = grupoOriginal(msgLower, matchRenombrar, 2).trim();
@@ -3592,6 +3643,8 @@ export const chatear = async (
     new RegExp(`\\b${VERBO_CREAR}\\b`).test(msgSinTildes) &&
     /\b(nota|archivo|documento|fichero)\b/.test(msgLower);
   if (esCrearNota) {
+    const veto = vetoGestion();
+    if (veto) return veto;
     const matchNombreExt = ultimoMensaje.match(/\b([\wÀ-ÿ-]+\.(?:md|txt))\b/i);
     const matchLlamado = ultimoMensaje.match(/llamad[oa]\s+["']?([\wÀ-ÿ.-]+)/i);
     const nombreNota = matchNombreExt?.[1] ?? (matchLlamado ? `${matchLlamado[1]}.md` : undefined);

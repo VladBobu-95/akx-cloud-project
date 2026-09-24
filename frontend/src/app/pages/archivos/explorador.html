@@ -1,5 +1,6 @@
     <div class="explorador">
-      <!-- Subir al directorio actual + nueva carpeta -->
+      <!-- Subir al directorio actual + nueva carpeta (solo con "gestion_archivos") -->
+      @if (puedeGestionar()) {
       <div class="card upload">
         <div class="up-row">
           <label class="file-pick">
@@ -9,6 +10,7 @@
           <button class="btn btn-outline" (click)="abrirNuevaCarpeta()">📁 Nueva carpeta</button>
         </div>
       </div>
+      }
 
       <!-- Búsqueda semántica (por el contenido de los documentos) -->
       @if (opciones.soportaBusqueda) {
@@ -80,9 +82,11 @@
       @if (haySeleccion()) {
         <div class="bulk-bar">
           <span class="bulk-count">{{ numSeleccionados() }} seleccionado(s)</span>
-          <button class="btn btn-outline btn-sm" (click)="abrirBulkCopiar()">📋 Copiar en…</button>
-          <button class="btn btn-outline btn-sm" (click)="abrirBulkMover()">📂 Mover a…</button>
-          <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
+          @if (puedeGestionar()) {
+            <button class="btn btn-outline btn-sm" (click)="abrirBulkCopiar()">📋 Copiar en…</button>
+            <button class="btn btn-outline btn-sm" (click)="abrirBulkMover()">📂 Mover a…</button>
+            <button class="btn btn-danger btn-sm" (click)="pedirBorrarSeleccion()">🗑️ Borrar</button>
+          }
           <span class="spacer"></span>
           <button class="btn btn-ghost btn-sm" (click)="limpiarSeleccion()">✕ Cancelar</button>
         </div>
@@ -222,22 +226,26 @@
       ></div>
       <div class="context-menu" [style.left.px]="m.x" [style.top.px]="m.y">
         @if (m.tipo === 'archivo') {
-          @if (opciones.soportaIA) {
+          @if (opciones.soportaIA && puedeGestionar()) {
             <button (click)="accionDescribir(m.ref)">📝 Añadir descripción</button>
             <button (click)="accionEscanear(m.ref)">🧾 Escanear</button>
           }
           <button (click)="accionDescargarArchivo(m.ref)">⬇️ Descargar</button>
-          <button (click)="accionCopiarEn('archivo', m.ref)">📋 Copiar en…</button>
-          <button (click)="accionRenombrarArchivo(m.ref)">✏️ Renombrar</button>
-          <button (click)="accionMoverA('archivo', m.ref)">📂 Mover a…</button>
-          <button class="peligro" (click)="accionEliminarArchivo(m.ref)">🗑️ Borrar</button>
+          @if (puedeGestionar()) {
+            <button (click)="accionCopiarEn('archivo', m.ref)">📋 Copiar en…</button>
+            <button (click)="accionRenombrarArchivo(m.ref)">✏️ Renombrar</button>
+            <button (click)="accionMoverA('archivo', m.ref)">📂 Mover a…</button>
+            <button class="peligro" (click)="accionEliminarArchivo(m.ref)">🗑️ Borrar</button>
+          }
         } @else {
           <button (click)="accionDescargarCarpeta(m.ref)">⬇️ Descargar</button>
-          <button (click)="cerrarMenu(); copiarCarpeta(m.ref)">📋 Copiar</button>
-          <button (click)="accionCopiarEn('carpeta', m.ref)">📋 Copiar en…</button>
-          <button (click)="cerrarMenu(); abrirRenombrarCarpeta(m.ref)">✏️ Renombrar</button>
-          <button (click)="accionMoverA('carpeta', m.ref)">📂 Mover a…</button>
-          <button class="peligro" (click)="cerrarMenu(); pedirBorrarCarpeta(m.ref)">🗑️ Borrar</button>
+          @if (puedeGestionar()) {
+            <button (click)="cerrarMenu(); copiarCarpeta(m.ref)">📋 Copiar</button>
+            <button (click)="accionCopiarEn('carpeta', m.ref)">📋 Copiar en…</button>
+            <button (click)="cerrarMenu(); abrirRenombrarCarpeta(m.ref)">✏️ Renombrar</button>
+            <button (click)="accionMoverA('carpeta', m.ref)">📂 Mover a…</button>
+            <button class="peligro" (click)="cerrarMenu(); pedirBorrarCarpeta(m.ref)">🗑️ Borrar</button>
+          }
         }
       </div>
     }

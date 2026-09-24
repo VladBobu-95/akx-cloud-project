@@ -4,6 +4,8 @@ import { env } from "../config/env";
 import { AppError } from "../utils/errors";
 import { AppDataSource } from "../config/database";
 import { Empresa } from "../entities/Empresa";
+import { Capacidad } from "../config/capacidades";
+import { capacidadesDe } from "../services/equipo.service";
 
 interface JwtPayload {
   sub: string;
@@ -92,3 +94,28 @@ export const soloSuperadmin = (
   }
   next();
 };
+
+// Middleware de RBAC por capacidad (vocabulario fijo de config/capacidades.ts):
+// corta con 403 si el rol del usuario no la tiene. admin/superadmin las tienen
+// todas (lo resuelve `capacidadesDe`). Va SIEMPRE después de verificarToken.
+// Solo se pone en las rutas que MODIFICAN; las de lectura quedan abiertas para
+// que alguien sin la capacidad siga viendo sus archivos.
+export const exigirCapacidad =
+  (capacidad: Capacidad, mensaje: string) =>
+  async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const capacidades = await capacidadesDe(req.usuario!.id);
+      if (!capacidades.has(capacidad)) {
+        throw new AppError(403, mensaje);
+      }
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+
+// Atajo para la capacidad más usada, con un mensaje que el usuario entienda.
+export const exigirGestionArchivos = exigirCapacidad(
+  "gestion_archivos",
+  "Tu rol no permite gestionar archivos. Pídele a un administrador de tu empresa un rol con la capacidad de gestión de archivos.",
+);
