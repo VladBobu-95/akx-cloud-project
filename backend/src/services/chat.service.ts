@@ -398,8 +398,12 @@ export const chatear = async (usuarioId: string, mensajes: MensajeChat[]): Promi
 
       consultas++;
       conversacion.push({ role: "assistant", content: "```sql\n" + sql + "\n```" });
+      // El SQL que escribió el modelo, en una línea: sin esto no hay forma de saber
+      // por qué el chat "no encuentra" algo (filtro equivocado, tabla errónea…).
+      const sqlLog = sql.replace(/\s+/g, " ").slice(0, 600);
       try {
         const r = await ejecutarSql(token, sql);
+        console.log(`[chat] sql (${r.filas.length} filas): ${sqlLog}`);
         // La tabla que acompaña a la respuesta es la última consulta que trajo
         // un listado (varias filas, o archivos que se puedan abrir).
         if (r.filas.length > 1 || (r.filas.length === 1 && r.columnas.includes("archivo_id"))) {
@@ -408,6 +412,7 @@ export const chatear = async (usuarioId: string, mensajes: MensajeChat[]): Promi
         conversacion.push({ role: "user", content: `[Resultado]\n${resultadoParaModelo(r)}` });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[chat] sql con error (${msg}): ${sqlLog}`);
         conversacion.push({
           role: "user",
           content: `[Error de la consulta]\n${msg}\nCorrige la consulta (solo las tablas y columnas del esquema).`,
