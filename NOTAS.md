@@ -52,6 +52,12 @@ así que la protección está en la BD, no en el prompt:
 rellena. `gestion_archivos` no aplica: el chat no modifica nada (para mover/borrar/subir remite
 al explorador).
 
+**Recién subidos**: `chat.archivos.procesando` (migración `1780…-ChatArchivosProcesando`) es true
+mientras el archivo sigue en la cola (extracción de texto o escaneo de factura). El prompt le pide
+al modelo que, si no encuentra la factura/contenido y el archivo está procesando, lo diga en vez
+de responder que no existe. El worker registra la duración de cada tarea
+(`[worker] indexar|autoescanear <archivoId> ok en N s`) para ver dónde se va el tiempo.
+
 **Modelo**: `OLLAMA_THINK=true` activa el modo pensamiento de qwen3 (mejor SQL en preguntas
 difíciles, bastante más lento). Solo se manda `think` a modelos que lo soportan
 (`soportaThink`, vía `/api/show`). `OLLAMA_NUM_CTX` (8192) es el mismo para el chat y la

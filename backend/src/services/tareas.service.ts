@@ -241,12 +241,18 @@ const conTimeoutTarea = <T>(p: Promise<T>, ms: number): Promise<T> =>
   ]);
 
 const procesarTarea = async (t: Tarea): Promise<void> => {
+  const inicio = Date.now();
   try {
     await conTimeoutTarea(
       t.tipo === "indexar" ? ejecutarIndexar(t) : ejecutarAutoescanear(t),
       env.WORKER_TAREA_TIMEOUT_MS,
     );
     await repo().update(t.id, { estado: "ok", error: null });
+    // Duración de cada fase (indexar = extraer texto/OCR, autoescanear = datos de
+    // la factura con la IA), para ver dónde se va el tiempo tras una subida.
+    console.log(
+      `[worker] ${t.tipo} ${t.archivoId} ok en ${((Date.now() - inicio) / 1000).toFixed(1)} s`,
+    );
   } catch (err) {
     await manejarFallo(t, err);
   }

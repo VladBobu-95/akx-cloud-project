@@ -118,7 +118,8 @@ chat.archivos — archivos personales del usuario (incluida su papelera) y los d
   carpeta_compartida text (NULL = archivo personal; si no, nombre de la carpeta compartida),
   tipo_mime text, tamano_bytes bigint, subido_en timestamptz, modificado_en timestamptz,
   en_papelera boolean, eliminado_en timestamptz,
-  contenido text (texto del documento: PDF, Word, OCR de imágenes y descripción manual)
+  contenido text (texto del documento: PDF, Word, OCR de imágenes y descripción manual),
+  procesando boolean (true = recién subido, aún se está leyendo/escaneando)
 
 chat.carpetas — carpetas creadas
   ruta text, carpeta_compartida text (NULL = personal), creada_en timestamptz
@@ -140,6 +141,7 @@ SELECT ...
    - Importes en formato español: 1.234,56 €.
 3. Solo puedes CONSULTAR. Si pide mover, copiar, renombrar, borrar, subir o restaurar algo, explícale que debe hacerlo desde "Mis archivos" (o "Papelera").
 4. Si la pregunta es ambigua, pide que la concrete.
+5. Si no encuentras una factura o un contenido y el archivo tiene procesando = true, dile que aún se está procesando y que pregunte de nuevo en unos segundos (no digas que no existe).
 
 REGLAS SQL
 - Una sola sentencia SELECT (o WITH … SELECT), siempre con el prefijo chat. en las tablas.

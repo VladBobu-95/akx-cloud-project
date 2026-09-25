@@ -4,6 +4,7 @@ import { app } from "../src/app";
 import { AppDataSource } from "../src/config/database";
 import { prepararRolChat, cerrarPoolChat } from "../src/config/chatDb";
 import { ChatSql1779000000000 } from "../src/migrations/1779000000000-ChatSql";
+import { ChatArchivosProcesando1780000000000 } from "../src/migrations/1780000000000-ChatArchivosProcesando";
 import { abrirAcceso, cerrarAcceso, ejecutarSql } from "../src/services/chat.service";
 import { crearUsuario, UsuarioTest } from "./helpers";
 
@@ -49,11 +50,14 @@ describe("Chat por SQL: frontera de la BD", () => {
     const [{ existe }] = await AppDataSource.query(
       `SELECT to_regclass('chat.archivos') IS NOT NULL AS existe`,
     );
-    if (!existe) {
-      const qr = AppDataSource.createQueryRunner();
-      await new ChatSql1779000000000().up(qr);
-      await qr.release();
-    }
+    const [{ conProcesando }] = await AppDataSource.query(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'chat' AND table_name = 'archivos' AND column_name = 'procesando') AS "conProcesando"`,
+    );
+    const qr = AppDataSource.createQueryRunner();
+    if (!existe) await new ChatSql1779000000000().up(qr);
+    if (!conProcesando) await new ChatArchivosProcesando1780000000000().up(qr);
+    await qr.release();
     await prepararRolChat();
 
     a = await crearUsuario(`sql_a_${Date.now()}@test.com`);
@@ -71,6 +75,19 @@ describe("Chat por SQL: frontera de la BD", () => {
     const nombres = r.filas.map((f) => f[0]);
     expect(nombres).toContain("presupuesto-a.txt");
     expect(nombres).not.toContain("secreto-b.txt");
+  });
+
+  it("marca como procesando lo recién subido y deja de hacerlo al terminar", async () => {
+    await AppDataSource.query(
+      `UPDATE "archivos" SET "estadoIndexado" = 'indexando' WHERE "nombre" = 'presupuesto-a.txt'`,
+    );
+    let r = await consultar(a, "SELECT procesando FROM chat.archivos WHERE nombre = 'presupuesto-a.txt'");
+    expect(r.filas[0][0]).toBe(true);
+    await AppDataSource.query(
+      `UPDATE "archivos" SET "estadoIndexado" = 'indexado', "estadoEscaneo" = NULL WHERE "nombre" = 'presupuesto-a.txt'`,
+    );
+    r = await consultar(a, "SELECT procesando FROM chat.archivos WHERE nombre = 'presupuesto-a.txt'");
+    expect(r.filas[0][0]).toBe(false);
   });
 
   it("filtrar por contenido no deja ver archivos ajenos", async () => {
