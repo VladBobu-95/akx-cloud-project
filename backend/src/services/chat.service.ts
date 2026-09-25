@@ -366,6 +366,10 @@ export const chatear = async (usuarioId: string, mensajes: MensajeChat[]): Promi
 
   const token = await abrirAcceso(usuarioId, ctx);
   let tabla: TablaChat | undefined;
+  // Métricas para el log: cuánto tarda la respuesta y en qué (modelo vs. SQL).
+  const inicio = Date.now();
+  let msModelo = 0;
+  let consultas = 0;
   try {
     for (let i = 0; i <= MAX_CONSULTAS; i++) {
       const ultimaVuelta = i === MAX_CONSULTAS;
@@ -375,10 +379,16 @@ export const chatear = async (usuarioId: string, mensajes: MensajeChat[]): Promi
           content: "Ya no puedes hacer más consultas. Responde al usuario con los datos que tienes.",
         });
       }
+      const t0 = Date.now();
       const salida = await llamarModelo(conversacion);
+      msModelo += Date.now() - t0;
       const sql = ultimaVuelta ? null : extraerSql(salida);
 
       if (!sql) {
+        console.log(
+          `[chat] respuesta en ${((Date.now() - inicio) / 1000).toFixed(1)} s ` +
+            `(${i + 1} llamadas al modelo: ${(msModelo / 1000).toFixed(1)} s, ${consultas} consultas SQL)`,
+        );
         const respuesta = salida.replace(/```[\s\S]*?```/g, "").trim();
         return {
           respuesta: respuesta || "No he sabido responder a eso. ¿Puedes reformular la pregunta?",
@@ -386,6 +396,7 @@ export const chatear = async (usuarioId: string, mensajes: MensajeChat[]): Promi
         };
       }
 
+      consultas++;
       conversacion.push({ role: "assistant", content: "```sql\n" + sql + "\n```" });
       try {
         const r = await ejecutarSql(token, sql);

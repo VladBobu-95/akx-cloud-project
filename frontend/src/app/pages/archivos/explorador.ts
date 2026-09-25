@@ -521,8 +521,13 @@ export class ExploradorComponent implements OnInit {
       this.subidaRestantes.set(0);
       if (fallidos === 0) {
         if (dups > 0 && nuevos === 0) {
+          // El duplicado se detecta por CONTENIDO, no por nombre: se dice con qué
+          // nombre y dónde está el que ya había, para que se pueda encontrar.
+          const existente = resultados.find((r) => r.ok && r.archivo?.duplicado)?.archivo;
           this.toast.exito(
-            dups === 1 ? 'Ese archivo ya lo tenías (no se ha duplicado)' : `${dups} ya los tenías (no se duplicaron)`,
+            dups === 1 && existente
+              ? `Ya tenías este archivo como «${existente.nombre}» en ${existente.carpeta || '/'} (no se ha duplicado)`
+              : `${dups} ya los tenías (no se duplicaron)`,
           );
         } else if (dups > 0) {
           this.toast.exito(`${nuevos} subido(s); ${dups} ya existían`);
