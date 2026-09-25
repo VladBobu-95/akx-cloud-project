@@ -135,14 +135,15 @@ CÓMO RESPONDER
 SELECT ...
 \`\`\`
    Recibirás el resultado y podrás hacer otra consulta si hace falta, o responder.
-   Ante CUALQUIER pregunta sobre sus archivos, fotos, documentos, carpetas o facturas, consulta SIEMPRE antes de responder: nunca contestes de memoria ni digas que no tienes acceso o que no puedes verlo.
+   Ante CUALQUIER pregunta sobre sus archivos, fotos, documentos, carpetas o facturas, consulta SIEMPRE antes de responder, aunque ya se hablara de ello antes en la conversación (tus respuestas anteriores pueden estar incompletas o desactualizadas): nunca contestes de memoria ni digas que no tienes acceso o que no puedes verlo.
 2. Cuando tengas los datos (o si no hacen falta, p. ej. un saludo), responde al usuario en español, en markdown, breve y claro.
    - Usa SOLO los datos de los resultados. No inventes nombres, cifras ni fechas. Si no hay resultados, dilo.
    - No menciones SQL, consultas, tablas ni columnas.
    - Si el resultado tiene varias filas, se mostrará como tabla debajo de tu respuesta: no las copies todas, resume (cuántas hay, totales, lo más destacado).
    - Importes en formato español: 1.234,56 €.
 3. Solo puedes CONSULTAR. Si pide mover, copiar, renombrar, borrar, subir o restaurar algo, explícale que debe hacerlo desde "Mis archivos" (o "Papelera").
-4. Si la pregunta es ambigua, pide que la concrete.
+4. Responde SOLO al ÚLTIMO mensaje del usuario. Los mensajes anteriores son contexto (para entender "¿y en mayo?" o "ese archivo"): no los vuelvas a contestar.
+   Si la pregunta es ambigua, pide que la concrete.
 5. Si no encuentras una factura o un contenido y el archivo tiene procesando = true, dile que aún se está procesando y que pregunte de nuevo en unos segundos (no digas que no existe).
 
 REGLAS SQL
@@ -150,6 +151,7 @@ REGLAS SQL
 - Excluye la papelera (NOT en_papelera) salvo que pregunte por la papelera.
 - Texto: compara sin distinguir mayúsculas ni tildes: unaccent(columna) ILIKE unaccent('%texto%').
 - Carpeta X incluye sus subcarpetas: (carpeta = '/x' OR carpeta LIKE '/x/%').
+- Buscar un archivo por nombre: usa la parte distintiva SIN la extensión (unaccent(nombre) ILIKE unaccent('%texto%'), no '%texto.webp%'). Si no sale nada, haz OTRA consulta más amplia (una palabra del nombre, o los archivos más recientes) antes de decir que no existe.
 - Al listar archivos o facturas incluye archivo_id (permite al usuario abrirlos) y un ORDER BY con sentido.
 ${reglaFacturas}
 ${reglaContenido}
@@ -349,11 +351,35 @@ const cargarContexto = async (usuarioId: string, caps: Set<string>): Promise<Con
   };
 };
 
+// Una pregunta del usuario seguida de OTRA pregunta suya se quedó sin respuesta
+// (se canceló al mandar la siguiente mientras la IA pensaba). Si se deja, el
+// modelo contesta las dos a la vez ("no encuentro X… y sobre Y…"), así que solo
+// se conservan las preguntas que tuvieron respuesta, más la última.
+export const sinPreguntasHuerfanas = (mensajes: MensajeChat[]): MensajeChat[] =>
+  mensajes.filter(
+    (m, i) => m.rol !== "usuario" || i === mensajes.length - 1 || mensajes[i + 1].rol !== "usuario",
+  );
+
+// Las respuestas anteriores del bot se recortan: sirven de contexto ("ese
+// archivo", "¿y en mayo?") pero no deben ser una fuente de datos. Enteras, el
+// modelo contestaba copiándolas sin volver a consultar, y repetía sus errores
+// ("no encuentro X") o datos ya desactualizados.
+const MAX_CHARS_RESPUESTA_PREVIA = 200;
+
 const aHistorial = (mensajes: MensajeChat[]): MensajeOllama[] =>
-  mensajes.slice(-MAX_HISTORIAL).map((m) => ({
-    role: m.rol === "usuario" ? "user" : "assistant",
-    content: m.contenido.slice(0, MAX_CHARS_MENSAJE),
-  }));
+  sinPreguntasHuerfanas(mensajes)
+    .slice(-MAX_HISTORIAL)
+    .map((m) =>
+      m.rol === "usuario"
+        ? { role: "user", content: m.contenido.slice(0, MAX_CHARS_MENSAJE) }
+        : {
+            role: "assistant",
+            content:
+              m.contenido.length > MAX_CHARS_RESPUESTA_PREVIA
+                ? `${m.contenido.slice(0, MAX_CHARS_RESPUESTA_PREVIA)}…`
+                : m.contenido,
+          },
+    );
 
 export const chatear = async (usuarioId: string, mensajes: MensajeChat[]): Promise<RespuestaChat> => {
   // Capacidad maestra: sin "chat" no hay chatbot (el front además oculta la página).
