@@ -19,9 +19,13 @@ export const ollamaHeaders = (): Record<string, string> => {
 // `think` explícitamente (si no, piensan por defecto y tardan mucho), y a los que
 // no lo tienen no se les puede mandar `think: true` (Ollama responde error).
 const cacheThink = new Map<string, boolean>();
+// Respaldo por nombre si /api/show no responde (p. ej. un proxy delante de Ollama
+// que solo deja pasar algunas rutas): familias conocidas con modo pensamiento.
+const THINK_POR_NOMBRE = /^(qwen3|deepseek-r1|gpt-oss|magistral|phi4-reasoning|cogito)/i;
 export const soportaThink = async (modelo: string): Promise<boolean> => {
   const cacheado = cacheThink.get(modelo);
   if (cacheado !== undefined) return cacheado;
+  let soporta = THINK_POR_NOMBRE.test(modelo);
   try {
     const res = await fetch(`${env.OLLAMA_URL}/api/show`, {
       method: "POST",
@@ -30,12 +34,14 @@ export const soportaThink = async (modelo: string): Promise<boolean> => {
       signal: AbortSignal.timeout(10_000),
     });
     const data = (await res.json()) as { capabilities?: string[] };
-    const soporta = res.ok && (data.capabilities ?? []).includes("thinking");
-    cacheThink.set(modelo, soporta);
-    return soporta;
+    if (res.ok && Array.isArray(data.capabilities)) {
+      soporta = data.capabilities.includes("thinking");
+    }
   } catch {
-    return false; // sin cachear: se reintenta en la siguiente llamada
+    // Sin respuesta de /api/show: se queda la deducción por nombre.
   }
+  cacheThink.set(modelo, soporta);
+  return soporta;
 };
 
 // Campo `think` para el body de /api/chat: solo se manda si el modelo lo admite.

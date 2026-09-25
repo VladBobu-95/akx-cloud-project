@@ -4,7 +4,7 @@ import { PDFParse } from "pdf-parse";
 import sharp from "sharp";
 import { createWorker, OEM, PSM, type Worker } from "tesseract.js";
 import { env } from "../config/env";
-import { ollamaHeaders } from "../config/ollama";
+import { campoThink, ollamaHeaders } from "../config/ollama";
 
 // MIME de un .docx (Word moderno).
 const DOCX_MIME =
@@ -17,7 +17,14 @@ const DOCX_MIME =
 // transcribirse entera, así que el límite no afecta al caso bueno.
 const MAX_TOKENS_OCR = 800;
 
+// Si el modelo de visión es el MISMO que el del chat (un único modelo multimodal
+// para todo), se le pasa el mismo num_ctx: con otro valor, Ollama lo recargaría
+// en cada imagen. Y sin modo pensamiento, que en OCR no aporta y lo haría lento.
+const opcionesMismoModelo = async (modelo: string): Promise<{ think?: boolean }> =>
+  modelo === env.OLLAMA_MODEL ? campoThink(modelo, false) : {};
+
 const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): Promise<string> => {
+  const esChat = modelo === env.OLLAMA_MODEL;
   const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: "POST",
     headers: ollamaHeaders(),
@@ -31,7 +38,12 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
         },
       ],
       stream: false,
-      options: { temperature: 0, num_predict: MAX_TOKENS_OCR },
+      ...(await opcionesMismoModelo(modelo)),
+      options: {
+        temperature: 0,
+        num_predict: MAX_TOKENS_OCR,
+        ...(esChat ? { num_ctx: env.OLLAMA_NUM_CTX } : {}),
+      },
       // keep_alive mantiene el VLM (granite/deepseek-ocr) cargado entre imágenes
       // de un mismo lote. La cola agrupa por fases para que el swap deepseek↔qwen
       // sea uno por lote (no por imagen); esto evita además que, dentro de la fase,
@@ -58,18 +70,19 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
       `Modelo de visión (${modelo}) falló: status=${res.status} error=${data.error ?? "-"} done=${data.done ?? "-"} done_reason=${data.done_reason ?? "-"}`,
     );
   }
-  return data.message.content;
+  return data.message.content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 };
 
-// 2ª pasada: OCR especialista (deepseek-ocr). La transcripción más fiel de
-// texto/tablas/importes, pero lento y, ante una imagen SIN texto, alucina; por
-// eso solo se usa cuando la 1ª pasada ya detectó que parece una factura.
+// 2ª pasada: OCR especialista (deepseek-ocr, glm-ocr). La transcripción más fiel
+// de texto/tablas/importes, pero ante una imagen SIN texto alucina; por eso solo
+// se usa cuando la 1ª pasada ya detectó que parece una factura.
+// glm-ocr no sigue instrucciones libres: solo entiende sus órdenes fijas
+// ("Text Recognition:", "Table Recognition:"…).
+const PROMPT_OCR = /^glm-ocr/i.test(env.OLLAMA_OCR_MODEL)
+  ? "Text Recognition:"
+  : "Transcribe TODO el texto de esta imagen tal cual aparece (números, importes, fechas, líneas de la tabla). No añadas explicaciones.";
 const ocrConOllama = (buffer: Buffer): Promise<string> =>
-  consultarVision(
-    env.OLLAMA_OCR_MODEL,
-    "Transcribe TODO el texto de esta imagen tal cual aparece (números, importes, fechas, líneas de la tabla). No añadas explicaciones.",
-    buffer,
-  );
+  consultarVision(env.OLLAMA_OCR_MODEL, PROMPT_OCR, buffer);
 
 // 1ª pasada: modelo de visión ligero (granite3.2-vision). Rápido, cabe entero en
 // GPU y hace las dos cosas — transcribe el texto si lo hay, o describe la foto si
@@ -379,13 +392,17 @@ const traducirAlEspanol = async (texto: string): Promise<string> => {
           },
         ],
         stream: false,
-        options: { temperature: 0 },
+        // Mismo num_ctx y sin pensamiento, como el chat: si no, Ollama recargaría
+        // el modelo y qwen3 pensaría antes de cada traducción.
+        ...(await campoThink(env.OLLAMA_MODEL, false)),
+        options: { temperature: 0, num_ctx: env.OLLAMA_NUM_CTX },
+        keep_alive: "30m",
       }),
       // Timeout: si la traducción se cuelga, devolvemos el texto original (catch).
       signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
     });
     const data = (await res.json()) as { message?: { content?: string } };
-    return data.message?.content?.trim() || texto;
+    return data.message?.content?.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || texto;
   } catch (err) {
     console.error("[extraccion] no se pudo traducir la descripción al español:", err);
     return texto;
