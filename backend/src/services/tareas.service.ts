@@ -4,7 +4,7 @@ import { Archivo } from "../entities/Archivo";
 import { minioClient } from "../config/minio";
 import { env } from "../config/env";
 import { AppError } from "../utils/errors";
-import { indexarArchivo } from "./rag.service";
+import { indexarArchivo } from "./contenido.service";
 import {
   escanearFactura,
   marcarEnProceso,
@@ -111,7 +111,7 @@ const ejecutarIndexar = async (t: Tarea): Promise<void> => {
   await marcarEnProceso(archivo); // estadoEscaneo = "escaneando" (spinner del explorador)
 
   const buffer = await descargarBuffer(archivo.claveMinio);
-  await indexarArchivo(archivo, buffer, t.usuarioId);
+  await indexarArchivo(archivo, buffer);
 
   await archivoRepo().update(archivo.id, {
     estadoIndexado: "indexado",
@@ -122,7 +122,7 @@ const ejecutarIndexar = async (t: Tarea): Promise<void> => {
   // si no, limpiamos el estado para que el spinner no se quede encendido.
   // Los archivos en carpetas COMPARTIDAS no se auto-escanean: una factura
   // compartida no debe atribuirse al usuario que la subió (la analítica de
-  // facturas es personal). El texto/indexado RAG sí se hace para la búsqueda.
+  // facturas es personal). El texto sí se extrae (lo lee el chat).
   if (archivo.carpetaCompartidaId) {
     // Compartido: nunca se encadena autoescanear, así que el estado final lo
     // dejamos aquí. Hay que limpiarlo SIEMPRE, incluso si es candidato a factura

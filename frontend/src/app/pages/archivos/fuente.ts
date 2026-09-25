@@ -21,7 +21,7 @@ export interface FuenteArchivos {
   eliminar(id: string): Observable<unknown>;
   describirArchivo(id: string, descripcion: string): Observable<unknown>;
   escanearFactura(id: string, pista?: string): Observable<unknown>;
-  buscarSemantica(q: string): Observable<ResultadoBusqueda[]>;
+  buscar(q: string): Observable<ResultadoBusqueda[]>;
 }
 
 // Opciones de comportamiento que difieren entre Personal y Compartido.
@@ -29,7 +29,7 @@ export interface OpcionesExplorador {
   // Etiqueta de la raíz en los listados de "Mover a…" ("Mis archivos" o el nombre
   // de la carpeta compartida).
   etiquetaRaiz: string;
-  // Buscador semántico (RAG). Solo en personal (la búsqueda del chat es personal).
+  // Buscador por nombre y contenido, acotado a su espacio (personal o esa carpeta compartida).
   soportaBusqueda: boolean;
   // Acciones de IA en el menú contextual: añadir descripción / escanear factura.
   soportaIA: boolean;

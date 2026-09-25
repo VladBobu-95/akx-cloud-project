@@ -12,5 +12,5 @@ FROM nginx:alpine
 # Config propia: SPA + proxy /api -> backend
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Archivos estáticos del build de Angular (carpeta browser del builder application)
-COPY --from=build /app/dist/akx-cloud-frontend/browser /usr/share/nginx/html
+COPY --from=build /app/dist/ateka-cloud-frontend/browser /usr/share/nginx/html
 EXPOSE 80

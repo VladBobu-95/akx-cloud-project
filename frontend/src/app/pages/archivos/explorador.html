@@ -12,7 +12,7 @@
       </div>
       }
 
-      <!-- Búsqueda semántica (por el contenido de los documentos) -->
+      <!-- Buscador (por nombre y por el contenido de los documentos) -->
       @if (opciones.soportaBusqueda) {
       <div class="card buscador">
         <form class="buscar-row" (ngSubmit)="buscar()">
@@ -21,7 +21,7 @@
             type="text"
             name="consulta"
             [(ngModel)]="consulta"
-            placeholder="Buscar por contenido… (ej: facturas de transporte)"
+            placeholder="Buscar por nombre o contenido…"
             autocomplete="off"
           />
           <button class="btn btn-primary" type="submit" [disabled]="buscando() || !consulta.trim()">
@@ -43,7 +43,9 @@
                     <strong [innerHTML]="resaltar(r.nombre)"></strong>
                     <span class="muted">{{ r.carpeta }}</span>
                   </div>
-                  <p class="res-frag" [innerHTML]="fragmentoResaltado(r.fragmento)"></p>
+                  @if (r.fragmento) {
+                    <p class="res-frag" [innerHTML]="fragmentoResaltado(r.fragmento)"></p>
+                  }
                 </button>
               }
             }

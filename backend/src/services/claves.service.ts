@@ -7,7 +7,7 @@ import { Usuario } from "../entities/Usuario";
 import { AppError } from "../utils/errors";
 
 const MAX_ACTIVAS = 5;
-const PREFIJO_SECRETO = "akx_live_";
+const PREFIJO_SECRETO = "ateka_live_";
 
 export const schemaCrearClave = z.object({
   nombre: z.string().trim().min(1).max(60).optional(),

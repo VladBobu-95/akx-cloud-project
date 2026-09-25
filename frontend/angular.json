@@ -7,7 +7,7 @@
   },
   "newProjectRoot": "projects",
   "projects": {
-    "akx-cloud-frontend": {
+    "ateka-cloud-frontend": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:component": {
@@ -87,10 +87,10 @@
           },
           "configurations": {
             "production": {
-              "buildTarget": "akx-cloud-frontend:build:production"
+              "buildTarget": "ateka-cloud-frontend:build:production"
             },
             "development": {
-              "buildTarget": "akx-cloud-frontend:build:development"
+              "buildTarget": "ateka-cloud-frontend:build:development"
             }
           },
           "defaultConfiguration": "development"

@@ -16,8 +16,8 @@ import { AppError } from "../utils/errors";
 import { calcularHashSha256 } from "./archivos.service";
 import { crearCarpeta } from "./carpetas.service";
 import { esArchivoFactura, marcarPendiente } from "./facturas.service";
-import { buscarEnCarpetaCompartida, ResultadoSemantico } from "./rag.service";
 import { encolarTarea, P_ALTA, P_IMG_SCAN } from "./tareas.service";
+import { buscarEnCompartidaTexto, ResultadoBusqueda } from "./contenido.service";
 
 // Carpetas compartidas por rol. El admin las crea y decide qué roles acceden; los
 // miembros con esos roles ven/usan los archivos (almacenamiento ÚNICO: lo que
@@ -350,8 +350,6 @@ export const descargarCompartido = async (
 export const eliminarCompartido = async (archivoId: string, usuarioId: string): Promise<void> => {
   const archivo = await cargarCompartidoConAcceso(archivoId, usuarioId);
   await minioClient.removeObject(env.MINIO_BUCKET, archivo.claveMinio).catch(() => {});
-  // Los fragmentos RAG del archivo se borran solos por el FK ON DELETE CASCADE
-  // (FK_fragmentos_archivo), igual que en el borrado permanente personal.
   await archivoRepo().delete(archivo.id);
   await registrarEvento(archivo.carpetaCompartidaId!, usuarioId, "eliminar", {
     objeto: archivo.nombre,
@@ -378,16 +376,15 @@ export const listarTodosCompartidos = async (
   });
 };
 
-// Búsqueda semántica acotada a UNA carpeta compartida (mismo buscador que "Mis
-// archivos", pero solo sobre el contenido de ese espacio compartido). Verifica
+// Buscador acotado a UNA carpeta compartida (por nombre y contenido). Verifica
 // que el usuario tiene acceso antes de buscar.
 export const buscarEnCompartida = async (
   usuarioId: string,
   carpetaCompartidaId: string,
   consulta: string,
-): Promise<ResultadoSemantico[]> => {
+): Promise<ResultadoBusqueda[]> => {
   await verificarAcceso(usuarioId, carpetaCompartidaId);
-  return buscarEnCarpetaCompartida(carpetaCompartidaId, consulta);
+  return buscarEnCompartidaTexto(carpetaCompartidaId, consulta);
 };
 
 // Subcarpetas EXPLÍCITAS persistidas (incluidas las vacías) de una carpeta compartida.
@@ -533,7 +530,7 @@ export const actualizarArchivoCompartido = async (
 };
 
 // Copia un archivo compartido (binario incluido) dentro de la misma carpeta
-// compartida. Duplica también sus fragmentos RAG (reutilizando embeddings).
+// compartida.
 export const copiarArchivoCompartido = async (
   archivoId: string,
   usuarioId: string,
@@ -585,18 +582,6 @@ export const copiarArchivoCompartido = async (
 
   try {
     const guardado = await archivoRepo().save(copia);
-    // Duplicamos los fragmentos RAG (incl. carpetaCompartidaId) para que la copia
-    // también aparezca en la búsqueda; reutiliza los embeddings ya calculados.
-    try {
-      await AppDataSource.query(
-        `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
-         SELECT $1, "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding"
-         FROM "fragmentos" WHERE "archivoId" = $2`,
-        [guardado.id, original.id],
-      );
-    } catch (errFrag) {
-      console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
-    }
     await registrarEvento(carpetaCompartidaId, usuarioId, "copiar", {
       objeto: guardado.nombre,
       ruta: carpetaFinal,
@@ -648,7 +633,7 @@ const nombreCompartidoUnico = (carpetaCompartidaId: string, carpeta: string, nom
 // deduplica): conserva el nombre exacto y solo añade "(copia)" si ya existe uno con
 // ese nombre en la carpeta destino, y auto-escaneo de factura si procede (la
 // analítica de facturas es personal, así que ahora sí se atribuye a este usuario).
-// Reutiliza el binario y los fragmentos RAG ya calculados: no re-OCR ni re-embeddings.
+// Reutiliza el texto ya extraído: no re-OCR.
 export const copiarCompartidoAPersonal = async (
   archivoId: string,
   usuarioId: string,
@@ -684,7 +669,7 @@ export const copiarCompartidoAPersonal = async (
     textoExtraido: original.textoExtraido,
     propietario: { id: usuarioId } as Usuario,
     carpetaCompartidaId: null, // pasa a ser un archivo personal
-    estadoIndexado: "indexado", // reutilizamos texto + fragmentos ya calculados
+    estadoIndexado: "indexado", // reutilizamos el texto ya extraído
     indexadoEn: new Date(),
   });
 
@@ -699,19 +684,6 @@ export const copiarCompartidoAPersonal = async (
   // Persistimos la carpeta personal destino como metadata (igual que subirArchivo),
   // para que exista aunque un futuro movimiento la deje vacía.
   if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal).catch(() => {});
-
-  // Copiamos los fragmentos RAG como PERSONALES: nuevo propietario y sin carpeta
-  // compartida, para que la copia sea buscable en el RAG personal sin re-embeddings.
-  try {
-    await AppDataSource.query(
-      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
-       SELECT $1, $2, NULL, "indice", "texto", "embedding"
-       FROM "fragmentos" WHERE "archivoId" = $3`,
-      [guardado.id, usuarioId, original.id],
-    );
-  } catch (errFrag) {
-    console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
-  }
 
   // Auto-escaneo "como si fuera mía": si es candidata a factura, encolamos la tarea
   // durable de autoescaneo. El worker deja el estado final en la columna "Estado".
@@ -754,8 +726,7 @@ const cargarPersonalPropio = async (archivoId: string, usuarioId: string): Promi
 };
 
 // MOVER personal → compartido: reasigna el archivo en sitio (misma claveMinio, no se
-// copia el binario). Sale de la analítica personal (se borran sus filas Factura) y
-// sus fragmentos RAG pasan al espacio compartido.
+// copia el binario). Sale de la analítica personal (se borran sus filas Factura).
 export const moverPersonalACompartido = async (
   archivoId: string,
   usuarioId: string,
@@ -772,7 +743,7 @@ export const moverPersonalACompartido = async (
     if (existente) {
       await facturaRepo().delete({ archivo: { id: archivo.id } });
       await minioClient.removeObject(env.MINIO_BUCKET, archivo.claveMinio).catch(() => {});
-      await archivoRepo().delete(archivo.id); // fragmentos personales por CASCADE
+      await archivoRepo().delete(archivo.id);
       await registrarEvento(carpetaCompartidaId, usuarioId, "subir", {
         objeto: existente.nombre,
         ruta: existente.carpeta,
@@ -789,12 +760,6 @@ export const moverPersonalACompartido = async (
   archivo.carpetaCompartidaId = carpetaCompartidaId;
   archivo.carpeta = carpetaFinal;
   const guardado = await archivoRepo().save(archivo);
-
-  // Reasignar los fragmentos RAG al espacio compartido (búsqueda por rol).
-  await AppDataSource.query(
-    `UPDATE "fragmentos" SET "carpetaCompartidaId" = $1 WHERE "archivoId" = $2`,
-    [carpetaCompartidaId, archivo.id],
-  ).catch((err) => console.error(`[mover] fragmentos de "${archivo.nombre}":`, err));
 
   if (carpetaFinal !== "/") {
     await crearSubcarpetaCompartida(usuarioId, carpetaCompartidaId, carpetaFinal, false).catch(() => {});
@@ -833,11 +798,6 @@ export const moverCompartidoAPersonal = async (
   original.propietario = { id: usuarioId } as Usuario;
   const guardado = await archivoRepo().save(original);
 
-  await AppDataSource.query(
-    `UPDATE "fragmentos" SET "carpetaCompartidaId" = NULL, "propietarioId" = $1 WHERE "archivoId" = $2`,
-    [usuarioId, original.id],
-  ).catch((err) => console.error(`[mover] fragmentos de "${original.nombre}":`, err));
-
   if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal).catch(() => {});
 
   // Auto-escaneo "como si fuera mía" (la analítica de facturas es personal).
@@ -861,7 +821,7 @@ export const moverCompartidoAPersonal = async (
 };
 
 // COPIAR personal → compartido: duplica el binario a una clave nueva del compartido.
-// El original personal permanece. Reutiliza texto + fragmentos RAG ya calculados.
+// El original personal permanece. Reutiliza el texto ya extraído.
 export const copiarPersonalACompartido = async (
   archivoId: string,
   usuarioId: string,
@@ -895,7 +855,7 @@ export const copiarPersonalACompartido = async (
     textoExtraido: original.textoExtraido,
     propietario: { id: usuarioId } as Usuario, // autor/auditoría
     carpetaCompartidaId,
-    estadoIndexado: "indexado", // reutilizamos texto + fragmentos ya calculados
+    estadoIndexado: "indexado", // reutilizamos el texto ya extraído
     indexadoEn: new Date(),
   });
 
@@ -905,17 +865,6 @@ export const copiarPersonalACompartido = async (
   } catch (err) {
     await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
     throw err;
-  }
-
-  // Fragmentos RAG copiados al espacio compartido (reutiliza embeddings).
-  try {
-    await AppDataSource.query(
-      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
-       SELECT $1, $2, $3, "indice", "texto", "embedding" FROM "fragmentos" WHERE "archivoId" = $4`,
-      [guardado.id, usuarioId, carpetaCompartidaId, original.id],
-    );
-  } catch (errFrag) {
-    console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
   }
 
   if (carpetaFinal !== "/") {
@@ -937,8 +886,8 @@ export const copiarPersonalACompartido = async (
 // saca del compartido de origen para TODOS los del rol; copiar duplica el binario y
 // deja el original. Dedup por (carpeta compartida destino, hash).
 
-// MOVER compartido → compartido: cambia el `carpetaCompartidaId` del archivo (y sus
-// fragmentos RAG) al destino. Desaparece del compartido de origen para todos.
+// MOVER compartido → compartido: cambia el `carpetaCompartidaId` del archivo al
+// destino. Desaparece del compartido de origen para todos.
 export const moverCompartidoACompartido = async (
   archivoId: string,
   usuarioId: string,
@@ -961,7 +910,7 @@ export const moverCompartidoACompartido = async (
     const existente = await buscarCompartidoPorHash(ccDestinoId, original.hashSha256);
     if (existente) {
       await minioClient.removeObject(env.MINIO_BUCKET, original.claveMinio).catch(() => {});
-      await archivoRepo().delete(original.id); // fragmentos por CASCADE
+      await archivoRepo().delete(original.id);
       await registrarEvento(ccOrigen, usuarioId, "eliminar", {
         objeto: original.nombre,
         ruta: rutaAntes,
@@ -975,12 +924,6 @@ export const moverCompartidoACompartido = async (
   original.carpetaCompartidaId = ccDestinoId;
   original.carpeta = carpetaFinal;
   const guardado = await archivoRepo().save(original);
-
-  // Reasignar los fragmentos RAG al espacio compartido destino (búsqueda por rol).
-  await AppDataSource.query(
-    `UPDATE "fragmentos" SET "carpetaCompartidaId" = $1 WHERE "archivoId" = $2`,
-    [ccDestinoId, original.id],
-  ).catch((err) => console.error(`[mover] fragmentos de "${original.nombre}":`, err));
 
   if (carpetaFinal !== "/") {
     await crearSubcarpetaCompartida(usuarioId, ccDestinoId, carpetaFinal, false).catch(() => {});
@@ -1001,7 +944,7 @@ export const moverCompartidoACompartido = async (
 };
 
 // COPIAR compartido → compartido: duplica el binario a una clave nueva del destino.
-// El original permanece en su compartido. Reutiliza texto + fragmentos RAG.
+// El original permanece en su compartido. Reutiliza el texto ya extraído.
 export const copiarCompartidoACompartido = async (
   archivoId: string,
   usuarioId: string,
@@ -1039,7 +982,7 @@ export const copiarCompartidoACompartido = async (
     textoExtraido: original.textoExtraido,
     propietario: { id: usuarioId } as Usuario, // autor/auditoría
     carpetaCompartidaId: ccDestinoId,
-    estadoIndexado: "indexado", // reutilizamos texto + fragmentos ya calculados
+    estadoIndexado: "indexado", // reutilizamos el texto ya extraído
     indexadoEn: new Date(),
   });
 
@@ -1049,17 +992,6 @@ export const copiarCompartidoACompartido = async (
   } catch (err) {
     await minioClient.removeObject(env.MINIO_BUCKET, nuevaClave).catch(() => {});
     throw err;
-  }
-
-  // Fragmentos RAG copiados al espacio compartido destino (reutiliza embeddings).
-  try {
-    await AppDataSource.query(
-      `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "carpetaCompartidaId", "indice", "texto", "embedding")
-       SELECT $1, $2, $3, "indice", "texto", "embedding" FROM "fragmentos" WHERE "archivoId" = $4`,
-      [guardado.id, usuarioId, ccDestinoId, original.id],
-    );
-  } catch (errFrag) {
-    console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
   }
 
   if (carpetaFinal !== "/") {

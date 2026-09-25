@@ -84,7 +84,7 @@ export class ExploradorComponent implements OnInit {
     this.subiendo() ? `Subiendo… (${this.subidaRestantes()})` : ' Subir archivos',
   );
 
-  // Búsqueda semántica (RAG). resultados = null → aún no se ha buscado.
+  // Buscador por nombre y contenido. resultados = null → aún no se ha buscado.
   protected consulta = '';
   protected buscando = signal(false);
   protected resultados = signal<ResultadoBusqueda[] | null>(null);
@@ -319,13 +319,13 @@ export class ExploradorComponent implements OnInit {
     });
   }
 
-  // --- Búsqueda semántica ---
+  // --- Buscador ---
   buscar() {
     const q = this.consulta.trim();
     if (!q || this.buscando()) return;
     this.buscando.set(true);
     this.ultimaConsulta.set(q);
-    this.datos.buscarSemantica(q).subscribe({
+    this.datos.buscar(q).subscribe({
       next: (res) => {
         this.resultados.set(res);
         this.buscando.set(false);
@@ -399,7 +399,7 @@ export class ExploradorComponent implements OnInit {
     const tramos = this.tramosCoincidentes(texto);
     const VENTANA = 260;
     if (tramos.length === 0) {
-      // Coincidencia solo semántica (sin la palabra literal): muestra el inicio.
+      // Sin la palabra en este trozo (p. ej. solo casaba el nombre): muestra el inicio.
       const corte = texto.slice(0, VENTANA);
       return this.escaparHtml(corte) + (texto.length > VENTANA ? '…' : '');
     }
@@ -684,7 +684,7 @@ export class ExploradorComponent implements OnInit {
   }
   // Todo se escanea/indexa automáticamente al subir; este modal sirve para
   // AÑADIR una descripción a mano (sobre todo a fotos) y que se pueda encontrar
-  // por contenido en el buscador semántico.
+  // por contenido en el buscador.
   accionDescribir(id: string) {
     const a = this.archivoPorId(id);
     this.cerrarMenu();

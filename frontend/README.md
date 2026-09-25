@@ -1,4 +1,4 @@
-# AKX Cloud — Frontend
+# ATEKA Cloud — Frontend
 
 Interfaz web (Angular) para CloudDrive: chatbot IA, gestión de archivos con carpetas y
 papelera, autenticación y perfil.
@@ -121,7 +121,7 @@ helper de mensajes de error. UI propia sin frameworks de componentes.
 ```
 src/app/
   core/        auth, archivos, chat, theme, toast (servicios), interceptor, guard, modelos
-  layout/      shell con navbar AKX Cloud
+  layout/      shell con navbar ATEKA Cloud
   pages/       login, inicio (chat), archivos, papelera, perfil
   shared/      pipe de tamaño, helper de errores, toasts
   environments/environment.ts   apiUrl (vacío en dev → usa el proxy)
@@ -130,7 +130,7 @@ src/app/
 ## Build de producción
 
 ```bash
-npm run build    # genera dist/akx-cloud-frontend/browser
+npm run build    # genera dist/ateka-cloud-frontend/browser
 ```
 
 ## Despliegue con Docker (recomendado)

@@ -10,30 +10,23 @@ const TOKEN_KEY = 'akx_mobile_token';
 const CHAT_KEY = 'akx_mobile_chat';
 const CHAT_MS = 120_000;
 
+// Resultado de la última consulta del asistente con varias filas (ver backend
+// chat.service.ts). Las columnas "*_id" no se muestran.
+export type TablaChat = {
+  columnas: string[];
+  filas: (string | number | boolean | null)[][];
+  truncada: boolean;
+};
+
 export type Mensaje = {
   de: 'usuario' | 'bot';
   texto: string;
-  archivos?: { id: string; nombre: string }[];
-  tablaAclaracion?: {
-    titulo: string;
-    filas: { etiqueta: string; valor: string; id?: string }[];
-  };
-  tablaFacturas?: {
-    titulo: string;
-    filas: { archivoNombre: string | null; fecha: string; total: number; moneda: string }[];
-  };
-  tablaArchivos?: { titulo: string; filas: { nombre: string; carpeta: string }[] };
-  tablaCarpetas?: { titulo: string; filas: { ruta: string }[] };
+  tabla?: TablaChat;
 };
 
 type RespuestaChat = {
   respuesta: string;
-  acciones?: string[];
-  archivos?: { id: string; nombre: string }[];
-  tablaFacturas?: Mensaje['tablaFacturas'];
-  tablaArchivos?: Mensaje['tablaArchivos'];
-  tablaCarpetas?: Mensaje['tablaCarpetas'];
-  tablaAclaracion?: Mensaje['tablaAclaracion'];
+  tabla?: TablaChat;
 };
 
 @Injectable({ providedIn: 'root' })
@@ -64,31 +57,20 @@ export class ChatService {
     await Preferences.remove({ key: CHAT_KEY });
   }
 
-  async enviarMensaje(texto: string, idOpcion?: string): Promise<void> {
+  async enviarMensaje(texto: string): Promise<void> {
     const t = texto.trim();
     if (!t) return;
     this.mensajes = [...this.mensajes, { de: 'usuario', texto: t }];
     this.pensando = true;
     await this.persistir();
     try {
+      // Contexto: los últimos mensajes de los dos lados (el chat es de solo
+      // lectura, reenviar el historial no repite acciones).
       const historial = this.mensajes
-        .filter((m) => m.de === 'usuario')
         .slice(-8)
-        .map((m) => ({ rol: 'usuario' as const, contenido: m.texto }));
-      const r = await this.postChat(historial, idOpcion);
-      const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
-      this.mensajes = [
-        ...this.mensajes,
-        {
-          de: 'bot',
-          texto: (r.respuesta || '') + extra,
-          archivos: r.archivos,
-          tablaFacturas: r.tablaFacturas,
-          tablaArchivos: r.tablaArchivos,
-          tablaCarpetas: r.tablaCarpetas,
-          tablaAclaracion: r.tablaAclaracion,
-        },
-      ];
+        .map((m) => ({ rol: m.de, contenido: m.texto }));
+      const r = await this.postChat(historial);
+      this.mensajes = [...this.mensajes, { de: 'bot', texto: r.respuesta || '', tabla: r.tabla }];
     } catch (err) {
       this.mensajes = [...this.mensajes, { de: 'bot', texto: this.mensajeError(err) }];
     } finally {
@@ -98,11 +80,10 @@ export class ChatService {
   }
 
   private async postChat(
-    mensajes: { rol: 'usuario'; contenido: string }[],
-    idOpcion?: string,
+    mensajes: { rol: 'usuario' | 'bot'; contenido: string }[],
   ): Promise<RespuestaChat> {
     const { value: token } = await Preferences.get({ key: TOKEN_KEY });
-    const body = idOpcion ? { mensajes, idOpcion } : { mensajes };
+    const body = { mensajes };
     if (Capacitor.getPlatform() === 'android') {
       const r = await this.conTope(
         CapacitorHttp.post({

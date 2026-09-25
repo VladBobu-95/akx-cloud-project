@@ -24,34 +24,11 @@
       <div *ngIf="m.de === 'usuario'" class="texto">{{ m.texto }}</div>
       <div *ngIf="m.de === 'bot'" class="md" [innerHTML]="renderBot(m.texto)"></div>
 
-      <div class="tabla" *ngIf="m.tablaCarpetas as tc">
-        <h3>{{ tc.titulo }}</h3>
-        <p *ngFor="let c of tc.filas">📁 {{ c.ruta }}</p>
-      </div>
-
-      <div class="tabla" *ngIf="m.tablaArchivos as ta">
-        <h3>{{ ta.titulo }}</h3>
-        <p *ngFor="let a of ta.filas">📄 {{ a.nombre }} <span class="muted">{{ a.carpeta }}</span></p>
-      </div>
-
-      <div class="tabla" *ngIf="m.tablaFacturas as tf">
-        <h3>{{ tf.titulo }}</h3>
-        <p *ngFor="let f of tf.filas">
-          {{ f.archivoNombre || '—' }} · {{ f.fecha }} · {{ formatImporte(f.total, f.moneda) }}
+      <div class="tabla" *ngIf="m.tabla as t">
+        <p *ngFor="let fila of filasVisibles(t)">{{ lineaFila(t, fila) }}</p>
+        <p class="muted" *ngIf="t.filas.length > filasVisibles(t).length">
+          …y {{ t.filas.length - filasVisibles(t).length }} más.
         </p>
-      </div>
-
-      <div class="aclaracion" *ngIf="m.tablaAclaracion as ac">
-        <h3>{{ ac.titulo }}</h3>
-        <button
-          type="button"
-          *ngFor="let f of ac.filas"
-          class="opt"
-          [disabled]="chat.pensando"
-          (click)="elegir(f.valor, f.id)"
-        >
-          {{ f.etiqueta }}
-        </button>
       </div>
     </div>
 

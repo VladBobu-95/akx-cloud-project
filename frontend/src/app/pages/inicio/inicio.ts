@@ -2,7 +2,7 @@ import { AfterViewInit, Component, ElementRef, effect, inject, viewChild } from 
 import { FormsModule } from '@angular/forms';
 import { marked } from 'marked';
 import { AuthService } from '../../core/auth.service';
-import { ChatService, TablaAclaracion, TablaCarpetas } from '../../core/chat.service';
+import { ChatService, TablaChat, ValorTabla } from '../../core/chat.service';
 import { ArchivosService } from '../../core/archivos.service';
 import { ToastService } from '../../core/toast.service';
 import { mensajeError } from '../../shared/errores';
@@ -79,113 +79,111 @@ export class InicioPage implements AfterViewInit {
     this.enviarTexto(texto);
   }
 
-  // Pulsar una fila de la tabla de aclaración manda su `valor` igual que si el
-  // usuario lo hubiera escrito y dado a Enter (para que la burbuja lea bien),
-  // más el `id` exacto de la opción (si la tiene) como `idOpcion`: el backend
-  // lo usa para resolverla sin ambigüedad en vez de re-comparar texto (dos
-  // opciones pueden compartir el mismo nombre en carpetas distintas).
-  protected seleccionarAclaracion(valor: string, id?: string) {
-    this.enviarTexto(valor, id);
-  }
-
-  // Botón "Resumen" de la tabla de facturas: pide el resumen de esa factura como
-  // si el usuario hubiera escrito "resumen <nombre>" (lo resuelve el pre-flight
-  // de resumen del backend, que devuelve el resumen estructurado con su botón
-  // "Abrir"). Se manda como mensaje para que quede registrado en la conversación.
-  protected resumenFactura(nombre: string) {
-    this.enviarTexto(`resumen ${nombre}`);
-  }
-
   // Delega en el servicio, que gestiona "pensando", la cancelación de la respuesta
   // en curso y añadir la respuesta al historial (sobrevive al cambio de pestaña).
-  private enviarTexto(texto: string, idOpcion?: string) {
+  private enviarTexto(texto: string) {
     if (!texto) return;
-    this.chat.enviarMensaje(texto, idOpcion);
+    this.chat.enviarMensaje(texto);
     setTimeout(() => this.inputChat()?.nativeElement.focus(), 0);
   }
 
-  // --- Paginación de las tablas del chat ---
-  // Facturas y archivos piden la página al backend (REST) reenviando filtro/carpeta;
-  // se sustituye la tabla del mensaje (in situ) con las filas nuevas.
-  protected paginarFacturas(index: number, nuevaPagina: number) {
-    const m = this.mensajes()[index];
-    const t = m?.tablaFacturas;
-    if (!t || nuevaPagina < 1 || nuevaPagina > t.totalPaginas) return;
-    this.chat.masFacturas(t.filtro, nuevaPagina, t.limite).subscribe({
-      next: (r) =>
-        this.chat.actualizarMensaje(index, {
-          ...m,
-          tablaFacturas: { ...t, pagina: nuevaPagina, totalPaginas: r.paginas, total: r.total, filas: r.filas },
-        }),
-      error: (err) => this.toast.error(mensajeError(err)),
-    });
+  // --- Tabla de resultados del asistente ---
+  // El backend manda todas las filas (máx. 200); se paginan en memoria.
+  private readonly FILAS_POR_PAGINA = 10;
+
+  // Columnas visibles: los identificadores ("*_id") no se enseñan.
+  protected columnasVisibles(t: TablaChat): { nombre: string; i: number }[] {
+    return t.columnas
+      .map((c, i) => ({ nombre: c, i }))
+      .filter(({ nombre }) => !nombre.endsWith('_id'));
   }
 
-  protected paginarArchivos(index: number, nuevaPagina: number) {
-    const m = this.mensajes()[index];
-    const t = m?.tablaArchivos;
-    if (!t || nuevaPagina < 1 || nuevaPagina > t.totalPaginas) return;
-    this.archivosSvc.listar(t.carpeta, nuevaPagina, t.limite).subscribe({
-      next: (r) =>
-        this.chat.actualizarMensaje(index, {
-          ...m,
-          tablaArchivos: {
-            ...t,
-            pagina: r.pagina,
-            totalPaginas: r.paginas,
-            total: r.total,
-            filas: r.archivos.map((a) => ({
-              id: a.id,
-              nombre: a.nombre,
-              carpeta: a.carpeta,
-              tamanoBytes: String(a.tamanoBytes),
-              subidoEn: String(a.subidoEn),
-            })),
-          },
-        }),
-      error: (err) => this.toast.error(mensajeError(err)),
-    });
+  protected titulo(columna: string): string {
+    const t = columna.replace(/_/g, ' ');
+    return t.charAt(0).toUpperCase() + t.slice(1);
   }
 
-  // Carpetas: todas las filas vienen en el mensaje, se pagina en memoria.
-  protected totalPaginasCarpetas(t: TablaCarpetas): number {
-    return Math.max(1, Math.ceil(t.filas.length / t.limite));
-  }
-  protected filasCarpetasVisibles(t: TablaCarpetas): { ruta: string }[] {
-    const pagina = t.pagina ?? 1;
-    const ini = (pagina - 1) * t.limite;
-    return t.filas.slice(ini, ini + t.limite);
-  }
-  protected paginarCarpetas(index: number, nuevaPagina: number) {
-    const m = this.mensajes()[index];
-    const t = m?.tablaCarpetas;
-    if (!t || nuevaPagina < 1 || nuevaPagina > this.totalPaginasCarpetas(t)) return;
-    this.chat.actualizarMensaje(index, { ...m, tablaCarpetas: { ...t, pagina: nuevaPagina } });
+  protected totalPaginas(t: TablaChat): number {
+    return Math.max(1, Math.ceil(t.filas.length / this.FILAS_POR_PAGINA));
   }
 
-  // Aclaración: igual que carpetas, todas las opciones vienen en el mensaje y se
-  // pagina en memoria (normalmente son pocas, pero por si hay muchas coincidencias).
-  protected totalPaginasAclaracion(t: TablaAclaracion): number {
-    return Math.max(1, Math.ceil(t.filas.length / t.limite));
+  protected filasVisibles(t: TablaChat): ValorTabla[][] {
+    const ini = ((t.pagina ?? 1) - 1) * this.FILAS_POR_PAGINA;
+    return t.filas.slice(ini, ini + this.FILAS_POR_PAGINA);
   }
-  protected filasAclaracionVisibles(t: TablaAclaracion): { etiqueta: string; valor: string; id?: string }[] {
-    const pagina = t.pagina ?? 1;
-    const ini = (pagina - 1) * t.limite;
-    return t.filas.slice(ini, ini + t.limite);
-  }
-  protected paginarAclaracion(index: number, nuevaPagina: number) {
+
+  protected paginar(index: number, nuevaPagina: number) {
     const m = this.mensajes()[index];
-    const t = m?.tablaAclaracion;
-    if (!t || nuevaPagina < 1 || nuevaPagina > this.totalPaginasAclaracion(t)) return;
-    this.chat.actualizarMensaje(index, { ...m, tablaAclaracion: { ...t, pagina: nuevaPagina } });
+    const t = m?.tabla;
+    if (!t || nuevaPagina < 1 || nuevaPagina > this.totalPaginas(t)) return;
+    this.chat.actualizarMensaje(index, { ...m, tabla: { ...t, pagina: nuevaPagina } });
+  }
+
+  // Archivo que abre el botón de la fila: su archivo_id y, como nombre, la
+  // columna "nombre" o "archivo" si la consulta la trajo.
+  protected archivoDeFila(t: TablaChat, fila: ValorTabla[]): { id: string; nombre: string } | null {
+    const iId = t.columnas.indexOf('archivo_id');
+    const id = iId >= 0 ? fila[iId] : null;
+    if (typeof id !== 'string' || !id) return null;
+    const iNombre = ['nombre', 'archivo'].map((c) => t.columnas.indexOf(c)).find((i) => i >= 0);
+    const nombre = iNombre !== undefined ? fila[iNombre] : null;
+    return { id, nombre: typeof nombre === 'string' ? nombre : 'archivo' };
+  }
+
+  protected tieneArchivos(t: TablaChat): boolean {
+    return t.columnas.includes('archivo_id');
+  }
+
+  // Formato de celda: números y fechas a la española, booleanos como Sí/No.
+  // Importes con divisa si la fila trae una columna "moneda".
+  private fmtNumero = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 });
+  protected celda(t: TablaChat, fila: ValorTabla[], i: number): string {
+    const v = fila[i];
+    if (v === null || v === '') return '—';
+    if (typeof v === 'boolean') return v ? 'Sí' : 'No';
+    const columna = t.columnas[i];
+    if (typeof v === 'number') {
+      if (columna === 'tamano_bytes') return this.formatTamano(v);
+      const iMoneda = t.columnas.indexOf('moneda');
+      const esImporte = /total|subtotal|iva|importe|base|precio|gasto|venta|compra|media|beneficio/.test(columna);
+      if (iMoneda >= 0 && esImporte && typeof fila[iMoneda] === 'string') {
+        return this.formatImporte(v, fila[iMoneda] as string);
+      }
+      return this.fmtNumero.format(v);
+    }
+    const s = String(v);
+    const fecha = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(s);
+    if (fecha) {
+      const [, y, mo, d, h, mi] = fecha;
+      if (!h) return `${d}/${mo}/${y}`;
+      return new Date(s.replace(' ', 'T')).toLocaleString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+    return s.length > 120 ? s.slice(0, 119) + '…' : s;
+  }
+
+  private formatTamano(bytes: number): string {
+    const unidades = ['B', 'KB', 'MB', 'GB'];
+    let n = bytes;
+    let u = 0;
+    while (n >= 1024 && u < unidades.length - 1) {
+      n /= 1024;
+      u++;
+    }
+    return `${this.fmtNumero.format(n)} ${unidades[u]}`;
   }
 
   // Formatea un importe con su divisa (es-ES: miles con ".", decimales con ","),
   // p. ej. (1234.5, "USD") → "1.234,50 US$". Si la moneda no es un código válido,
   // cae a un número con el código detrás, sin romper. Cachea el formateador por
-  // divisa (las tablas de facturas pueden tener muchas filas).
+  // divisa (las tablas pueden tener muchas filas).
   private fmtImporte = new Map<string, Intl.NumberFormat>();
-  protected formatImporte(total: number, moneda?: string): string {
+  private formatImporte(total: number, moneda?: string): string {
     const cod = moneda || 'EUR';
     let fmt = this.fmtImporte.get(cod);
     if (!fmt) {

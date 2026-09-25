@@ -24,7 +24,7 @@ export class EquipoPage {
   // Etiquetas legibles del vocabulario fijo de capacidades.
   protected readonly CAP_LABELS: Record<string, string> = {
     facturas: 'Facturas (escanear, listar, analítica)',
-    busqueda: 'Búsqueda de archivos (RAG)',
+    busqueda: 'Leer el contenido de los documentos (chat)',
     gestion_archivos: 'Gestión de archivos',
     chat: 'Usar el chatbot',
   };

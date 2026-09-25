@@ -129,14 +129,12 @@
         border-radius: 4px;
         font-size: 0.85em;
       }
-      /* Listados del chat (facturas/archivos): tabla real (no markdown) para
-         poder poner el botón "Abrir" en su propia fila, a la derecha. */
-      .tabla-titulo {
-        font-size: 0.98rem;
-        margin: 10px 0 6px;
-      }
-      .tabla-titulo:first-child {
-        margin-top: 0;
+      /* Tabla de resultados bajo la respuesta del asistente: tabla real (no
+         markdown) para poder poner el botón "Abrir" en cada fila. Con muchas
+         columnas se desplaza en horizontal dentro de la burbuja. */
+      .tabla-scroll {
+        overflow-x: auto;
+        margin-top: 8px;
       }
       .tabla-chat {
         width: 100%;
@@ -161,49 +159,18 @@
       .burbuja.bot .tabla-chat tbody tr:hover td {
         background: rgba(148, 163, 184, 0.16);
       }
-      .tabla-chat td:last-child {
-        text-align: right;
-        white-space: nowrap;
-      }
       .tabla-chat .btn {
         font-size: 0.85rem;
-      }
-      .acciones-aclaracion {
-        display: flex;
-        justify-content: center;
-        gap: 6px;
-      }
-      .acciones-fila {
-        display: flex;
-        justify-content: flex-end;
-        gap: 6px;
-      }
-      /* Listado de carpetas (se pagina en memoria). */
-      .lista-carpetas {
-        margin: 0 0 6px;
-        padding-left: 18px;
-        font-size: 0.88rem;
-      }
-      .lista-carpetas li {
-        margin: 2px 0;
-        list-style: none;
+        white-space: nowrap;
       }
       /* Controles de paginación bajo cada tabla del chat. */
       .pag-chat {
         display: flex;
         align-items: center;
         gap: 10px;
+        flex-wrap: wrap;
         margin: 6px 0 4px;
         font-size: 0.82rem;
-      }
-      .abrir-archivo {
-        margin-top: 8px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      .abrir-archivo .btn {
-        font-size: 0.85rem;
       }
       .barra {
         display: flex;

@@ -1,5 +1,5 @@
 import { Injectable, inject, signal } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { mensajeError } from '../shared/errores';
@@ -9,89 +9,27 @@ export interface MensajeChat {
   contenido: string;
 }
 
-export interface FilaFactura {
-  archivoId: string | null;
-  archivoNombre: string | null;
-  fecha: string;
-  total: number;
-  moneda: string;
-}
-
-export interface FilaArchivo {
-  id: string;
-  nombre: string;
-  carpeta: string;
-  tamanoBytes: string;
-  subidoEn: string;
-}
-
-// Tablas paginadas que puede devolver el chat. `pagina`/`totalPaginas` mandan; las
-// de facturas/archivos piden las páginas siguientes a un endpoint REST reenviando
-// `filtro`/`carpeta`. tablaCarpetas trae TODAS las filas y se pagina en memoria
-// (la `pagina` la lleva el front).
-export interface TablaFacturas {
-  titulo: string;
-  pagina: number;
-  totalPaginas: number;
-  total: number;
-  limite: number;
-  filtro: Record<string, unknown>;
-  filas: FilaFactura[];
-}
-
-export interface TablaArchivos {
-  titulo: string;
-  carpeta?: string;
-  pagina: number;
-  totalPaginas: number;
-  total: number;
-  limite: number;
-  filas: FilaArchivo[];
-}
-
-export interface TablaCarpetas {
-  titulo: string;
-  limite: number;
-  pagina?: number; // estado local de paginación en memoria (el backend no la envía)
-  filas: { ruta: string }[];
-}
-
-// Tabla clicable que acompaña a una pregunta de aclaración ("¿cuál quieres?" /
-// "¿querías decir...?"). Al pulsar una fila se manda `valor` (para que la
-// burbuja del chat lea bien) y, si la opción es un archivo, también `id` como
-// `idOpcion` para resolverla SIN ambigüedad por id exacto (dos opciones pueden
-// compartir el mismo nombre en carpetas distintas). `lectura` (a nivel de
-// tabla: la tool es la misma para todas las opciones) decide si además del
-// botón de elegir se ofrece "Abrir" (solo tiene sentido para tools de consulta
-// como leer_archivo/obtener_factura, no para mover/copiar/eliminar...).
-export interface TablaAclaracion {
-  titulo: string;
-  sugerencia: boolean;
-  lectura: boolean;
-  limite: number;
-  pagina?: number; // estado local de paginación en memoria (el backend manda todas las filas)
-  filas: { etiqueta: string; valor: string; id?: string }[];
+// Resultado de la última consulta del asistente con varias filas: se pinta como
+// tabla debajo de la respuesta. Las columnas que acaban en "_id" no se muestran;
+// si hay "archivo_id", cada fila lleva un botón "Abrir".
+export type ValorTabla = string | number | boolean | null;
+export interface TablaChat {
+  columnas: string[];
+  filas: ValorTabla[][];
+  truncada: boolean;
+  pagina?: number; // estado local de paginación (el backend manda todas las filas)
 }
 
 // Mensaje tal y como lo muestra la UI.
 export interface Mensaje {
   de: 'usuario' | 'bot';
   texto: string;
-  archivos?: { id: string; nombre: string }[];
-  tablaFacturas?: TablaFacturas;
-  tablaArchivos?: TablaArchivos;
-  tablaCarpetas?: TablaCarpetas;
-  tablaAclaracion?: TablaAclaracion;
+  tabla?: TablaChat;
 }
 
 export interface RespuestaChat {
   respuesta: string;
-  acciones: string[];
-  archivos?: { id: string; nombre: string }[];
-  tablaFacturas?: TablaFacturas;
-  tablaArchivos?: TablaArchivos;
-  tablaCarpetas?: TablaCarpetas;
-  tablaAclaracion?: TablaAclaracion;
+  tabla?: TablaChat;
 }
 
 const CHAT_KEY = 'akx_chat';
@@ -122,25 +60,11 @@ export class ChatService {
     this.persistir();
   }
 
-  // Reemplaza el mensaje en la posición dada (lo usa la paginación de las tablas
-  // del chat para sustituir las filas/página de un mensaje ya pintado) y persiste.
+  // Reemplaza el mensaje en la posición dada (lo usa la paginación de la tabla
+  // de un mensaje ya pintado) y persiste.
   actualizarMensaje(index: number, m: Mensaje) {
     this.mensajes.update((arr) => arr.map((x, i) => (i === index ? m : x)));
     this.persistir();
-  }
-
-  // Páginas siguientes de una tabla de facturas del chat: mismo filtro que la 1ª
-  // página (que vino ya resuelta por el chat), pedido al endpoint REST normal.
-  masFacturas(filtro: Record<string, unknown>, pagina: number, limite: number) {
-    let params = new HttpParams().set('pagina', pagina).set('limite', limite);
-    for (const [clave, valor] of Object.entries(filtro)) {
-      if (valor === null || valor === undefined || valor === '') continue;
-      params = params.set(clave, Array.isArray(valor) ? valor.join(',') : String(valor));
-    }
-    return this.http.get<{ filas: FilaFactura[]; total: number; paginas: number }>(
-      `${environment.apiUrl}/api/facturas`,
-      { params },
-    );
   }
 
   limpiar() {
@@ -173,7 +97,7 @@ export class ChatService {
   //  - la IA siga pensando aunque cambies de pestaña (el estado no es del componente),
   //  - puedas mandar otro mensaje mientras piensa: se cancela la respuesta en curso
   //    (se descarta sin rastro) y se atiende el nuevo request de inmediato.
-  enviarMensaje(texto: string, idOpcion?: string) {
+  enviarMensaje(texto: string) {
     const t = texto.trim();
     if (!t) return;
     // Si había una respuesta en curso, la abandonamos y arrancamos la nueva.
@@ -182,26 +106,16 @@ export class ChatService {
     this.añadir({ de: 'usuario', texto: t });
     this.pensando.set(true);
 
-    // Como contexto enviamos SOLO los mensajes del usuario (no las respuestas del
-    // bot): reenviarle sus propias respuestas narradas hace que modelos pequeños
-    // finjan el éxito con texto en vez de llamar a la herramienta. Últimos 8 turnos.
+    // Contexto: los últimos mensajes de la conversación (de los dos lados), para
+    // que el asistente entienda preguntas de seguimiento ("¿y en mayo?"). El chat
+    // es de solo lectura, así que reenviar el historial no puede repetir acciones.
     const historial = this.mensajes()
-      .filter((m) => m.de === 'usuario')
       .slice(-8)
       .map((m) => ({ rol: m.de, contenido: m.texto }));
 
-    this.enCurso = this.enviar(historial, idOpcion).subscribe({
+    this.enCurso = this.enviar(historial).subscribe({
       next: (r) => {
-        const extra = r.acciones?.length ? '\n\n' + r.acciones.map((a) => `✓ ${a}`).join('\n') : '';
-        this.añadir({
-          de: 'bot',
-          texto: r.respuesta + extra,
-          archivos: r.archivos,
-          tablaFacturas: r.tablaFacturas,
-          tablaArchivos: r.tablaArchivos,
-          tablaCarpetas: r.tablaCarpetas,
-          tablaAclaracion: r.tablaAclaracion,
-        });
+        this.añadir({ de: 'bot', texto: r.respuesta, tabla: r.tabla });
         this.pensando.set(false);
         this.enCurso = null;
       },
@@ -214,10 +128,8 @@ export class ChatService {
   }
 
   // Envía el historial de la conversación y devuelve la respuesta del asistente.
-  // `idOpcion` solo se manda cuando el mensaje es la elección de una fila de
-  // tablaAclaracion pulsada como botón (ver TablaAclaracion).
-  enviar(mensajes: MensajeChat[], idOpcion?: string) {
-    return this.http.post<RespuestaChat>(this.base, { mensajes, idOpcion });
+  enviar(mensajes: MensajeChat[]) {
+    return this.http.post<RespuestaChat>(this.base, { mensajes });
   }
 
   private cargar(): Mensaje[] {

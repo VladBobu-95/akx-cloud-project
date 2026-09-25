@@ -22,7 +22,7 @@ export class ClaveApi {
   @Column({ default: "n8n" })
   nombre!: string;
 
-  // Recorte visible, p. ej. "akx_live_ab12cd". Nunca el secreto.
+  // Recorte visible, p. ej. "ateka_live_ab12". Nunca el secreto.
   @Column()
   prefijo!: string;
 

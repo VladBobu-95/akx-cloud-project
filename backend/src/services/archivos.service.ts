@@ -15,7 +15,7 @@ const repo = () => AppDataSource.getRepository(Archivo);
 // Recibe el archivo en memoria (buffer de multer), lo sube a MinIO
 // y guarda la metadata en Postgres.
 // SHA-256 del contenido, para deduplicar (#4): subir dos veces el MISMO archivo
-// guardaba dos copias y pagaba el OCR/embeddings dos veces.
+// guardaba dos copias y pagaba el OCR dos veces.
 export const calcularHashSha256 = (buffer: Buffer): string =>
   createHash("sha256").update(buffer).digest("hex");
 
@@ -169,62 +169,6 @@ export const prepararDescargaCarpeta = async (
   return { nombreZip, entradas };
 };
 
-// --- CREAR ARCHIVO DE TEXTO (p. ej. .md) DESDE UNA CADENA ---
-// Sube a MinIO un archivo de texto generado en el servidor (lo usa el chatbot
-// para crear notas/.md). Igual que subirArchivo pero el contenido viene como string.
-export const crearArchivoTexto = async (
-  usuarioId: string,
-  nombre: string,
-  carpeta: string,
-  contenido: string,
-): Promise<Archivo> => {
-  const carpetaLimpia = (carpeta ?? "").replace(/^\/|\/$/g, "") || "raiz";
-  const carpetaFinal = carpetaLimpia === "raiz" ? "/" : `/${carpetaLimpia}`;
-  const clave = `${usuarioId}/${carpetaLimpia}/${randomUUID()}`;
-  const buffer = Buffer.from(contenido ?? "", "utf8");
-  const mimeType = nombre.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain";
-
-  await minioClient.putObject(env.MINIO_BUCKET, clave, Readable.from(buffer), buffer.length, {
-    "Content-Type": mimeType,
-  });
-
-  const archivo = repo().create({
-    nombre,
-    carpeta: carpetaFinal,
-    mimeType,
-    tamanoBytes: String(buffer.length),
-    claveMinio: clave,
-    propietario: { id: usuarioId } as Usuario,
-  });
-
-  try {
-    const guardado = await repo().save(archivo);
-    if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal);
-    return guardado;
-  } catch (err) {
-    await minioClient.removeObject(env.MINIO_BUCKET, clave).catch(() => {});
-    throw err;
-  }
-};
-
-// --- BUSCAR ARCHIVOS POR NOMBRE ---
-// Búsqueda simple por nombre (case-insensitive). La usa el chatbot para
-// localizar archivos por lo que dice el usuario y obtener su id.
-export const buscarArchivos = async (
-  usuarioId: string,
-  q: string,
-  limite: number = 20,
-): Promise<Archivo[]> => {
-  return repo()
-    .createQueryBuilder("archivo")
-    .where("archivo.propietarioId = :usuarioId", { usuarioId })
-    .andWhere("archivo.carpetaCompartidaId IS NULL") // solo archivos personales
-    .andWhere("archivo.nombre ILIKE :q", { q: `%${q}%` })
-    .orderBy("archivo.subidoEn", "DESC")
-    .take(limite)
-    .getMany();
-};
-
 // --- DESCARGAR ARCHIVO (streaming a través de la API) ---
 // Devolvemos la metadata + un stream del objeto en MinIO. El controlador lo
 // canaliza hacia el cliente. Hacerlo así (en vez de redirigir a una URL firmada)
@@ -271,53 +215,6 @@ export const combinarContenido = (
   // información nueva.
   if (ocr && !(manual && manual.includes(ocr))) partes.push(`Texto detectado (OCR):\n${ocr}`);
   return partes.join("\n\n");
-};
-
-// --- LEER TEXTO DE UN ARCHIVO (para el chatbot) ---
-// Devuelve el contenido como string si es un archivo de texto (texto/markdown/csv/json),
-// truncado a maxChars. Lanza error si no es texto.
-export const leerTextoArchivo = async (
-  id: string,
-  usuarioId: string,
-  maxChars = 4000,
-): Promise<string> => {
-  const { archivo, stream } = await descargarArchivo(id, usuarioId);
-  const esTexto = /^(text\/|application\/(json|xml|markdown))/.test(archivo.mimeType);
-  if (!esTexto) {
-    stream.destroy();
-    // PDF/DOCX no son texto plano, pero ya se extrajo su contenido al subirlos
-    // (mismo pipeline que usa el RAG, guardado en textoExtraido): se reutiliza
-    // en vez de fallar. En imágenes, se combina con la descripción manual si la hay.
-    const combinado = combinarContenido(archivo.textoExtraido, archivo.descripcionManual);
-    if (combinado) return combinado.slice(0, maxChars);
-    throw new AppError(400, "El archivo no es de texto, no puedo leer su contenido.");
-  }
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const c of stream) {
-    const buf = c as Buffer;
-    chunks.push(buf);
-    total += buf.length;
-    if (total >= maxChars * 4) break; // suficiente para maxChars caracteres
-  }
-  return Buffer.concat(chunks).toString("utf8").slice(0, maxChars);
-};
-
-// --- ESTADÍSTICAS DEL USUARIO (para el chatbot) ---
-export const estadisticasUsuario = async (
-  usuarioId: string,
-): Promise<{ numArchivos: number; espacioBytes: number }> => {
-  const fila = await repo()
-    .createQueryBuilder("archivo")
-    .select("COUNT(*)", "num")
-    .addSelect("COALESCE(SUM(archivo.tamanoBytes), 0)", "bytes")
-    .where("archivo.propietarioId = :usuarioId", { usuarioId })
-    .andWhere("archivo.carpetaCompartidaId IS NULL") // solo archivos personales
-    .getRawOne<{ num: string; bytes: string }>();
-  return {
-    numArchivos: Number(fila?.num ?? 0),
-    espacioBytes: Number(fila?.bytes ?? 0),
-  };
 };
 
 // --- ELIMINAR ARCHIVO (soft delete → papelera) ---
@@ -452,35 +349,6 @@ export const vaciarPapelera = async (
   await repo().delete(ids); // hard delete de todas las filas soft-deleted
 
   return { borrados: archivos.length };
-};
-
-// --- RESTAURAR TODO ---
-// Recupera TODOS los archivos que el usuario tiene en la papelera. Reutiliza
-// restaurarArchivo (uno a uno) para que se aplique igual su lógica de sufijo
-// "(restaurado)" si ya hay un archivo activo con el mismo nombre.
-export const restaurarTodo = async (
-  usuarioId: string,
-): Promise<{ restaurados: number }> => {
-  const archivos = await listarPapelera(usuarioId);
-  for (const archivo of archivos) {
-    await restaurarArchivo(archivo.id, usuarioId);
-  }
-  return { restaurados: archivos.length };
-};
-
-// Envía a la papelera TODOS los archivos activos del usuario (de cualquier
-// carpeta o de la raíz), pero NO toca las carpetas. Devuelve cuántos archivos afectó.
-export const eliminarTodosLosArchivos = async (
-  usuarioId: string,
-): Promise<{ borrados: number }> => {
-  const res = await repo()
-    .createQueryBuilder()
-    .softDelete()
-    .where("propietarioId = :u", { u: usuarioId })
-    .andWhere("carpetaCompartidaId IS NULL") // no mandar a papelera los compartidos
-    .andWhere("eliminadoEn IS NULL")
-    .execute();
-  return { borrados: res.affected ?? 0 };
 };
 
 // --- OBTENER INFO DE UN ARCHIVO ---
@@ -624,25 +492,8 @@ export const copiarArchivo = async (
     const guardado = await repo().save(copia);
     if (carpetaFinal !== "/") await crearCarpeta(usuarioId, carpetaFinal);
 
-    // Duplicamos los fragmentos RAG del original para que la COPIA también
-    // aparezca en la búsqueda semántica (antes la copia tenía textoExtraido pero
-    // ningún fragmento, así que era invisible para "qué documento habla de X").
-    // Se reutilizan los embeddings ya calculados (INSERT ... SELECT): no hace
-    // falta volver a llamar a Ollama. Best-effort: si falla, la copia ya está
-    // guardada y no se aborta (igual que el resto del pipeline RAG).
     // NO se copia la Factura asociada a propósito: duplicar el registro haría que
     // la misma factura contara dos veces en la analítica (totales/ventas).
-    try {
-      await AppDataSource.query(
-        `INSERT INTO "fragmentos" ("archivoId", "propietarioId", "indice", "texto", "embedding")
-         SELECT $1, "propietarioId", "indice", "texto", "embedding"
-         FROM "fragmentos" WHERE "archivoId" = $2`,
-        [guardado.id, original.id],
-      );
-    } catch (errFrag) {
-      console.error(`Error copiando fragmentos RAG de "${original.nombre}":`, errFrag);
-    }
-
     delete (guardado as Partial<Archivo>).propietario;
     return guardado;
   } catch (err) {

@@ -14,7 +14,6 @@ import {
   ctrlDescargar,
   ctrlEliminarArchivo,
   ctrlListarTodos,
-  ctrlBuscar,
   ctrlListarSubcarpetas,
   ctrlCrearSubcarpeta,
   ctrlReubicarSubcarpeta,
@@ -28,6 +27,7 @@ import {
   ctrlMoverDesdeCompartido,
   ctrlCopiarDesdeCompartido,
   ctrlDescargarCarpetaZip,
+  ctrlBuscar,
 } from "../controllers/compartido.controller";
 import { AppError } from "../utils/errors";
 import { TIPOS_PERMITIDOS, MENSAJE_TIPO_NO_PERMITIDO } from "../utils/tiposArchivo";

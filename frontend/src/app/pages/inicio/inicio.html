@@ -19,126 +19,53 @@
           @for (m of mensajes(); track $index) {
             <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
               @if (m.de === 'bot') {
-                @if (m.tablaCarpetas || m.tablaArchivos || m.tablaFacturas || m.tablaAclaracion) {
-                  @if (m.tablaCarpetas; as tc) {
-                    <h3 class="tabla-titulo">{{ tc.titulo }} ({{ tc.filas.length }})</h3>
-                    <ul class="lista-carpetas">
-                      @for (c of filasCarpetasVisibles(tc); track c.ruta) {
-                        <li>📁 {{ c.ruta }}</li>
+                <div class="md" [innerHTML]="renderBot(m.texto)"></div>
+                @if (m.tabla; as t) {
+                  <div class="tabla-scroll">
+                    <table class="table tabla-chat">
+                      <thead>
+                        <tr>
+                          @for (c of columnasVisibles(t); track c.i) {
+                            <th>{{ titulo(c.nombre) }}</th>
+                          }
+                          @if (tieneArchivos(t)) {
+                            <th></th>
+                          }
+                        </tr>
+                      </thead>
+                      <tbody>
+                        @for (fila of filasVisibles(t); track $index) {
+                          <tr>
+                            @for (c of columnasVisibles(t); track c.i) {
+                              <td>{{ celda(t, fila, c.i) }}</td>
+                            }
+                            @if (tieneArchivos(t)) {
+                              <td>
+                                @if (archivoDeFila(t, fila); as a) {
+                                  <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">📂 Abrir</button>
+                                }
+                              </td>
+                            }
+                          </tr>
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+                  @if (totalPaginas(t) > 1 || t.truncada) {
+                    <div class="pag-chat">
+                      @if (totalPaginas(t) > 1) {
+                        <button class="btn btn-outline btn-sm" [disabled]="(t.pagina ?? 1) <= 1" (click)="paginar($index, (t.pagina ?? 1) - 1)">←</button>
+                        <span class="muted">Página {{ t.pagina ?? 1 }} de {{ totalPaginas(t) }}</span>
+                        <button class="btn btn-outline btn-sm" [disabled]="(t.pagina ?? 1) >= totalPaginas(t)" (click)="paginar($index, (t.pagina ?? 1) + 1)">→</button>
                       }
-                    </ul>
-                    @if (totalPaginasCarpetas(tc) > 1) {
-                      <div class="pag-chat">
-                        <button class="btn btn-outline btn-sm" [disabled]="(tc.pagina ?? 1) <= 1" (click)="paginarCarpetas($index, (tc.pagina ?? 1) - 1)">←</button>
-                        <span class="muted">Página {{ tc.pagina ?? 1 }} de {{ totalPaginasCarpetas(tc) }}</span>
-                        <button class="btn btn-outline btn-sm" [disabled]="(tc.pagina ?? 1) >= totalPaginasCarpetas(tc)" (click)="paginarCarpetas($index, (tc.pagina ?? 1) + 1)">→</button>
-                      </div>
-                    }
+                      @if (t.truncada) {
+                        <span class="muted">Se muestran las {{ t.filas.length }} primeras filas.</span>
+                      }
+                    </div>
                   }
-                  @if (m.tablaArchivos; as ta) {
-                    <h3 class="tabla-titulo">{{ ta.titulo }} ({{ ta.total }})</h3>
-                    <table class="table tabla-chat">
-                      <thead>
-                        <tr><th>Nombre</th><th>Carpeta</th><th></th></tr>
-                      </thead>
-                      <tbody>
-                        @for (a of ta.filas; track a.id) {
-                          <tr>
-                            <td>{{ a.nombre }}</td>
-                            <td><span class="muted">{{ a.carpeta }}</span></td>
-                            <td>
-                              <div class="acciones-fila">
-                                <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="resumenFactura(a.nombre)">📄 Resumen</button>
-                                <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: a.id, nombre: a.nombre })">📂 Abrir</button>
-                              </div>
-                            </td>
-                          </tr>
-                        }
-                      </tbody>
-                    </table>
-                    @if (ta.totalPaginas > 1) {
-                      <div class="pag-chat">
-                        <button class="btn btn-outline btn-sm" [disabled]="ta.pagina <= 1" (click)="paginarArchivos($index, ta.pagina - 1)">←</button>
-                        <span class="muted">Página {{ ta.pagina }} de {{ ta.totalPaginas }}</span>
-                        <button class="btn btn-outline btn-sm" [disabled]="ta.pagina >= ta.totalPaginas" (click)="paginarArchivos($index, ta.pagina + 1)">→</button>
-                      </div>
-                    }
-                  }
-                  @if (m.tablaFacturas; as tf) {
-                    <h3 class="tabla-titulo">{{ tf.titulo }} ({{ tf.total }})</h3>
-                    <table class="table tabla-chat">
-                      <thead>
-                        <tr><th>Archivo</th><th>Fecha</th><th>Total</th><th></th></tr>
-                      </thead>
-                      <tbody>
-                        @for (f of tf.filas; track $index) {
-                          <tr>
-                            <td>{{ f.archivoNombre || '—' }}</td>
-                            <td>{{ f.fecha }}</td>
-                            <td>{{ formatImporte(f.total, f.moneda) }}</td>
-                            <td>
-                              @if (f.archivoId && f.archivoNombre) {
-                                <div class="acciones-fila">
-                                  <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="resumenFactura(f.archivoNombre)">📄 Resumen</button>
-                                  <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: f.archivoId, nombre: f.archivoNombre })">📂 Abrir</button>
-                                </div>
-                              }
-                            </td>
-                          </tr>
-                        }
-                      </tbody>
-                    </table>
-                    @if (tf.totalPaginas > 1) {
-                      <div class="pag-chat">
-                        <button class="btn btn-outline btn-sm" [disabled]="tf.pagina <= 1" (click)="paginarFacturas($index, tf.pagina - 1)">←</button>
-                        <span class="muted">Página {{ tf.pagina }} de {{ tf.totalPaginas }}</span>
-                        <button class="btn btn-outline btn-sm" [disabled]="tf.pagina >= tf.totalPaginas" (click)="paginarFacturas($index, tf.pagina + 1)">→</button>
-                      </div>
-                    }
-                  }
-                  @if (m.tablaAclaracion; as tac) {
-                    <p class="tabla-titulo">{{ tac.titulo }}</p>
-                    <table class="table tabla-chat">
-                      <tbody>
-                        @for (o of filasAclaracionVisibles(tac); track o.valor + (o.id ?? '')) {
-                          <tr>
-                            <td>{{ o.etiqueta }}</td>
-                            <td class="acciones-aclaracion">
-                              <button class="btn btn-outline btn-sm" [disabled]="pensando()" (click)="seleccionarAclaracion(o.valor, o.id)">
-                                {{ tac.lectura ? 'Resumen' : 'Elegir' }}
-                              </button>
-                              @if (tac.lectura && o.id) {
-                                <button class="btn btn-outline btn-sm" (click)="abrirArchivo({ id: o.id, nombre: o.valor })">
-                                  📂 Abrir
-                                </button>
-                              }
-                            </td>
-                          </tr>
-                        }
-                      </tbody>
-                    </table>
-                    @if (totalPaginasAclaracion(tac) > 1) {
-                      <div class="pag-chat">
-                        <button class="btn btn-outline btn-sm" [disabled]="(tac.pagina ?? 1) <= 1" (click)="paginarAclaracion($index, (tac.pagina ?? 1) - 1)">←</button>
-                        <span class="muted">Página {{ tac.pagina ?? 1 }} de {{ totalPaginasAclaracion(tac) }}</span>
-                        <button class="btn btn-outline btn-sm" [disabled]="(tac.pagina ?? 1) >= totalPaginasAclaracion(tac)" (click)="paginarAclaracion($index, (tac.pagina ?? 1) + 1)">→</button>
-                      </div>
-                    }
-                  }
-                } @else {
-                  <div class="md" [innerHTML]="renderBot(m.texto)"></div>
                 }
               } @else {
                 {{ m.texto }}
-              }
-              @if (!m.tablaFacturas && !m.tablaArchivos && !m.tablaCarpetas && m.archivos?.length) {
-                <div class="abrir-archivo">
-                  @for (a of m.archivos; track a.id) {
-                    <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">
-                      📂 Abrir {{ a.nombre }}
-                    </button>
-                  }
-                </div>
               }
             </div>
           }

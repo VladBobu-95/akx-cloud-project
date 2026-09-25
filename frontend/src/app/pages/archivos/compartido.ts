@@ -39,10 +39,10 @@ class FuenteCompartida implements FuenteArchivos {
   escanearFactura(): Observable<never> {
     return throwError(() => new Error('No disponible en carpetas compartidas'));
   }
-  // Búsqueda semántica acotada a ESTA carpeta compartida (mismo buscador que
+  // Buscador acotado a ESTA carpeta compartida (mismo buscador que
   // "Mis archivos", pero solo sobre su contenido).
-  buscarSemantica(q: string): Observable<ResultadoBusqueda[]> {
-    return this.svc.buscarSemantica(this.ccId, q);
+  buscar(q: string): Observable<ResultadoBusqueda[]> {
+    return this.svc.buscar(this.ccId, q);
   }
 }
 

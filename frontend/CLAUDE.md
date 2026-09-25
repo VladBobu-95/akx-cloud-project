@@ -1,8 +1,8 @@
-# AKX Cloud — Frontend (akx-cloud-frontend)
+# ATEKA Cloud — Frontend (ateka-cloud-frontend)
 
 ## Resumen
 
-SPA Angular 22 para la app de almacenamiento en la nube AKX Cloud. Se sirve con nginx dentro de Docker y hace proxy de `/api` hacia el contenedor `api`.
+SPA Angular 22 para la app de almacenamiento en la nube ATEKA Cloud. Se sirve con nginx dentro de Docker y hace proxy de `/api` hacia el contenedor `api`.
 
 **Repo:** `https://github.com/VladBobu-95/akx-cloud-frontend`
 
@@ -46,7 +46,7 @@ Los componentes tienen `.ts` + `.html` + `.scss` separados (salvo los pequeños 
 src/
   app/
     core/
-      archivos.service.ts    ← CRUD archivos, carpetas, búsqueda semántica, escanear factura, describir imagen
+      archivos.service.ts    ← CRUD archivos, carpetas, buscador (nombre y contenido), escanear factura, describir imagen
       compartido.service.ts  ← Carpetas compartidas por rol (uso miembro + gestión admin + logs)
       facturas.service.ts    ← Listado/detalle/edición de facturas, reclasificar
       equipo.service.ts      ← Admin: miembros, roles configurables, datos de empresa (CIF)
@@ -98,13 +98,14 @@ src/
 
 ### `/inicio` — Chat
 - Historial de mensajes en signal, persistido en `localStorage` (clave `akx_chat`)
-- Envía solo los mensajes del **usuario** (últimos 8, no las respuestas del bot) como
-  contexto; el backend a su vez solo usa el último de esos
+- Envía los **últimos 8 mensajes** (usuario y bot) como contexto: el chat es de solo
+  lectura (el asistente consulta la BD con SQL), así que el historial permite preguntas de
+  seguimiento sin riesgo de repetir acciones
 - Respuestas del bot renderizadas como **markdown real** con `marked` (`renderBot()` →
-  `[innerHTML]`, `breaks: true`), igual que el visor de `.md` del explorador — necesario
-  para que las tablas de `ventas_top`/`totales_facturas`/`clientes_top` se vean
-  formateadas. Los mensajes del usuario se siguen mostrando tal cual (texto plano)
-- El campo `acciones` se concatena al texto de la respuesta como líneas `✓ ...`
+  `[innerHTML]`, `breaks: true`). Los mensajes del usuario se muestran tal cual
+- Si la respuesta trae `tabla` (`{columnas, filas, truncada}`), se pinta debajo como tabla
+  paginada en cliente (10 filas por página): columnas `*_id` ocultas, números/fechas/importes
+  a la española y botón **"Abrir"** en las filas con `archivo_id`
 
 ### `/archivos` — Explorador
 Componente más complejo. Características:
@@ -117,14 +118,15 @@ Componente más complejo. Características:
   al borrar carpeta+archivos seleccionados a la vez, se espera a que el borrado de la
   carpeta termine en el servidor antes de refrescar (si no, podía "reaparecer" hasta
   repetir la acción una segunda vez)
-- **Búsqueda semántica RAG**: campo + botón que llama `/api/archivos/buscar`
+- **Buscador**: campo + botón que llama `/api/archivos/buscar` (o `/api/compartido/:id/buscar`):
+  búsqueda normal por nombre y contenido (sin IA), con el trozo del documento resaltado
 - **Columna "Estado"** (iconos, refresco con polling cada 3s mientras haya algo en
   proceso): `spinner + "Escaneando"` mientras se procesa, `✓` verde cuando terminó
   (factura o no, ambos = "procesado"; no es clicable), `✕` rojo si hubo error; en blanco
   si no aplica (txt/docx)
 - **Añadir descripción**: sustituye al "Escanear" manual (ya innecesario: todo se escanea/
   indexa solo al subir). Modal con textarea que se guarda vía `describirArchivo`
-  (`PATCH /api/archivos/:id/descripcion`) y se reindexa para el buscador por contenido —
+  (`PATCH /api/archivos/:id/descripcion`) y la leen el buscador y el chat —
   útil para que una foto sea encontrable por una descripción a mano
 
 ### `/papelera`
@@ -147,7 +149,7 @@ Componente más complejo. Características:
 - `descargarCarpeta(ruta)`: descarga .zip
 - `escanearFactura(archivoId, pista?)`: POST a `/api/facturas/escanear`
 - `describirArchivo(archivoId, descripcion)`: PATCH a `/api/archivos/:id/descripcion`
-- `buscarSemantica(q)`: GET a `/api/archivos/buscar?q=...`
+- `buscar(q)`: GET a `/api/archivos/buscar?q=...` (nombre y contenido, sin IA)
 
 ### `ChatService`
 - `mensajes` signal — historial en memoria + localStorage
@@ -196,7 +198,7 @@ Clases CSS globales (definidas en cada componente vía `styles: [...]`):
 
 - **No hay NgRx ni stores**: el estado se gestiona con signals de Angular 22.
 - **Standalone components**: todos los componentes usan `imports: [...]` en lugar de NgModule.
-- **El chat sí muestra `acciones`**: `inicio.ts` concatena el array `acciones` de la API al texto de la respuesta como líneas `✓ ...`.
+- **El chat es de solo lectura**: la API devuelve `{respuesta, tabla?}`; ya no hay `acciones`, `tablaFacturas`/`tablaArchivos`/`tablaCarpetas` ni tablas de aclaración.
 - **Consciente del rol (RBAC)**: las capacidades del usuario (del login / `GET /api/auth/perfil`) ocultan lo que su rol no puede hacer; el `chatGuard` bloquea `/inicio` sin la capacidad `chat`; `adminGuard`/`superadminGuard` gatean `/equipo` y `/plataforma`.
 - **El explorador es un único componente reutilizado** (`explorador.ts`): sirve tanto "Mis archivos" (personal) como cada carpeta compartida, cambiando solo la fuente de datos (`fuente.ts`).
 - **archivos.ts no usa paginación**: carga todos los archivos en memoria para construir el árbol de carpetas localmente. Si un usuario tiene miles de archivos, podría ser lento.

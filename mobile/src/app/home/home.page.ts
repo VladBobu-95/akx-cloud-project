@@ -6,7 +6,7 @@ import { addIcons } from 'ionicons';
 import { ellipsisVertical, trashOutline } from 'ionicons/icons';
 import { marked } from 'marked';
 import { AuthService, Usuario } from '../core/auth.service';
-import { ChatService, Mensaje } from '../core/chat.service';
+import { ChatService, Mensaje, TablaChat } from '../core/chat.service';
 
 @Component({
   selector: 'app-home',
@@ -48,6 +48,30 @@ export class HomePage {
     return marked.parse(texto, { breaks: true, async: false }) as string;
   }
 
+  // En el móvil la tabla del asistente se pinta como una línea por fila (las
+  // columnas visibles separadas por "·"), con un máximo de filas.
+  filasVisibles(t: TablaChat): TablaChat['filas'] {
+    return t.filas.slice(0, 20);
+  }
+
+  lineaFila(t: TablaChat, fila: TablaChat['filas'][number]): string {
+    const iMoneda = t.columnas.indexOf('moneda');
+    const moneda = iMoneda >= 0 && typeof fila[iMoneda] === 'string' ? (fila[iMoneda] as string) : null;
+    return t.columnas
+      .map((c, i) => ({ c, v: fila[i] }))
+      .filter(({ c, v }) => !c.endsWith('_id') && c !== 'moneda' && v !== null && v !== '')
+      .map(({ c, v }) => {
+        if (typeof v === 'boolean') return `${c.replace(/_/g, ' ')}: ${v ? 'sí' : 'no'}`;
+        if (typeof v === 'number' && moneda && /total|subtotal|iva|importe|base|precio/.test(c)) {
+          return this.formatImporte(v, moneda);
+        }
+        if (typeof v === 'number') return new Intl.NumberFormat('es-ES').format(v);
+        const f = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+        return f ? `${f[3]}/${f[2]}/${f[1]}` : String(v);
+      })
+      .join(' · ');
+  }
+
   formatImporte(total: number, moneda: string): string {
     try {
       return new Intl.NumberFormat('es-ES', { style: 'currency', currency: moneda || 'EUR' }).format(total);
@@ -67,15 +91,10 @@ export class HomePage {
     void this.lanzar(texto);
   }
 
-  elegir(valor: string, id?: string) {
-    if (this.chat.pensando) return;
-    void this.lanzar(valor, id);
-  }
-
-  private async lanzar(texto: string, idOpcion?: string) {
+  private async lanzar(texto: string) {
     this.cdr.detectChanges();
     this.scrollAbajo();
-    await this.chat.enviarMensaje(texto, idOpcion);
+    await this.chat.enviarMensaje(texto);
     this.zone.run(() => {
       this.cdr.detectChanges();
       this.scrollAbajo();

@@ -5,80 +5,70 @@
 
 ---
 
-## Chat — pre-flights deterministas (detalle)
+## Chat por SQL (`chat.service.ts`)
 
-Para frases muy comunes no se confía en que el modelo elija la tool correcta: se
-resuelven directamente contra la BD, sin llamar a Ollama.
+Sustituye al chat anterior (tools + ~160 regex de pre-flights, 4.000 líneas) desde la
+migración `1779000000000-ChatSql`. El modelo (`OLLAMA_MODEL`, por defecto `qwen3:14b`)
+ya no llama a funciones: **escribe SQL de solo lectura** y redacta la respuesta.
 
-- **Comandos compuestos** ("ábreme X y Y", "crea X y copia Y y borra Z"): va el PRIMERO de todos los pre-flights (los demás resuelven 1 sola acción y hacen `return`, así que solo ejecutaban la primera orden). Parte el mensaje por conectores (" y ", comas, "luego", "además"…), parsea cada segmento a una acción (abrir/crear/copiar/mover/renombrar/eliminar — `parsearSegmento`) y soporta verbo repartido (la "Y" de "abre X y Y" hereda el verbo previo, `"carry"`). Soporta destinos implícitos ("...y muévelas **ahí**" → última carpeta creada/usada en el mensaje, vía `ctx.ultimaCarpeta`). Modos de ejecución: si el compuesto es SOLO de "abrir/leer" (se solapa con consultas tipo "muéstrame las facturas de enero y febrero", que NO son comandos), exige que **todos los objetivos resuelvan**; si alguno no, NO intercepta y deja pasar al flujo normal. Si hay alguna acción de crear/mover/copiar/borrar/renombrar, la intención de comando es inequívoca y se ejecuta **best-effort** (cada parte por su cuenta, avisando con ⚠️ de la que falle) en vez de caer al modelo (que dejaba el trabajo a medias). Un comando de 1 solo segmento nunca se ve afectado.
-- **Resolución fuzzy de nombres** (`resolverArchivo` y `resolverCarpeta`): si la búsqueda exacta por substring (`ILIKE`) no encuentra nada, se comparan los nombres reales por similitud de Levenshtein (`similitud`, umbral 0.6) y se devuelven los más parecidos (hasta 5) como **sugerencias** con `sugerencia: true`. NO se auto-resuelve nunca: el caller muestra "**¿Querías decir alguno de estos?**" con la lista para que el usuario elija (la elección se completa vía `pendientesAclaracion`, igual que una aclaración normal). Tolera erratas ("nustras armas" → "nuestras armas"). Solo se activa en el camino de fallo, así que no afecta al flujo normal. El encabezado de la pregunta lo decide `cabeceraAclaracion(sugerencia)`: "¿Querías decir…?" para sugerencias por parecido vs "Hay varias coincidencias, ¿cuál quieres?" para varias coincidencias exactas; el mensaje completo lo arma `mensajeAclaracion`.
-- **Borrados masivos**: distingue "borra todo" (`borrar_todo`, incluida la raíz), "borra todas las carpetas" (`borrar_todas_carpetas`, con su contenido, sin tocar lo suelto en la raíz) y "borra todos los archivos/ficheros" (`borrar_todos_archivos`, sin tocar carpetas).
-- **Restaurar TODA la papelera** ("restaura/recupera todos los archivos/ficheros", "restaura toda la papelera"): sin este pre-flight, el modelo no tenía ninguna tool de "restaurar todo" y "resolvía" la frase con `vaciar_papelera` — la acción opuesta (provocó pérdida real de datos: "restaura todos los ficheros" vació la papelera). Se añadió `restaurar_todo` (uno a uno con `restaurarArchivo` para que aplique el sufijo "(restaurado)" en colisiones) y se remarcó en ambas tools que son opuestas.
-- **Listado combinado**: "lista/pásame todo lo que tengo" (archivos + carpetas), con soporte para acotar a una carpeta concreta o solo la raíz. Devuelve tablas paginadas (`tablaArchivos`/`tablaCarpetas`, ver "Paginación de listados en el chat").
-- **¿Qué hay en la papelera?**: el prompt de facturas sesgaba al modelo hacia esas tools; se resuelve aquí con `listar_papelera`.
-- **Existencia/ubicación de un archivo** ("¿tengo/hay/existe... archivo X?", "dónde está/busca el archivo X"): comprobación instantánea con `buscar_archivos`. Sin esto, el modelo a veces "comprobaba" escaneando con OCR (lento; en servidores sin GPU podía tirar el proceso). La respuesta incluye botón "Abrir" por coincidencia.
-- **Abrir/mostrar una factura** ("abre/muéstrame factura_X"): lee de BD vía `obtener_factura`, nunca relanza OCR. Patrón del identificador: `\bfacturas?(?:[\d_-]\w*)?\b` (exige separador antes del sufijo); con el patrón laxo anterior "abre facturajpg.png" se trataba como nombre de factura.
-- **Abrir/mostrar/leer un archivo NORMAL** ("lee/muestra/ábreme X"): lee el contenido con `leerTextoArchivo` sin pasar por el modelo; respuesta con botón "Abrir". "abre"/"abrir" se metió al pre-flight (`VERBO_ABRIR`) porque el modelo no seguía de forma fiable que "abrir" = "leer/mostrar". Antes de leer en crudo, si el archivo ya tiene factura escaneada en BD devuelve el resumen markdown en vez del texto plano.
-- **Palabras prohibidas como nombre** (`STOPWORDS_NOMBRE`: `todo`, `eso`, `mi`, `la`, `el`...): sin esta lista, "muestra todo lo que tengo" se interpretaba como "lee un archivo llamado 'todo'" en vez de caer en el pre-flight de listado (que va DESPUÉS en el código).
-- **Totales de varias facturas nombradas** ("totales de factura_01 y factura_02"): se llama `totales_facturas` con el array, en vez de abrir solo la primera.
-- **Ranking de ventas con periodo** ("qué se vende más en julio", "producto más vendido"...): el modelo pequeño a veces escupía el JSON de argumentos como texto sin llamar a la tool. Se resuelve con `ventas_top` parseando mes por nombre y año. No captura producto concreto ni rankings de cliente.
-- **Listado de facturas de un periodo** ("facturas de abril", "facturas de 2026"): LISTA las facturas concretas (vía `listarFacturas`/`listadoFacturasMd`) con botón "Abrir"; distinto de `ventas_top`/`totales_facturas`. Se excluye si además pide totales/ranking.
-- **Borrar UN archivo/carpeta concreto** ("borra el archivo X"): el modelo casi nunca llamaba a `eliminar_archivo`/`eliminar_carpeta`; se resuelve con el mismo `resolverArchivo`/`resolverCarpeta` que las tools reales.
-- **Copiar UN archivo concreto** ("copia/duplica X [a/en CARPETA]", "haz(me) una copia de X"): no tenía pre-flight propio (solo existía dentro de comandos compuestos y vía el modelo) — confirmado con logging que el modelo, dado "copia factura", llamaba a **`escanear_factura`** en vez de `copiar_archivo` (un archivo cuyo nombre parece factura sesga al modelo hacia escanear, justo cuando NO se pidió). Se resuelve aquí con `resolverArchivo` + `copiarArchivo` directamente; el destino (si lo hay) se pasa tal cual a `copiarArchivo` (ya normaliza la ruta y crea la carpeta si no existe, no hace falta resolverla). Solo archivo: si el mensaje dice "copia la carpeta X" no entra aquí (se comprueba "carpeta" en el NOMBRE capturado, no en todo el mensaje — comprobarlo en todo el mensaje rechazaba por error destinos válidos tipo "copia X a la carpeta Y"). El nombre de la copia (`copiarArchivo` en `archivos.service.ts`), si no se especifica uno, ahora es `"<original> (copia)"` (y "(copia 2)", "(copia 3)"... si colisiona en el destino) en vez de reutilizar el nombre EXACTO del original — antes dejaba dos filas con el mismo nombre en la misma carpeta, confuso en la UI.
-- **Renombrar UN archivo concreto** ("renombra(me) X a/como/por Y", "cambia(me) el nombre de X a/por Y"): mismo problema estructural que copiar (sin pre-flight propio) más uno específico: "cambia el nombre de X a Y" SIEMPRE contiene un "de" justo antes de X, así que si X se llama literalmente "factura"/"facturas", el pre-flight de **"facturas de cliente"** (`extraerClienteDeFrase`, que captura TODO lo que va después del ÚLTIMO "de" del mensaje) lo interceptaba antes de llegar a ningún sitio — "cambia el nombre de factura a factura222" se leía como "cliente = factura a factura222" y devolvía un listado vacío en vez de renombrar. Fix en dos partes: (1) se añadió la exclusión `VERBO_BORRAR|VERBO_OTRAS_ACCIONES` (la misma que ya usaban otros pre-flights de facturas) al pre-flight de "facturas de cliente", para que cualquier verbo de acción (mover/copiar/renombrar/cambiar/borrar/escanear) lo deje pasar de largo — esto también protegía retroactivamente al pre-flight de copiar nuevo ("haz una copia de factura.pdf" tenía el mismo riesgo); (2) se añadió el pre-flight determinista de renombrar (mismo patrón que copiar: `resolverArchivo` + `actualizarArchivo({nombre: nuevo_nombre})`, excluye "carpeta" en el nombre capturado → esa va a `renombrar_carpeta`, no aquí).
-- Mover tiene la misma carencia estructural (sin pre-flight propio fuera de comandos compuestos) pero no se ha confirmado un bug concreto ahí; si aparece, aplicar el mismo patrón (pre-flight determinista + revisar si algún pre-flight de facturas necesita la misma exclusión).
-- **Crear una nota/archivo de texto** ("créame una nota llamada X.md con esto: ..."): extrae nombre y contenido y llama a `crearArchivoTexto` directamente (el modelo intentaba *buscar* un archivo aún inexistente).
-- **Restaurar vs. borrar definitivamente de la papelera**: acciones opuestas que el modelo confundía. Se distingue por verbo (restaura/recupera/saca → `restaurar_archivo`; borra/elimina/quita + "papelera" → `borrar_permanente`).
-- **Búsqueda semántica por tema** ("resume lo que tengo sobre X"): se detecta el tema tras "sobre"/"de"/"acerca de" y se llama `buscar_semantica`.
-- **Verbos con pronombre enclítico y tildes**: todos los verbos se comparan sobre una versión del mensaje **sin tildes** (`quitarTildes`, NFD + strip de diacríticos) con patrones que aceptan el pronombre pegado (`borra(?:r|lo|la|los|las)?`...); el nombre capturado conserva las tildes originales (`grupoOriginal`). Así "bórralo todo" casa igual que "borra todo".
+**Flujo** (`chatear`):
+1. Capacidad maestra `chat` (403 si falta), antes de llamar a la IA.
+2. Prompt de sistema con el esquema de las vistas `chat.*`, la fecha de hoy (Europe/Madrid),
+   el nombre/CIF de la empresa, reglas SQL y ejemplos. Las partes de facturas/contenido solo
+   aparecen si el rol tiene `facturas`/`busqueda`.
+3. Se envían los **últimos 8 mensajes** (usuario y bot): el chat es de solo lectura, así que
+   reenviar el historial ya no puede repetir acciones (el motivo por el que antes solo se
+   mandaba el último mensaje) y permite preguntas de seguimiento ("¿y en mayo?").
+4. Si el modelo responde con un bloque ```` ```sql ````, se ejecuta y se le devuelven las filas
+   (máx. 25 al modelo, textos recortados) o el error de Postgres para que corrija. Hasta
+   **4 consultas** por mensaje; en la 5ª vuelta se le obliga a responder.
+5. Respuesta `{respuesta, tabla?}`: `tabla` = última consulta con varias filas (o con
+   `archivo_id`), hasta 200 filas. El front la pinta bajo el texto con botón "Abrir" si hay
+   `archivo_id`; las columnas `*_id` no se muestran. n8n/Telegram la recibe además en markdown
+   dentro de `respuesta` (`tablaAMarkdown`).
 
-## Chat — bucle de herramientas (refuerzos)
+**Frontera de seguridad (multi-tenant)** — el SQL lo puede dirigir el usuario con su mensaje,
+así que la protección está en la BD, no en el prompt:
+- El SQL corre con el rol **`ateka_chat`** por una conexión propia (`config/chatDb.ts`). Es un
+  usuario de login propio (contraseña = HMAC de `JWT_SECRET`, fijada al arrancar con
+  `prepararRolChat`): con `SET ROLE` sobre la conexión principal, un `RESET ROLE` o
+  `set_config('role', …)` en el SQL recuperaría todos los permisos.
+- `ateka_chat` solo tiene `SELECT` sobre las vistas del esquema **`chat`** (`archivos`, `carpetas`,
+  `carpetas_compartidas`, `facturas`, `lineas_factura`), nada sobre las tablas reales.
+- Cada vista filtra por la fila de **`chat_accesos`** cuyo token (UUID aleatorio, 5 min, se borra
+  al acabar) está en `app.chat_token`. `ateka_chat` no puede leer `chat_accesos`: aunque el SQL
+  cambie ese ajuste, sin el token de otro usuario las vistas vuelven vacías. La fila guarda
+  también las carpetas compartidas accesibles y los permisos `puedeFacturas`/`puedeContenido`.
+- Vistas con `security_barrier` (un filtro del modelo con un cast que falla no se evalúa antes
+  que el de la vista, y no filtra datos ajenos por el mensaje de error).
+- Una sola sentencia: se ejecuta como `SELECT * FROM (<sql>) LIMIT $1` con parámetro → protocolo
+  extendido de pg, que rechaza varias sentencias. Transacción `READ ONLY`,
+  `default_transaction_read_only` y `statement_timeout = 10s` en el rol.
+- Probado en `tests/chat.sql.test.ts` (aislamiento entre usuarios, tablas reales, sentencias
+  encadenadas, escrituras, cambio de rol).
 
-Máx 15 iteraciones: llama Ollama → si hay `tool_calls` → ejecuta → repite. `temperature: 0`, `keep_alive: 30m`.
+**Capacidades en el chat**: `facturas` → la vista `chat.facturas` devuelve filas;
+`busqueda` → la columna `chat.archivos.contenido` (texto extraído + descripción manual) viene
+rellena. `gestion_archivos` no aplica: el chat no modifica nada (para mover/borrar/subir remite
+al explorador).
 
-- **Parser de respaldo de tool calls**: si el modelo escribe las llamadas como texto JSON en `content`, se extraen con un escáner de llaves balanceadas y se ejecutan igual.
-- **Remapeo de nombres alucinados** (`remapearNombreTool`): `<verbo>_facturas?` → `<verbo>_archivo`, `borrar` → `eliminar` (una factura es un archivo normal, no hay tools específicas).
-- **Resolución flexible de nombres** (`resolverArchivo`/`resolverCarpeta`): por nombre/leaf-name en todas las carpetas, con fallback archivo↔carpeta y fallback a nombre suelto si el modelo antepone "/" a algo que no es ruta real. Varias coincidencias → `necesita_aclaracion` con opciones reales.
-- **Bypass de aclaración**: la lista de opciones se construye en el servidor. Se recuerda en memoria (`pendientesAclaracion`, por usuario, TTL 5 min) qué tool/args se pedían, para completarlo en el turno siguiente si el usuario responde con la opción ofrecida.
-- **Bypass de resumen**: si TODAS las tools de una iteración devuelven `resumen: string`, se retorna ese markdown directo sin otra llamada al modelo (evita reformateos, `$` en vez de `€`, datos inventados). En facturas y en todas las operaciones de archivos/carpetas/papelera (`resumen: "Hecho."`).
+**Modelo**: `OLLAMA_THINK=true` activa el modo pensamiento de qwen3 (mejor SQL en preguntas
+difíciles, bastante más lento). Solo se manda `think` a modelos que lo soportan
+(`soportaThink`, vía `/api/show`). `OLLAMA_NUM_CTX` (8192) es el mismo para el chat y la
+extracción de facturas: si difiriera, Ollama recargaría el modelo al alternar.
 
-## Chat — analítica de facturas (`ventas_top`, `totales_facturas`, `clientes_top`)
+---
 
-Las tres aceptan un **filtro flexible** y devuelven markdown con € (bypass): `facturas` (nº o nombre; matching con límites de dígito para que "1" no case con "10"), `cliente`, `emisor`, `producto` (solo `ventas_top`), `mes`/`anio` o `desde`/`hasta`, `orden`. Si se nombran facturas no escaneadas, `asegurarFacturasEscaneadas` las **encola en segundo plano** (`encolarEscaneoManual`, no espera) y devuelve cuántas quedaron pendientes; la respuesta agrega con lo que ya hay y añade un aviso "_N factura(s) se están escaneando…, pregúntame de nuevo_" (excepto `clientes_top`). **Antes se escaneaban sincrónicamente aquí mismo** (`await escanearFactura`), y con varias facturas el OCR/IA tardaba más que el `proxy_read_timeout` de nginx (120s) → la petición del chat colgaba hasta el **504**. Los filtros de texto usan `unaccent()` en ambos lados del `ILIKE` (migración `HabilitarUnaccent`). El filtro base excluye facturas cuyo archivo está en la papelera (`a."eliminadoEn" IS NULL`). `clientes_top` agrupa por `f."cliente"` y suma `f."total"`, sin JOIN con `lineas_factura`.
+## Buscador del explorador (`contenido.service.ts`)
 
-Las celdas de texto libre de estas tablas (cliente/emisor/producto/descripción) pasan por `celdaMd` (colapsa saltos de línea, neutraliza `|`, acota a 80 chars) para que un valor mal extraído por el modelo pequeño —p. ej. un `cliente` con nombre+email+teléfono pegados— no rompa la estructura de la tabla markdown.
+Sin IA desde que se quitó la búsqueda semántica (bge-m3 + tabla `fragmentos`). Un archivo
+coincide si **todas** las palabras de la consulta aparecen, sin distinguir mayúsculas ni
+tildes y también a medias ("presu" → "Presupuesto"), en su nombre, descripción manual o texto
+extraído (`unaccent(...) ILIKE`). Primero los que casan por nombre, luego por fecha. Devuelve
+un trozo del contenido alrededor de la coincidencia. `/api/archivos/buscar` busca solo lo
+personal; `/api/compartido/:id/buscar`, solo esa carpeta compartida.
 
-### Analítica avanzada (pre-flights deterministas, resúmenes derivados)
-
-Todos por pre-flight (sin tool en el modelo: son resúmenes agregados que se calculan al vuelo, como `generarResumenCombinadoMd`), gateados por `puedeFacturas`, combinables con periodo + moneda, y **siempre por moneda** (nunca se restan/comparan divisas distintas). Reusan `totalesFacturado`. Van **antes** de los pre-flights de totales/rankings para que su intención específica gane. Orden: factura-por-importe → ticket medio → IVA → balance → comparativa → clientes → proveedores.
-- **Beneficio / balance neto** (`generarResumenNetoMd`): "cuánto he ganado", "mi beneficio de abril", "balance del trimestre", "ventas menos compras" → ingresos (ventas) − gastos (compras) por moneda, etiquetando "Beneficio" o "Pérdida" según el signo.
-- **IVA** (`generarResumenIvaMd`, con `modo`): "cuánto IVA he cobrado/repercutido" (ventas), "IVA pagado/soportado" (compras), "IVA a declarar/liquidar este trimestre" (repercutido − soportado; positivo = a ingresar, negativo = a compensar). El `modo` se decide por palabra clave; por defecto liquidación.
-- **Factura(s) por importe** (`facturasPorImporte`): "la factura más grande/cara/alta", "las 5 de mayor importe", "mi factura más pequeña" → ranking de facturas **individuales** por `total` (no de producto/cliente), con botón "Abrir". `orden` asc/desc por palabra (menor/pequeña/barata → asc); nº explícito fija el límite (un año de 4 dígitos no).
-- **Ticket medio** (`ticketMedioMd`): "cuál es mi factura media", "importe medio por factura", "ticket medio", "promedio por factura" → `total / nº facturas` por moneda (ventas por defecto; compras si se nombra gasto/compra).
-- **Comparativa de dos periodos** (`generarComparativaMd`): "¿vendí más en abril o en mayo?", "compara este trimestre con el anterior" → total por moneda de cada periodo + diferencia. `construirDosPeriodos` extrae dos meses nombrados o el par relativo "este X vs el X anterior" (trimestre/año/mes). Va **antes** de `esRankingVentas` porque "vendí más en abril o mayo" casa su patrón, pero con dos periodos lo pedido es compararlos.
-
-**Ranking de PROVEEDORES** (`proveedores_top`, espejo de `clientes_top`): "qué proveedor me factura más", "mi principal proveedor", "a quién/a qué proveedor le compro más". Antes no tenía pre-flight y "a quién le compro más" no lo captaba nadie (el de clientes exige vend/factur) mientras "compro" caía en el total de gasto. **Simétrico al de clientes**, que a su vez capta "a quién (le) vendimos/vendí/facturé más" (el destinatario de la venta ES el cliente, aunque no se nombre "cliente").
-
-**Trimestres/semestres** (`detectarTrimestreSemestre`, en `chat.deteccion.ts`, testeado): amplía la detección de periodo con "primer/…/cuarto trimestre", "trimestre 3"/"3er trimestre", "T3"/"Q1", "este trimestre"/"trimestre pasado", "primer/segundo semestre"/"S1". T1=ene-mar…T4=oct-dic; S1=ene-jun, S2=jul-dic. Al vivir en `detectarRangoPeriodo`, **todos** los pre-flights de periodo lo heredan (clave para el IVA trimestral). `ahora` inyectable para testear los relativos.
-
-## Chat — leer_archivo
-
-`leerTextoArchivo` (`archivos.service.ts`) acepta texto plano directo, y para PDF/DOCX/imágenes **reutiliza `archivo.textoExtraido`** (el texto ya extraído al subir vía pdf-parse/mammoth/OCR) en vez de decodificar el binario como UTF-8. Antes rechazaba todo lo que no fuera texto. Para imágenes, lo que se lee es la descripción generada al subir (OCR o descripción manual).
-
-## Chat — tools con bypass (markdown preconstruido, € server-side)
-
-- `escanear_factura` → **encola el escaneo en segundo plano** (`encolarEscaneoManual`, igual que el botón "Escanear" del explorador) y responde al instante "lo he puesto a escanear, pregúntame de nuevo"; NO espera al OCR/extracción (que tardaba minutos y colgaba el chat hasta el 504 de nginx). El escaneo real (OCR deepseek + extracción JSON forzada con Ollama → BD → markdown) corre en la cola; rechaza con 422 en vez de inventar si no hay importes ni número/fecha/emisor reales (`soloSiFactura`; ver "No inventar facturas"). Si el archivo ya está `pendiente`/`escaneando`, avisa sin re-encolar.
-- `escanear_todas_facturas` → encola en segundo plano todos los archivos candidatos que no estén ya `pendiente`/`escaneando`. Parámetro **`tipo`**: `"pdf"` (por defecto, solo PDFs — las imágenes sueltas casi nunca son factura y su OCR es mucho más lento), `"imagenes"` (SOLO imágenes), `"todo"` (PDFs + imágenes). Hay un **pre-flight determinista** ("escanea/procesa **todas** las facturas/imágenes/todo", sin dígitos) que fija `tipo` por palabra clave sin depender del modelo pequeño.
-- `obtener_factura` → resuelve con `resolverArchivo` (maneja ambigüedad/no-encontrado) y lee de BD, sin re-escanear.
-- `ventas_top` → ranking de productos (GROUP BY sobre `lineas_factura`).
-- `totales_facturas` → totales (nº, subtotal, IVA, total) filtrados.
-
-`resumenFacturaMd` (chat y `.md` de resumen) usa `##` y el título incluye el nombre del archivo junto al número (`## Factura 2026-2003 — factura_03.pdf`).
-
-### No inventar facturas a partir de imágenes que no lo son
-El `SCHEMA_FACTURA` ya NO marca campos como `required`: con la decodificación restringida de Ollama, exigir todos los campos forzaba al modelo a inventar emisor/cliente/importes cuando el texto era una foto sin factura. Además, antes de extraer hay un **gate** `pareceFacturaConImportes(contenido)`: si el contenido no tiene señales de factura, no se llama a la IA y se trata como `no_factura`. Y al detectar `no_factura` se borra cualquier factura inventada que se hubiera guardado antes para ese archivo.
-
-**Importes inventados en una factura que SÍ es factura pero trae los importes en blanco** (caso real: una factura de *devolución de equipo sin reparar* con base/IVA/total vacíos — solo el símbolo `€` sin número): el gate deja pasar (tiene "FACTURA"/"IVA"/"base imponible") y el modelo, al pedírsele rellenar todos los campos, se saca de la nada base/IVA/total. `verificarImportesReales(datos, contenido)` (en `facturas.service.ts`, justo antes de la guarda `tieneImportes`) **vacía a 0 todo importe que no aparezca EN CONTEXTO MONETARIO en el texto** del documento (`numerosMonetariosDelTexto`). Un número solo cuenta como importe si (a) trae céntimos explícitos —exactamente 2 decimales— (`141,60`, `2.025,00`, `50.00`) o (b) va pegado a un símbolo/nombre de moneda (`€ 120`, `120€`, `120 EUR`). **No** vale cualquier número: un nº de RMA (`RMA: 2.025/SAT/542`), un NIF, un código de cliente o una fecha no son importes — el primer intento (aceptar cualquier número) dejó colar un total inventado `2.025,00 €` que coincidía con el RMA `2.025`; el `(?!\d)` de la regla (a) descarta ese `2.025` (3 dígitos tras el punto = miles) y la cantidad `1,0000`. `interpretacionesNumericas` genera todas las lecturas de cada token (miles ES/EN y último separador como decimal) para no descartar un importe correcto por formato. Efecto: sin importes legibles, la guarda la trata como `no_factura` en vez de guardar cifras falsas. Trade-off asumido: una factura legítima de importe **0** tampoco se guarda en la analítica (mejor que inventar).
+---
 
 ## Facturas — clasificación venta/compra, emisor/cliente y CIF (`facturas.service.ts`)
 
@@ -103,39 +93,13 @@ El sistema cataloga **ventas** (la empresa del propietario es el emisor) y **com
 
 **Analítica separada por `tipo`**: `construirFiltro` admite `tipo`; las funciones de ventas (`ventas_top`/`clientes_top`/`totales_facturado`) fijan `tipo='venta'` por defecto y las de compras (`compras_top` = `ventasTop` con tipo compra, `proveedoresTop` = ranking por `emisor`, `totales_compras`) `tipo='compra'`. Las `desconocido` quedan fuera de las dos.
 
-**Resúmenes derivados, sin carpeta oculta** (cambio respecto al diseño anterior): los resúmenes agregados de ventas/compras **ya no** se materializan como archivos `resumen-ventas.md`/`resumen-compras.md` en una carpeta `/facturas`. Eran datos derivados de la BD que arrastraban mucha complejidad accidental (seguir la carpeta si el usuario la movía, colas de serialización para no pisar el `.md`, dedup/soft-delete/RAG de esos ficheros, y tener que ocultar la carpeta en cada listado). Ahora el chat los **genera al vuelo desde la BD** cuando el usuario los pide, con `generarResumenVentasMd(usuarioId)`/`generarResumenComprasMd(usuarioId)` (devuelven el markdown, o `null` si no hay ventas/compras). Tampoco existen ya los `resumen-<archivo>.md` por factura (el markdown por factura sigue disponible como valor de retorno de `escanearFactura`/`obtenerFactura`, no como fichero). La migración `1776…-LimpiarResumenesFacturas` borra los `.md` y la carpeta `/facturas` que quedaran de la etapa anterior (los binarios MinIO quedan huérfanos, inofensivos). La página **Facturas** y las tools de analítica no cambian (ya leían la BD).
+**Resúmenes derivados, sin carpeta oculta** (cambio respecto al diseño anterior): los resúmenes agregados de ventas/compras **ya no** se materializan como archivos `resumen-ventas.md`/`resumen-compras.md` en una carpeta `/facturas`. Eran datos derivados de la BD que arrastraban mucha complejidad accidental (seguir la carpeta si el usuario la movía, colas de serialización para no pisar el `.md`, dedup/soft-delete/RAG de esos ficheros, y tener que ocultar la carpeta en cada listado). Ahora se calculan **al vuelo desde la BD** (página Facturas y consultas SQL del chat). Tampoco existen ya los `resumen-<archivo>.md` por factura (el markdown por factura sigue disponible como valor de retorno de `escanearFactura`, no como fichero). La migración `1776…-LimpiarResumenesFacturas` borra los `.md` y la carpeta `/facturas` que quedaran de la etapa anterior (los binarios MinIO quedan huérfanos, inofensivos). 
 
 **Rescate del membrete solo si hace falta** (`extraerTexto`, rama PDF): el OCR de la 1ª página existe para leer el emisor cuando va como imagen (TRAZA). Pero si la capa de texto YA trae "…Registro/Registre Mercantil…" (`tieneRegistroMercantil`), el emisor ya está en el texto y el OCR solo METE RUIDO (visto: el logo "AKX" leído como "ARX" desviaba la clasificación) — así que en ese caso NO se rasteriza. Repsol (texto completo, catalán) se salta el OCR y sale limpia; TRAZA (emisor solo en la imagen del pie) sí lo dispara.
 
 **Edición manual** (`GET`/`PATCH /api/facturas/:id`, página Facturas): el modelo pequeño siempre falla algún campo; la edición es la red de seguridad. `actualizarFactura` parchea cabecera (con `normalizarFecha`/`normalizarMoneda`) y reemplaza las líneas enteras (borrar+insertar, para no dejar huérfanas); la corrección se refleja sola en los resúmenes, que se generan al vuelo desde la BD (ya no hay `.md` que regenerar). La pestaña "Sin clasificar" (filtro `tipo=desconocido`) lista las que hay que rescatar.
 
 **Reclasificar** (`POST /api/facturas/reclasificar`, botón "↻ Reclasificar"): el `tipo` se calcula y **guarda al escanear**, así que fijar/corregir el CIF de la empresa DESPUÉS no reclasifica lo ya escaneado — se quedaría todo en `desconocido`. `reclasificarFacturas` re-ejecuta `resolverDireccion` sobre los datos YA guardados (emisor/cliente/NIFs + el `textoExtraido` del archivo para el ancla CIF-en-texto), **sin re-escanear ni re-OCR** (instantáneo) y aprende el CIF por corroboración si aún no lo tiene (los resúmenes, al generarse desde la BD, ya reflejan el nuevo `tipo`). Caso típico: empresa creada sin CIF → todas `desconocido` → el admin pone su CIF en Equipo → "Reclasificar".
-
-## Chat — abrir archivo desde el chat
-
-Cuando una tool/pre-flight resuelve archivos concretos, `chatear()` devuelve `archivos: {id, nombre}[]`. El front (`pages/inicio/inicio.ts`) muestra un botón "Abrir `<nombre>`" por archivo. La ventana se abre en blanco **en el momento del clic** (antes de pedir el blob) para que el navegador no la bloquee como pop-up.
-
-## Chat — paginación de listados en el chat
-
-Para listados largos, `chatear()` puede devolver tablas paginadas además del markdown:
-- `tablaFacturas` / `tablaArchivos`: traen la **1ª página** (20 filas) + `pagina`/`totalPaginas`/`total`/`limite` + `filtro` (facturas) o `carpeta` (archivos). El frontend pide las páginas siguientes a los endpoints REST normales (`GET /api/facturas`, `GET /api/archivos`) reenviando ese filtro/carpeta, **sin** volver a pasar por el modelo.
-- `tablaCarpetas`: trae TODAS las filas (las carpetas de un usuario son pocas) y el frontend pagina **en memoria**.
-
-El front (`inicio.ts`/`inicio.html`) las pinta como tablas con controles ← Página X de Y →; al cambiar de página de facturas/archivos sustituye las filas del mensaje (`ChatService.actualizarMensaje`) tras pedir la página vía REST.
-
-## Chat — tabla clicable de aclaración
-
-Cuando `resolverArchivo`/`resolverCarpeta`/`resolverEnPapelera` devuelven varias `opciones` (coincidencias exactas o sugerencias por parecido), `chatear()` ya armaba el texto markdown (`mensajeAclaracion`, lista con guiones) — ahora además devuelve `tablaAclaracion: {titulo, sugerencia, lectura, limite, filas: {etiqueta, valor, id?}[]}` con las MISMAS opciones, para no tener que escribir el nombre a mano. `titulo` es el encabezado (`cabeceraAclaracion`, "¿Querías decir...?" / "¿cuál quieres?") y sustituye al texto plano cuando hay tabla, igual que con `tablaArchivos`/`tablaCarpetas`/`tablaFacturas`.
-
-Construcción centralizada en `respuestaAclaracion(opciones, sugerencia, acciones, tool, extra?)`: hay ~11 puntos en `chatear()` que antes devolvían `{ respuesta: mensajeAclaracion(...), acciones }` a mano; todos pasan por este helper para no desincronizar el texto y la tabla. `filaAclaracion` mapea cada opción (string para carpetas, `{id,nombre,carpeta}` para archivos) a `{etiqueta, valor, id?}` — `id` (si la opción es un archivo) viaja SIEMPRE, no solo para tools de lectura, porque el front lo necesita para seleccionar sin ambigüedad (ver más abajo).
-
-**Selección por id, no por texto**: pulsar un botón de la tabla manda `valor` (para que la burbuja del chat lea bien) PERO TAMBIÉN `idOpcion` con el `id` exacto de esa fila (`ChatService.enviar(mensajes, idOpcion)` → `POST /api/chat {mensajes, idOpcion}` → `chatear(usuarioId, mensajes, idOpcion)`). El pre-flight de aclaración pendiente, si recibe `idOpcion`, filtra `pendiente.opciones` por `o.id === idOpcion` en vez de comparar texto. Esto corrige un bug real: dos opciones podían compartir el mismo `nombre` (el mismo archivo encontrado por dos rutas distintas, o dos archivos con nombre repetido en carpetas distintas — ej. "restaura fac" listando varias facturas, o "copia X" con coincidencias); comparar solo por texto a veces no daba un único candidato, el bloque no devolvía nada y el mensaje caía al flujo normal SIN el contexto de la aclaración — el modelo, recibiendo solo un nombre de archivo suelto, a veces "adivinaba" otra tool (se vio "copia X" → escanear en vez de copiar). Si no llega `idOpcion` (el usuario escribió la opción a mano, o es una opción de carpeta -string- que no tiene id), se sigue comparando por texto como antes.
-
-**Botones según la tool**: `tablaAclaracion.lectura` es un flag a NIVEL DE TABLA (la tool es la misma para todas las opciones de una pregunta) que vale `true` solo si `tool` está en `TOOLS_LECTURA` (`leer_archivo`, `obtener_factura`). El front usa ese flag para decidir el layout: si `lectura`, dos botones ("Resumen" = `seleccionarAclaracion(valor, id)`, "Abrir" = `abrirArchivo({id, nombre: valor})` directo, sin pasar por el chat); si no, un solo botón "Elegir" (mismo `seleccionarAclaracion`, que ahora manda `id` igual en ambos casos). Sin esto, mostrar "Abrir" antes de mover/renombrar/borrar un archivo no tenía sentido (no hay nada que previsualizar) y "Resumen" como etiqueta era confuso para una acción que no resume nada. Cada punto de llamada pasa la tool real que se completará: la del propio pre-flight (`"leer_archivo"`, `"eliminar_archivo"`...), `a.tool`/`pendiente.tool` cuando viene de un comando compuesto o de una aclaración anidada, o `tc.function.name` cuando la tool la decidió el modelo (fallback genérico del bucle de tools — aquí caen "mueve X" o "cambia el nombre de X" sueltos, que no tienen pre-flight determinista propio).
-
-Paginación en memoria igual que `tablaCarpetas` (el backend manda todas las opciones, como mucho 5 por la cascada fuzzy o todas las coincidencias exactas).
-
----
 
 ## OCR y descripción de imágenes (`extraccion.service.ts`) — cascada de 3 pasadas
 
@@ -156,25 +120,29 @@ Si `OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL`, la 2ª pasada se desactiva sola (
 En GPU de 8GB, deepseek-ocr (6.7GB) no entra entero (corre parcial en CPU, ~2 min/imagen) — pero solo se invoca en imágenes que parecen factura. Todo en segundo plano.
 
 ### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
-Ya **no** hay modal obligatorio al subir. Con la cascada, una foto sin texto se describe automáticamente al subir. El endpoint queda para corregir/afinar a mano; lo que se guarde se reindexa para RAG (`indexarTexto`, combinado vía `combinarContenido`, que omite repetir el OCR si ya está contenido en la descripción). Escanear manualmente algo que no es factura ya no copia `textoExtraido` dentro de `descripcionManual` (solo guarda la pista real del usuario).
+Ya **no** hay modal obligatorio al subir. Con la cascada, una foto sin texto se describe automáticamente al subir. El endpoint queda para corregir/afinar a mano; lo que se guarde se combina con el OCR vía `combinarContenido` (que omite repetir el OCR si ya está contenido en la descripción) y lo leen el chat y el buscador. Escanear manualmente algo que no es factura ya no copia `textoExtraido` dentro de `descripcionManual` (solo guarda la pista real del usuario).
+
+### No inventar facturas a partir de imágenes que no lo son
+El `SCHEMA_FACTURA` ya NO marca campos como `required`: con la decodificación restringida de Ollama, exigir todos los campos forzaba al modelo a inventar emisor/cliente/importes cuando el texto era una foto sin factura. Además, antes de extraer hay un **gate** `pareceFacturaConImportes(contenido)`: si el contenido no tiene señales de factura, no se llama a la IA y se trata como `no_factura`. Y al detectar `no_factura` se borra cualquier factura inventada que se hubiera guardado antes para ese archivo.
+
+**Importes inventados en una factura que SÍ es factura pero trae los importes en blanco** (caso real: una factura de *devolución de equipo sin reparar* con base/IVA/total vacíos — solo el símbolo `€` sin número): el gate deja pasar (tiene "FACTURA"/"IVA"/"base imponible") y el modelo, al pedírsele rellenar todos los campos, se saca de la nada base/IVA/total. `verificarImportesReales(datos, contenido)` (en `facturas.service.ts`, justo antes de la guarda `tieneImportes`) **vacía a 0 todo importe que no aparezca EN CONTEXTO MONETARIO en el texto** del documento (`numerosMonetariosDelTexto`). Un número solo cuenta como importe si (a) trae céntimos explícitos —exactamente 2 decimales— (`141,60`, `2.025,00`, `50.00`) o (b) va pegado a un símbolo/nombre de moneda (`€ 120`, `120€`, `120 EUR`). **No** vale cualquier número: un nº de RMA (`RMA: 2.025/SAT/542`), un NIF, un código de cliente o una fecha no son importes — el primer intento (aceptar cualquier número) dejó colar un total inventado `2.025,00 €` que coincidía con el RMA `2.025`; el `(?!\d)` de la regla (a) descarta ese `2.025` (3 dígitos tras el punto = miles) y la cantidad `1,0000`. `interpretacionesNumericas` genera todas las lecturas de cada token (miles ES/EN y último separador como decimal) para no descartar un importe correcto por formato. Efecto: sin importes legibles, la guarda la trata como `no_factura` en vez de guardar cifras falsas. Trade-off asumido: una factura legítima de importe **0** tampoco se guarda en la analítica (mejor que inventar).
 
 ---
 
 ## Auto-escaneo de facturas al subir
 
-Al subir PDF/imagen, además del RAG, `ctrlSubir` encola una tarea durable `autoescanear` (`tareas.service.ts`) que se procesa en segundo plano:
+Al subir PDF/imagen, tras extraer el texto, `ctrlSubir` encola una tarea durable `autoescanear` (`tareas.service.ts`) que se procesa en segundo plano:
 1. Si es PDF/imagen, se escanea con `escanearFactura(..., { soloSiFactura: true })`.
 2. Guardia: solo persiste la factura si la extracción parece factura (líneas o importes > 0).
 
-Para facturas subidas antes de esta función: "escanea todas las facturas" en el chat (o nombrarlas en una consulta de analítica, que las **encola** en segundo plano vía `asegurarFacturasEscaneadas` — la consulta agrega con lo que ya hay y avisa de las pendientes).
+Para facturas subidas antes de esta función: escanearlas desde la página Facturas / el explorador (el chat ya no escanea: es de solo lectura).
 
 ---
 
 ## Limitaciones conocidas (detalle)
 
-- **Modelo del chat**: servidor con GPU usa `qwen2.5-coder:14b` (function calling fiable). `qwen2.5:3b` es poco fiable; `qwen2.5-coder:7b` (cabe en 8GB) es mejor pero aun así falla en frases muy directas (borrar archivo/carpeta concreto, crear nota, restaurar vs. borrar de papelera) — de ahí los pre-flights. El modelo pequeño también mezcla campos en la extracción de facturas (p. ej. nombre+email+teléfono en `cliente`).
-- **"Copia/mueve X a LA CARPETA Y"**: con la palabra "carpeta" antes del destino, el modelo no llama a ninguna tool de forma consistente (incluso con el 7b). Decir la ruta directa ("a /Y" o "a Y") sí funciona. Sin pre-flight aún.
-- **"Lee X" con contenido muy corto**: a veces solo confirma "lo he leído" en vez de mostrar el contenido trivial; con contenido más rico sí lo resume.
+- **Modelo del chat**: el text-to-SQL depende del tamaño del modelo. `qwen3:14b` (cabe entero en 12 GB con `OLLAMA_NUM_CTX=8192`, sin tocar la configuración de Ollama) es el objetivo; con 3b/7b el SQL falla bastante más (columnas inventadas, sumas mezclando monedas). Los errores de Postgres se le devuelven para que corrija, pero con un modelo pequeño no siempre lo consigue. La extracción de facturas con un modelo pequeño también mezcla campos (p. ej. nombre+email+teléfono en `cliente`).
+- **VRAM compartida**: chat (qwen3:14b ~9 GB) y OCR (granite ~2,4 GB, deepseek-ocr ~6,7 GB) no caben a la vez en 12 GB; Ollama los intercambia y la primera respuesta del chat tras un escaneo tarda unos segundos más.
 - **PDFs escaneados (sin capa de texto)**: `pdf-parse` no hace OCR; solo las imágenes pasan por la cascada de visión. Para un PDF puramente escaneado habría que rasterizar las páginas a imagen antes del OCR (pendiente).
 - **Auto-escaneo al subir**: consume cómputo de OCR+IA por cada PDF/imagen, aunque la guardia `soloSiFactura` no guarde los que no son factura.
 - **GPU pequeña (8GB)**: deepseek-ocr corre parcial en CPU (~2 min/imagen); no bloquea la subida (segundo plano). Tesseract siempre en CPU.

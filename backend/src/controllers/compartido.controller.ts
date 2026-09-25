@@ -14,7 +14,6 @@ import {
   descargarCompartido,
   eliminarCompartido,
   listarTodosCompartidos,
-  buscarEnCompartida,
   listarSubcarpetasCompartidas,
   crearSubcarpetaCompartida,
   eliminarSubcarpetaCompartida,
@@ -30,6 +29,7 @@ import {
   prepararDescargaCarpetaCompartida,
   schemaCrearCarpetaCompartida,
   schemaActualizarCarpetaCompartida,
+  buscarEnCompartida,
 } from "../services/compartido.service";
 import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
@@ -130,9 +130,9 @@ export const ctrlSubir = async (req: Request, res: Response, next: NextFunction)
       return;
     }
 
-    // Indexado RAG en segundo plano (la cola durable). El worker NO auto-escanea
-    // facturas compartidas (ver tareas.service). Así el archivo es buscable por
-    // todos los del rol, indexado una sola vez.
+    // Extracción de texto en segundo plano (la cola durable). El worker NO
+    // auto-escanea facturas compartidas (ver tareas.service). El texto queda
+    // disponible para el chat de todos los del rol, extraído una sola vez.
     await marcarIndexadoPendiente(archivo.id);
     await encolarTarea({
       tipo: "indexar",
@@ -183,14 +183,10 @@ export const ctrlListarTodos = async (req: Request, res: Response, next: NextFun
   }
 };
 
-// GET /:id/buscar?q=... → búsqueda semántica dentro de la carpeta compartida.
+// GET /:id/buscar?q=... → buscador (nombre y contenido) de la carpeta compartida.
 export const ctrlBuscar = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const q = typeof req.query.q === "string" ? req.query.q : "";
-    if (!q.trim()) {
-      res.json([]);
-      return;
-    }
     res.json(await buscarEnCompartida(req.usuario!.id, String(req.params.id), q));
   } catch (error) {
     next(error);

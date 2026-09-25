@@ -14,7 +14,6 @@ import { Carpeta } from "../entities/Carpeta";
 import { Factura } from "../entities/Factura";
 import { LineaFactura } from "../entities/LineaFactura";
 import { Tarea } from "../entities/Tarea";
-import { ChatPendiente } from "../entities/ChatPendiente";
 import { ClaveApi } from "../entities/ClaveApi";
 
 // Logger de dev que silencia el sondeo del worker de la cola durable
@@ -43,7 +42,7 @@ export const AppDataSource = new DataSource({
   username: env.DB_USER,
   password: env.DB_PASSWORD,
   database: env.DB_NAME,
-  entities: [Empresa, Rol, CarpetaCompartida, CarpetaCompartidaCarpeta, EventoCompartido, Usuario, Archivo, Carpeta, Factura, LineaFactura, Tarea, ChatPendiente, ClaveApi],
+  entities: [Empresa, Rol, CarpetaCompartida, CarpetaCompartidaCarpeta, EventoCompartido, Usuario, Archivo, Carpeta, Factura, LineaFactura, Tarea, ClaveApi],
   migrations: [path.join(__dirname, "../migrations/*.{ts,js}")],
   migrationsTableName: "migrations",
   // Solo los tests autogeneran el esquema (synchronize). En dev/prod el esquema

@@ -77,14 +77,14 @@ export class ArchivosService {
     return this.http.delete(`${this.base}/carpetas`, { params });
   }
 
-  // Búsqueda semántica (RAG) por el contenido de los documentos.
-  buscarSemantica(q: string) {
+  // Buscador por nombre y contenido de los documentos (solo lo personal).
+  buscar(q: string) {
     const params = new HttpParams().set('q', q);
     return this.http.get<ResultadoBusqueda[]>(`${this.base}/buscar`, { params });
   }
 
   // Guarda una descripción manual de un archivo (típicamente una imagen) para
-  // poder encontrarlo luego por su contenido en el buscador semántico.
+  // poder encontrarlo luego por su contenido en el buscador.
   describirArchivo(archivoId: string, descripcion: string) {
     return this.http.patch<{ mensaje: string }>(
       `${this.base}/${archivoId}/descripcion`,

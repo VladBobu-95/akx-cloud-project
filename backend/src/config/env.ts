@@ -55,13 +55,17 @@ const envSchema = z.object({
     (v) => (v === "" ? undefined : v),
     z.string().optional(),
   ),
-  // Modelo del chat (function calling). Por defecto el de la familia documentada
-  // para el servidor; en máquinas pequeñas se sobreescribe por .env.
-  OLLAMA_MODEL: z.string().default("qwen2.5-coder:14b"),
-  // Modelo de embeddings para la búsqueda semántica (RAG). bge-m3 = 1024 dims,
-  // que es lo que espera la columna "embedding" vector(1024) (migración 1761).
-  // OJO: cambiar a un modelo con otra dimensión rompe el INSERT de fragmentos.
-  OLLAMA_EMBED_MODEL: z.string().default("bge-m3"),
+  // Modelo del chat: escribe las consultas SQL y redacta la respuesta (ver
+  // chat.service.ts). También extrae los datos de las facturas. qwen3:14b cabe
+  // entero en una GPU de 12 GB; en máquinas pequeñas se sobreescribe por .env.
+  OLLAMA_MODEL: z.string().default("qwen3:14b"),
+  // Modo "pensamiento" del modelo del chat (qwen3 y similares). Mejora el SQL en
+  // preguntas difíciles pero tarda bastante más. Se ignora si el modelo no lo tiene.
+  OLLAMA_THINK: z.preprocess((v) => v === "true" || v === "1", z.boolean()).default(false),
+  // Contexto (tokens) del chat: esquema + historial + resultados de las consultas.
+  // Cada token de más ocupa VRAM: con 8k, qwen3:14b (~9,3 GB) + contexto (~1,3 GB)
+  // cabe entero en una GPU de 12 GB sin tocar la configuración de Ollama.
+  OLLAMA_NUM_CTX: z.coerce.number().int().min(2048).default(8192),
   // Cascada de visión para imágenes (ver `ocrImagen` en extraccion.service.ts):
   //  - OLLAMA_CAPTION_MODEL: 1ª pasada, modelo ligero (granite3.2-vision). Rápido,
   //    cabe en GPU y hace las dos cosas — transcribe texto si lo hay o describe la
@@ -73,7 +77,7 @@ const envSchema = z.object({
   // solo VLM).
   OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
   OLLAMA_CAPTION_MODEL: z.string().default("granite3.2-vision"),
-  // Timeout (ms) de CADA llamada a Ollama (embeddings/visión/extracción). Sin
+  // Timeout (ms) de CADA llamada a Ollama (chat/visión/extracción). Sin
   // esto, si Ollama se cuelga esperando VRAM —p. ej. no puede cargar el modelo
   // que toca porque otro sigue fijado en la GPU por su keep_alive— el `fetch` se
   // queda colgado indefinidamente y la tarea del worker se eterniza en

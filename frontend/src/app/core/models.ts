@@ -68,7 +68,7 @@ export interface Archivo {
   // "Última actualización" del explorador de carpetas compartidas.
   actualizadoEn: string;
   estadoEscaneo?: 'pendiente' | 'escaneando' | 'escaneada' | 'no_factura' | 'error' | null;
-  // Estado del indexado RAG (extracción de texto + embeddings), independiente
+  // Estado de la extracción de texto ("indexado"), independiente
   // del escaneo de factura. Lo gestiona la cola durable del backend.
   estadoIndexado?: 'pendiente' | 'indexando' | 'indexado' | 'error' | null;
   indexadoEn?: string | null;
@@ -89,13 +89,13 @@ export interface ListaArchivos {
   pagina: number;
 }
 
-// Resultado de la búsqueda semántica (RAG): archivo + fragmento que coincide.
+// Resultado del buscador: archivo + trozo del contenido donde aparece ("" si
+// solo coincide el nombre).
 export interface ResultadoBusqueda {
   archivoId: string;
   nombre: string;
   carpeta: string;
   fragmento: string;
-  score: number;
 }
 
 export type TipoFactura = 'venta' | 'compra' | 'desconocido';

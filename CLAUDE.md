@@ -1,17 +1,17 @@
-# AKX Cloud — Monorepo (akx-cloud-project)
+# ATEKA Cloud — Monorepo (akx-cloud-project)
 
 App de almacenamiento en la nube con chatbot IA. Backend Node/TypeScript + frontend Angular 22.
 
 **Repo:** `https://github.com/VladBobu-95/akx-cloud-project`
 
-> El **detalle y el porqué** de cada decisión (pre-flights del chat, cascada OCR, RAG,
+> El **detalle y el porqué** de cada decisión (chat por SQL y su frontera de seguridad, cascada OCR,
 > historial de bugs, limitaciones) está en **`NOTAS.md`** — que NO se carga cada sesión.
 > Este `CLAUDE.md` es la referencia compacta de uso frecuente; consulta `NOTAS.md` cuando
-> toques chat/OCR/RAG en profundidad.
+> toques chat/OCR/facturas en profundidad.
 
 ```
 akx-cloud-project/
-  backend/                    ← API REST (Express + TypeORM + pgvector + MinIO + Ollama)
+  backend/                    ← API REST (Express + TypeORM + Postgres + MinIO + Ollama)
   frontend/                   ← SPA Angular 22
   mobile/                     ← App Android (Ionic 9 + Capacitor 8). URLs de ATEKA y del gateway en src/environments/ (vía core/urls.ts)
   docker-compose.yml          ← Producción: db, minio, api, web
@@ -27,10 +27,9 @@ akx-cloud-project/
 | Capa | Tecnología |
 |---|---|
 | API | Node 22, Express 5, TypeScript 6 |
-| ORM | TypeORM + PostgreSQL 16 + pgvector |
+| ORM | TypeORM + PostgreSQL 16 |
 | Objetos | MinIO (S3-compatible) |
-| IA chat | Ollama — `qwen2.5-coder:14b` (servidor con GPU); `qwen2.5-coder:7b`/`3b` en máquinas pequeñas |
-| IA embeddings | Ollama — `bge-m3` (1024 dims) |
+| IA chat + facturas | Ollama — `qwen3:14b` (servidor, GPU de 12 GB); el chat lee la BD escribiendo SQL de solo lectura |
 | Visión/OCR | Cascada granite3.2-vision → deepseek-ocr → Tesseract.js `spa+cat+eng` (ver `NOTAS.md`) |
 | Extracción | pdf-parse v2 (PDF), mammoth (DOCX) |
 | Auth / Validación | JWT + bcrypt / Zod |
@@ -45,8 +44,7 @@ akx-cloud-project/
 cp .env.example .env                          # rellenar valores reales
 docker compose up -d
 # modelos Ollama (solo 1ª vez):
-docker exec clouddrive-ollama ollama pull qwen2.5-coder:14b   # o :7b/3b
-docker exec clouddrive-ollama ollama pull bge-m3
+docker exec clouddrive-ollama ollama pull qwen3:14b
 docker exec clouddrive-ollama ollama pull deepseek-ocr
 docker exec clouddrive-ollama ollama pull granite3.2-vision
 ```
@@ -77,8 +75,9 @@ MINIO_USER, MINIO_PASSWORD, MINIO_BUCKET=archivos, MINIO_PORT_HOST=9000, MINIO_C
 API_PORT_HOST=3000, JWT_SECRET=<min 32 chars>, CORS_ORIGIN=*   # en prod: dominio del front
 SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD                          # seed del superadmin (multi-tenant; ver abajo)
 OLLAMA_URL=http://host.docker.internal:11434                   # local override → http://ollama:11434
-OLLAMA_MODEL=qwen2.5-coder:14b                                 # chat (7b/3b en máquinas pequeñas)
-OLLAMA_EMBED_MODEL=bge-m3
+OLLAMA_MODEL=qwen3:14b                                         # chat (SQL) + extracción de facturas
+OLLAMA_THINK=false                                             # opcional: modo pensamiento (mejor SQL, más lento)
+OLLAMA_NUM_CTX=8192                                            # opcional: contexto del chat y de las facturas
 OLLAMA_CAPTION_MODEL=granite3.2-vision                         # 1ª pasada visión
 OLLAMA_OCR_MODEL=deepseek-ocr                                  # 2ª pasada (solo si parece factura)
 N8N_API_KEY, N8N_USER_EMAIL                                    # opcional: key fija de pruebas para /api/n8n (actúa como ese usuario)
@@ -110,13 +109,13 @@ docker compose logs -f api
 
 ## Estructura backend (`backend/src/`)
 ```
-config/      database.ts (TypeORM+pgvector), env.ts (Zod), minio.ts
+config/      database.ts (TypeORM), chatDb.ts (conexión del rol ateka_chat del chat), env.ts (Zod), minio.ts, ollama.ts
 controllers/ entrada HTTP, delegan en services
-entities/    Empresa, Rol, CarpetaCompartida, Archivo, Carpeta, Factura, LineaFactura, Usuario, ClaveApi, Tarea, ChatPendiente, EventoCompartido
+entities/    Empresa, Rol, CarpetaCompartida, Archivo, Carpeta, Factura, LineaFactura, Usuario, ClaveApi, Tarea, EventoCompartido
 middlewares/ auth (JWT→req.usuario; verificarToken/soloAdmin/soloSuperadmin/exigirCapacidad→exigirGestionArchivos), n8n (X-Api-Key→req.usuario), limites, validarUUID, errorHandler (AppError→JSON)
 migrations/  TypeORM, se ejecutan al arrancar
 services/
-  archivos.service.ts    CRUD, papelera, carpetas zip, leerTextoArchivo (RAG)
+  archivos.service.ts    CRUD, papelera, carpetas zip
   auth.service.ts        login JWT (sin registro público)
   claves.service.ts      claves API de n8n por usuario: crear/listar/revocar (máx 5 activas; solo se guarda el hash SHA-256)
   plataforma.service.ts  superadmin: alta/edición/borrado de empresas + su admin
@@ -124,10 +123,10 @@ services/
   seed.service.ts        siembra el superadmin al arrancar (multi-tenant)
   carpetas.service.ts    mover/copiar/vaciar/borrar con contenido
   compartido.service.ts  carpetas compartidas por rol: CRUD admin, acceso por empresa+roles, subir/listar/descargar/borrar (almacenamiento único, dedup por hash)
-  chat.service.ts        chatbot IA (ver abajo + NOTAS.md)
+  chat.service.ts        chatbot IA por SQL de solo lectura (ver abajo + NOTAS.md)
+  contenido.service.ts   texto extraído / descripción manual de cada archivo + buscador del explorador (nombre y contenido, sin IA)
   extraccion.service.ts  texto de PDF/DOCX/txt + cascada OCR de imágenes
-  facturas.service.ts    escaneo, auto-escaneo, clasificación venta/compra (CIF/nombre), edición manual, analítica filtrable, listados paginados
-  rag.service.ts         embeddings bge-m3, indexación, búsqueda semántica
+  facturas.service.ts    escaneo, auto-escaneo, clasificación venta/compra (CIF/nombre), edición manual, listados paginados
 ```
 
 ---
@@ -169,20 +168,20 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | GET | `/` | carpetas compartidas accesibles → `{id,nombre}[]` (admin=todas de su empresa; miembro=las de sus roles) |
 | GET | `/:id/archivos` | query `carpeta` → `{archivos, subcarpetas[]}` (subcarpetas derivadas de las rutas) |
 | GET | `/:id/todos` | **todos** los archivos de la carpeta compartida (para el árbol en cliente, como `listarTodos` personal) |
-| GET | `/:id/buscar` | búsqueda semántica RAG **acotada a esta carpeta compartida** — query `q` (equivalente a `/api/archivos/buscar` pero solo sobre el contenido de este espacio) |
+| GET | `/:id/buscar` | buscador por nombre y contenido **acotado a esta carpeta compartida** — query `q` (como `/api/archivos/buscar` pero solo en este espacio) |
 | GET/POST | `/:id/carpetas` | listar subcarpetas explícitas (incl. vacías) → `{ruta,creada}[]` / crear `{ruta}` |
 | PATCH/DELETE | `/:id/carpetas` | mover/renombrar `{origen,destino}` (con contenido) / borrar `?ruta=` (solo metadata; los archivos los borra el front) |
 | GET | `/:id/carpeta/descargar` | .zip de una subcarpeta — query `ruta` |
 | POST | `/:id/subir` | multipart `archivo` + `carpeta` opcional; dedup por hash (mismo contenido → `{...,duplicado:true}` 200) |
 | GET | `/archivo/:archivoId/descargar` | streaming del binario (verifica acceso por la carpeta) |
 | PATCH | `/archivo/:archivoId` | renombrar/mover dentro de la carpeta compartida `{nombre?, carpeta?}` |
-| POST | `/archivo/:archivoId/copiar` | duplica el archivo (binario + fragmentos RAG) `{carpeta?, nombre?}` |
+| POST | `/archivo/:archivoId/copiar` | duplica el archivo (binario + texto extraído) `{carpeta?, nombre?}` |
 | POST | `/archivo/:archivoId/copiar-a-personal` | **copia** el archivo al espacio **personal** del usuario (el original sigue en compartido) `{carpeta?}`. Copia **siempre** (sin dedup): conserva el nombre y añade "(copia)"/"(copia N)" solo si ya existe en la carpeta destino (como el copiar del explorador), y auto-escaneo de factura como propia. El front lo usa desde "Copiar en… › Mis archivos" |
 | POST | `/archivo/:archivoId/mover-a-personal` | **mueve** el archivo al espacio personal (reasigna en sitio, misma claveMinio; **desaparece del compartido para todos**) `{carpeta?}`. **Sin dedup** (reubica siempre a la carpeta destino; "(copia)" si el nombre choca), auto-escaneo como propia. Usado por "Mover a… › Mis archivos" y al **arrastrar** sobre "Personales" |
 | POST | `/:id/mover-desde-personal` | **mueve** un archivo **personal** a esta carpeta compartida `{archivoId, carpeta?}` (deja de ser personal; sale de la analítica de facturas). Usado por "Mover a… › Compartido" y al arrastrar sobre "Compartido" |
 | POST | `/:id/copiar-desde-personal` | **copia** un archivo **personal** a esta carpeta compartida `{archivoId, carpeta?}` (el original permanece). Copia **siempre** (sin dedup): "(copia)"/"(copia N)" si el nombre ya existe en el destino. Usado por "Copiar en… › Compartido" |
 | POST | `/:id/mover-desde-compartido` | **mueve** un archivo de **otra carpeta compartida** a esta `{archivoId, carpeta?}` (desaparece del compartido de origen para todos los del rol). Dedup por hash, reasigna en sitio sin re-subir. Usado por "Mover a… › [otra carpeta]" y al arrastrar |
-| POST | `/:id/copiar-desde-compartido` | **copia** un archivo de **otra carpeta compartida** a esta `{archivoId, carpeta?}` (el original permanece). Copia **siempre** (sin dedup): "(copia)" si el nombre ya existe; duplica binario y fragmentos RAG. Usado por "Copiar en… › [otra carpeta]" |
+| POST | `/:id/copiar-desde-compartido` | **copia** un archivo de **otra carpeta compartida** a esta `{archivoId, carpeta?}` (el original permanece). Copia **siempre** (sin dedup): "(copia)" si el nombre ya existe; duplica binario y texto extraído. Usado por "Copiar en… › [otra carpeta]" |
 | DELETE | `/archivo/:archivoId` | borrado definitivo (afecta a todos los del rol) |
 
 ### `/api/archivos`
@@ -190,7 +189,7 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 |---|---|---|
 | POST | `/subir` | multipart: `archivo` + `carpeta` opcional |
 | GET | `/` | query `carpeta`, `pagina`, `limite` → body = `Archivo[]`, totales en headers `X-Total-Count`/`X-Total-Pages`/`X-Current-Page` |
-| GET | `/buscar` | búsqueda semántica RAG — query `q` |
+| GET | `/buscar` | buscador por nombre y contenido (todas las palabras, sin tildes ni mayúsculas, también parciales) — query `q` → `{archivoId,nombre,carpeta,fragmento}[]`. Solo lo personal |
 | GET/DELETE | `/papelera` | listar / vaciar |
 | GET | `/carpeta/descargar` | .zip — query `ruta` |
 | GET/POST/PATCH/DELETE | `/carpetas` | listar / crear `{ruta}` / mover `{origen,destino}` / borrar `?ruta=` |
@@ -198,16 +197,16 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | PATCH | `/:id` | `{nombre?, carpeta?}` |
 | POST | `/:id/copiar` | `{carpeta?, nombre?}` |
 | PATCH | `/:id/restaurar` | de papelera (sufijo "(restaurado)" si colisiona) |
-| PATCH | `/:id/descripcion` | `{descripcion}` — describe imagen a mano, se reindexa (RAG) |
+| PATCH | `/:id/descripcion` | `{descripcion}` — describe imagen a mano (la leen el chat y el buscador) |
 | GET | `/:id/descargar` | streaming del binario por la API |
 | DELETE | `/:id` / `/:id/permanente` | soft delete / borrado definitivo |
 
 ### `/api/chat`
 | Método | Ruta | Body / Respuesta |
 |---|---|---|
-| POST | `/` | `{mensajes: [{rol, contenido}]}` → `{respuesta, acciones[], archivos?, tablaFacturas?, tablaArchivos?, tablaCarpetas?}` |
+| POST | `/` | `{mensajes: [{rol, contenido}]}` (últimos 8, usuario y bot) → `{respuesta, tabla?}` |
 
-`archivos` = `{id,nombre}[]` cuando la respuesta resolvió archivos concretos (front muestra botón "Abrir"). Las `tabla*` son listados paginados (ver `NOTAS.md` › paginación).
+`tabla` = `{columnas, filas, truncada}`: resultado de la última consulta con varias filas (máx. 200). El front la pinta bajo la respuesta; columnas `*_id` ocultas y botón "Abrir" si hay `archivo_id`.
 
 ### `/api/facturas`
 | Método | Ruta | Notas |
@@ -219,7 +218,7 @@ Acceso por **empresa + roles**, no por propietario. Admin (`/admin*`) gestiona; 
 | PATCH | `/:id` | **edición manual** `{numero?,fecha?,emisor?,emisorNif?,cliente?,clienteNif?,tipo?,moneda?,subtotal?,iva?,total?,lineas?}` — corrige lo que la IA sacó mal y **regenera** el resumen individual + los agregados |
 
 ### `/api/claves` 🔒 (cualquier usuario, sobre SUS claves)
-Claves API para n8n. El secreto (`akx_live_…`) se devuelve **solo al crear**; en BD va el hash SHA-256 (comparación en tiempo constante). En el front: página **Perfil**.
+Claves API para n8n. El secreto (`ateka_live_…`; las antiguas `akx_live_…` siguen valiendo) se devuelve **solo al crear**; en BD va el hash SHA-256 (comparación en tiempo constante). En el front: página **Perfil**.
 | Método | Ruta | Notas |
 |---|---|---|
 | GET | `/` | claves activas → `{id,nombre,prefijo,ultimoUso,creadoEn}[]` (nunca el secreto) |
@@ -231,7 +230,7 @@ La petición actúa **como el usuario dueño de la clave** (mismos permisos/capa
 | Método | Ruta | Notas |
 |---|---|---|
 | POST | `/facturas` | multipart `archivo` + `carpeta` opcional — **misma tubería** que `/api/archivos/subir` (dedup, indexado, auto-escaneo de factura). Límites de subida y backlog |
-| POST | `/chat` | `{mensaje}` (o `missatge`, o `{mensajes:[...]}` como `/api/chat`) + `chat_id`/`user_id` opcionales que se **devuelven tal cual** (para responder en Telegram). Mismo `chatear()` que el chatbot |
+| POST | `/chat` | `{mensaje}` (o `missatge`, o `{mensajes:[...]}` como `/api/chat`) + `chat_id`/`user_id` opcionales que se **devuelven tal cual** (para responder en Telegram). Mismo `chatear()` que el chatbot; la `tabla` va además en markdown dentro de `respuesta` |
 
 ---
 
@@ -241,33 +240,33 @@ La petición actúa **como el usuario dueño de la clave** (mismos permisos/capa
 - **carpetas_compartidas** (Fase 3): `id`, `nombre`, `empresaId` (FK CASCADE), `creadoEn`. Único `(empresaId, nombre)`. N:N con roles vía **carpeta_compartida_roles** (`carpetaCompartidaId`,`rolId`). Acceso = empresa + roles (no propietario). Borrarla CASCADE a sus archivos y subcarpetas.
 - **carpeta_compartida_carpetas**: `id`, `ruta` (canónica dentro de la carpeta compartida), `carpetaCompartidaId` (FK CASCADE), `creadaEn`. Único `(carpetaCompartidaId, ruta)`. Persiste las subcarpetas explícitas (incl. vacías) del explorador compartido, equivalente a `carpetas` para el espacio personal.
 - **usuarios**: `id`, `email` unique, `nombre`, `avatar` (base64, null), `passwordHash`, `rol` (`superadmin`|`admin`|`miembro`, default `miembro`), `empresaId` (FK CASCADE, null solo para superadmin), `roles` (N:N), `creadoEn`.
-- **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256` (dedup al subir: idéntico contenido vivo → se reutiliza, no se reprocesa), `textoExtraido` (RAG, ~20k chars), `descripcionManual`, `estadoEscaneo`, `estadoIndexado`/`indexadoEn` (estado del indexado RAG), `carpetaCompartidaId` (nullable, FK CASCADE — si va set, el archivo vive en una carpeta compartida en vez de en las carpetas personales del `propietario`), `eliminadoEn` (soft delete), `propietario` CASCADE.
+- **archivos**: `id`, `nombre`, `carpeta` (ruta), `mimeType`, `tamanoBytes`, `claveMinio`, `hashSha256` (dedup al subir: idéntico contenido vivo → se reutiliza, no se reprocesa), `textoExtraido` (~20k chars; lo leen el chat y el buscador), `descripcionManual`, `estadoEscaneo`, `estadoIndexado`/`indexadoEn` (estado de la extracción de texto), `carpetaCompartidaId` (nullable, FK CASCADE — si va set, el archivo vive en una carpeta compartida en vez de en las carpetas personales del `propietario`), `eliminadoEn` (soft delete), `propietario` CASCADE.
 - **carpetas**: `id`, `ruta` (unique por propietario), `creadoEn`.
 - **tareas** (cola durable): `id`, `tipo` (`indexar`|`autoescanear`), `archivoId`/`usuarioId` CASCADE, `estado` (`pendiente`|`en_proceso`|`ok`|`error`), `prioridad`, `intentos`/`maxIntentos`, `disponibleEn` (backoff), `pista`, `error`. La procesa el worker (`tareas.service.ts`), que relee los bytes de MinIO → sobrevive a reinicios, reintenta y limita la concurrencia hacia Ollama (sustituye a las colas en memoria).
 - **claves_api**: `id`, `nombre`, `prefijo` (recorte visible), `hash` unique (SHA-256 del secreto), `usuarioId` (FK CASCADE), `empresaId` (FK CASCADE, null), `ultimoUso`, `creadoEn`, `revocadaEn` (null = activa). Índice `(usuarioId, revocadaEn)`.
-- **chat_pendientes**: `usuarioId` PK, `tipo` (`aclaracion`|`valor`|`confirmacion`), `payload` jsonb, `expiraEn`. Estado conversacional del chat fuera de memoria (aclaraciones, valores que faltan, y confirmación de operaciones masivas irreversibles como vaciar la papelera).
-- **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `emisorNif`, `cliente`, `clienteNif`, `tipo` (`venta`|`compra`|`desconocido`, default `desconocido` — ver "Facturas: venta/compra" abajo), `moneda` (código ISO 4217, default `EUR`; la IA la extrae de la factura), `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade. La analítica se **separa por tipo**: ventas (`ventas_top`/`clientes_top`/`totales_facturas`) vs compras (`compras_top`/`proveedores_top`/`totales_compras`); todo **agrupa por moneda** — nunca se suman divisas distintas. Los **resúmenes** (ventas/compras) son datos **derivados**: se generan al vuelo desde la BD cuando el chat los pide (`generarResumenVentasMd`/`generarResumenComprasMd`); **ya no** se materializan como archivos `resumen-*.md` en una carpeta `/facturas` (esa carpeta oculta se eliminó — ver `NOTAS.md`).
+- **chat_accesos**: `token` PK (UUID de un solo uso), `usuarioId`, `compartidas` uuid[], `puedeFacturas`, `puedeContenido`, `expiraEn`. Sesión de una petición de chat: las vistas del esquema `chat` solo devuelven filas del token fijado en `app.chat_token`. El rol `ateka_chat` no puede leerla.
+- **esquema `chat`** (vistas de solo lectura para el SQL del modelo): `chat.archivos`, `chat.carpetas`, `chat.carpetas_compartidas`, `chat.facturas`, `chat.lineas_factura` — columnas en snake_case, filtradas por el token. Único acceso del rol `ateka_chat` (migración `1779000000000-ChatSql`).
+- **facturas**: `propietario`, `archivo` (nullable, CASCADE), `numero`, `fecha`, `emisor`, `emisorNif`, `cliente`, `clienteNif`, `tipo` (`venta`|`compra`|`desconocido`, default `desconocido` — ver "Facturas: venta/compra" abajo), `moneda` (código ISO 4217, default `EUR`; la IA la extrae de la factura), `subtotal`/`iva`/`total` numeric(12,2), `lineas` cascade. La analítica se **separa por tipo**: ventas (`ventas_top`/`clientes_top`/`totales_facturas`) vs compras (`compras_top`/`proveedores_top`/`totales_compras`); todo **agrupa por moneda** — nunca se suman divisas distintas. Los resúmenes son datos **derivados**: se calculan al vuelo desde la BD (página Facturas y SQL del chat); **ya no** se materializan como archivos `resumen-*.md` (ver `NOTAS.md`).
 - **lineas_factura**: `descripcion`, `cantidad`, `precioUnit`, `total`.
-- **fragmentos** (RAG): `archivoId`, `propietarioId`, `carpetaCompartidaId` (nullable — set en fragmentos de archivos compartidos, para que la búsqueda incluya lo compartido accesible), `indice`, `texto`, `embedding vector(1024)`.
 
 ---
 
 ## Chat (`chat.service.ts`) — resumen
-1. **Solo el último mensaje del usuario** se envía al modelo (reenviar el historial hacía que modelos pequeños re-ejecutaran acciones, p. ej. repetir `borrar_todo`).
-2. **Pre-flights deterministas por regex**: las frases comunes (borrados masivos, listados, abrir/leer, facturas por periodo/cliente, analítica, crear nota, restaurar vs. borrar...) se resuelven directo contra la BD sin llamar a Ollama. **Lista completa y rationale en `NOTAS.md`.**
-3. **Bucle de tools** (máx 15, temp 0): con parser de respaldo (tool calls como texto JSON), remapeo de nombres alucinados, resolución flexible de nombres, y **bypass de resumen** (si las tools devuelven `resumen`, se retorna ese markdown sin re-llamar al modelo). Detalle en `NOTAS.md`.
-4. **Listados paginados** (`tablaFacturas`/`tablaArchivos`/`tablaCarpetas`): ver `NOTAS.md`.
-5. **Consciente del rol (RBAC, Fase 3)**: al inicio calcula `capacidadesDe(usuarioId)` (admin/superadmin = todas). **Capacidad maestra `chat`**: si el rol no la tiene, `chatear` corta con **403** de entrada (el frontend además oculta el enlace/ruta `/inicio` vía `chatGuard` y `auth.puedeChat()`; las capacidades llegan al front en el login y en `GET /api/auth/perfil`, que el `AuthService` refresca al arrancar). El mapa `TOOL_CAPACIDAD` marca qué capacidad exige cada tool: `facturas`, `busqueda` y **`gestion_archivos`** (todas las que MODIFICAN archivos o carpetas: copiar/mover/renombrar/eliminar/crear, borrados masivos y papelera). Las que no aparecen son de solo lectura (listar, buscar por nombre, estadísticas). Se aplica en cuatro sitios: (a) `ejecutarTool` rechaza una tool sin capacidad, (b) se filtran las `toolsPermitidas` que ve el modelo, (c) los pre-flights de facturas se gatean con `puedeFacturas`, (d) **los pre-flights que modifican llaman a `vetoGestion()`** antes de tocar nada (no pasan por `ejecutarTool`, así que el mapa no los cubre: al añadir un pre-flight que modifique, hay que poner el veto). Tras los pre-flights, un guard determinista corta con "no está disponible para tu rol" si la petición sigue siendo de datos de facturas y falta la capacidad (en vez de delegar en el modelo). Enforzado en CÓDIGO, no en el prompt.
+**Sin tools ni regex.** El modelo lee la BD escribiendo SQL de solo lectura y redacta la respuesta. Detalle y porqué en `NOTAS.md`.
+1. **Capacidad maestra `chat`**: sin ella, 403 antes de llamar a la IA (el front oculta `/inicio` vía `chatGuard` y `auth.puedeChat()`).
+2. **Prompt** con el esquema de las vistas `chat.*`, la fecha de hoy, el nombre/CIF de la empresa, reglas SQL (excluir papelera, `unaccent ILIKE`, no sumar monedas distintas…) y ejemplos. Historial: últimos 8 mensajes.
+3. **Bucle**: si el modelo responde con un bloque ```` ```sql ````, se ejecuta y se le devuelven las filas (o el error de Postgres para que corrija); hasta **4 consultas** por mensaje. Luego responde en markdown.
+4. **Solo lectura**: mover/copiar/borrar/subir/restaurar se hace desde el explorador; el chat lo indica.
+5. **Frontera de seguridad en la BD, no en el prompt**: el SQL corre con el rol `ateka_chat` (conexión propia, `config/chatDb.ts`), que solo puede leer las vistas `chat.*`; estas filtran por un token de un solo uso (`chat_accesos`) que el rol no puede leer. Una sola sentencia (protocolo extendido de pg), transacción `READ ONLY`, `statement_timeout` 10 s, máx. 200 filas. Tests: `tests/chat.sql.test.ts`.
+6. **RBAC**: `facturas` → `chat.facturas` devuelve filas; `busqueda` → `chat.archivos.contenido` viene relleno (si no, NULL). Las partes del prompt de lo que no puede ver no se incluyen.
+7. **Modelo**: `OLLAMA_THINK=true` activa el modo pensamiento (qwen3); `think` solo se manda a modelos que lo soportan (`soportaThink`). Mismo `OLLAMA_NUM_CTX` que la extracción de facturas para que Ollama no recargue el modelo al alternar.
 
-**Tools:** buscar/copiar/mover/renombrar/eliminar/crear archivo, crear/listar/eliminar/vaciar/mover/renombrar/copiar carpeta, borrar_todo/_todas_carpetas/_todos_archivos, listar_papelera, restaurar_archivo/_todo, borrar_permanente, vaciar_papelera, leer_archivo, estadisticas, buscar_semantica, escanear_factura/_todas, obtener_factura, ventas_top, totales_facturas, clientes_top, **compras_top, totales_compras, proveedores_top** (compras). Pre-flights de compras: "resumen de compras/gastos", "cuánto he gastado", "mis proveedores".
-
-**Analítica avanzada (solo pre-flight, resúmenes derivados; detalle en `NOTAS.md`):** beneficio/balance neto (ventas−compras), IVA (repercutido/soportado/a liquidar), factura(s) por importe ("la más cara"), ticket medio, comparativa de dos periodos ("¿vendí más en abril o mayo?"), ranking de proveedores ("a quién le compro más", espejo de clientes). Periodos ampliados con **trimestres/semestres** ("Q1", "primer trimestre", "este trimestre") vía `detectarTrimestreSemestre` (en `chat.deteccion.ts`, testeado) — clave para el IVA trimestral; lo heredan todos los pre-flights de periodo.
-
-## OCR y RAG — resumen
+## OCR, texto extraído y buscador — resumen
 - **OCR imágenes** (`extraccion.service.ts`): cascada de 3 pasadas (granite → deepseek si parece factura → Tesseract si los VLM se quedan cortos), normalizando a PNG primero. Detalle completo en `NOTAS.md`.
 - **Tesseract multi-idioma**: `IDIOMAS_OCR = "spa+cat+eng"` (traineddata vendorizados en `backend/tessdata/`, copiados por el Dockerfile) — para facturas escaneadas/fotos en catalán/inglés, no solo castellano. Ampliar = editar la cadena + añadir el `.traineddata`.
 - **OCR de página en PDFs con texto** (rescate del membrete): solo se rasteriza+OCR-ea la 1ª página si el texto `pareceFacturaConImportes` **y NO** trae ya la línea "Registro/Registre/Rexistro Mercantil" (`tieneRegistroMercantil`). Si el emisor ya está en la capa de texto (ej. factura de la luz), el OCR solo añadiría ruido (leer "AKX"→"ARX"); se salta.
-- **RAG** (`rag.service.ts`): al subir → extrae texto → chunks de **1000 chars / solape 150** → embeddings **bge-m3 (1024)** → tabla `fragmentos`. Búsqueda híbrida (coseno `<=>` OR `ILIKE`), `MIN_SCORE = 0.50`, un fragmento por archivo.
+- **Texto extraído** (`contenido.service.ts`): al subir, la tarea `indexar` extrae el texto (PDF/DOCX/OCR) a `textoExtraido`. Sin embeddings (la búsqueda semántica con bge-m3 se quitó).
+- **Buscador del explorador**: todas las palabras de la consulta en nombre/descripción/texto (`unaccent ILIKE`, también parciales), primero las que casan por nombre; devuelve un trozo del contenido. Uno para lo personal y uno por carpeta compartida.
 - **Auto-escaneo de facturas al subir**: `ctrlSubir` encola una tarea durable `autoescanear` (`tareas.service.ts`), que corre `escanearFactura(..., {soloSiFactura:true})` en background; solo persiste si parece factura (`soloSiFactura`).
 
 ## Facturas: venta/compra + CIF (`facturas.service.ts`)
@@ -292,7 +291,7 @@ app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), style
 - **Estado con signals** (sin NgRx). Standalone components. Markdown del bot con `marked` (`breaks: true`).
 - **archivos.ts**: árbol de carpetas en cliente (carga todos los archivos), drag&drop con eventos `pointer`, menú contextual, selección múltiple, columna "Estado" (polling 3s), paginación en cliente.
 - **facturas.ts**: tabla de facturas escaneadas con pestañas (Todas/Ventas/Compras/**Sin clasificar**), paginación server-side y **modal de edición** (corregir emisor/cliente/tipo/importes/líneas → `PATCH /api/facturas/:id`). Es la red de seguridad ante los fallos de extracción del modelo pequeño.
-- **chat**: historial en signal + localStorage (`akx_chat`); se resetea al cambiar de sesión (`ChatService.reset()` desde `AuthService`) para no filtrarse entre usuarios.
+- **chat**: historial en signal + localStorage (`akx_chat`); se resetea al cambiar de sesión (`ChatService.reset()` desde `AuthService`) para no filtrarse entre usuarios. Respuesta en markdown + `tabla` genérica paginada en cliente (botón "Abrir" si hay `archivo_id`).
 - **Tema** (`styles.scss`): `--green #16a34a`, `--green-dark`, `--green-soft`, `--bg/--surface/--text/--muted/--border/--danger`, `--radius 12px`. Modo oscuro: `body.dark`.
 
 ---
@@ -305,15 +304,15 @@ app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), style
 - **No editar a mano en el servidor**: cambios en local → commit → push → `git pull`.
 
 ## Limitaciones conocidas (resumen)
-- Modelo pequeño (3b/7b): function calling poco fiable (de ahí los pre-flights) y mezcla campos al extraer facturas — mitigado con `reconciliarPartes`/`resolverDireccion` y la **edición manual** en la página Facturas. Detalle y resto de limitaciones en `NOTAS.md`.
+- El chat por SQL necesita un modelo capaz (`qwen3:14b`); con 3b/7b el SQL falla bastante más. Un modelo pequeño también mezcla campos al extraer facturas — mitigado con `reconciliarPartes`/`resolverDireccion` y la **edición manual** en la página Facturas. Detalle y resto de limitaciones en `NOTAS.md`.
 - Tipos permitidos: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máx 50 MB. Subida: 1 archivo/petición (paralelas en el front).
 - **Carpetas compartidas / chat por rol (Fase 3):**
-  - La capacidad **`chat`** gobierna el acceso al chatbot entero: sin ella, `POST /api/chat` responde 403 y el front oculta el enlace/ruta `/inicio`. Un miembro **sin ningún rol** (o con roles que no incluyen `chat`) **no ve el chatbot** — el admin debe darle un rol con la capacidad `chat`. (Quitar `chat` a un rol surte efecto en la siguiente petición del backend y al recargar el front, sin re-loguear.)
-  - La capacidad **`gestion_archivos`** gobierna **todo lo que modifica** archivos y carpetas, en el espacio personal y en el compartido: subir, mover, copiar, renombrar, borrar, papelera y descripción manual. Se exige en las rutas de `/api/archivos` y `/api/compartido` que modifican (`exigirGestionArchivos` → 403) y en el chat (tools + `vetoGestion()` en los pre-flights). **Ver y descargar NO la requieren**: sin ella el explorador queda en solo lectura (el front oculta los botones con `auth.puedeGestionArchivos()`, pero la frontera real es el backend). El acceso a una carpeta compartida lo sigue dando el **rol**; esta capacidad decide si además se puede modificar dentro. La migración `1778000000000` se la añadió a los roles que ya existían, porque antes la casilla no se comprobaba.
-  - Cada espacio tiene su **propio buscador semántico acotado**: el buscador REST de **Mis archivos** (`/api/archivos/buscar`) busca **solo** contenido personal, y el de **cada carpeta compartida** (`GET /api/compartido/:id/buscar`, mismo `ExploradorComponent`) busca **solo** dentro de esa carpeta. La búsqueda del **chat** (`buscar_semantica`) también es personal.
-  - Facturas dentro de carpetas compartidas: se **indexan** (RAG) pero **no** se auto-escanean a la analítica (no se atribuyen a un usuario).
+  - La capacidad **`chat`** gobierna el acceso al chatbot entero: sin ella, `POST /api/chat` responde 403 y el front oculta el enlace/ruta `/inicio`. Un miembro **sin ningún rol** (o con roles que no incluyen `chat`) **no ve el chatbot** — el admin debe darle un rol con la capacidad `chat`. (Quitar `chat` a un rol surte efecto en la siguiente petición del backend y al recargar el front, sin re-loguear.) La capacidad **`busqueda`** decide si el chat puede leer el **contenido** de los documentos (no solo nombres y carpetas).
+  - La capacidad **`gestion_archivos`** gobierna **todo lo que modifica** archivos y carpetas, en el espacio personal y en el compartido: subir, mover, copiar, renombrar, borrar, papelera y descripción manual. Se exige en las rutas de `/api/archivos` y `/api/compartido` que modifican (`exigirGestionArchivos` → 403). El chat no la necesita: es de solo lectura. **Ver y descargar NO la requieren**: sin ella el explorador queda en solo lectura (el front oculta los botones con `auth.puedeGestionArchivos()`, pero la frontera real es el backend). El acceso a una carpeta compartida lo sigue dando el **rol**; esta capacidad decide si además se puede modificar dentro. La migración `1778000000000` se la añadió a los roles que ya existían, porque antes la casilla no se comprobaba.
+  - Cada espacio tiene su **propio buscador acotado**: el de **Mis archivos** (`/api/archivos/buscar`) busca **solo** en lo personal, y el de **cada carpeta compartida** (`GET /api/compartido/:id/buscar`, mismo `ExploradorComponent`) **solo** dentro de esa carpeta. El **chat** ve lo personal y las carpetas compartidas accesibles.
+  - Facturas dentro de carpetas compartidas: se extrae su texto pero **no** se auto-escanean a la analítica (no se atribuyen a un usuario).
   - Archivos compartidos: **no van a la papelera** (borrado directo, afecta a todos los del rol).
-  - El explorador de una carpeta compartida usa el **mismo `ExploradorComponent`** que "Mis archivos" (fuente = adaptador de `CompartidoService`): subcarpetas persistidas (incl. vacías, tabla `carpeta_compartida_carpetas`), mover/renombrar/copiar archivos y carpetas, drag&drop, selección múltiple, paginación y descarga zip. Se desactivan el buscador semántico (personal) y las acciones de IA (describir/escanear); los borrados son definitivos (no papelera).
+  - El explorador de una carpeta compartida usa el **mismo `ExploradorComponent`** que "Mis archivos" (fuente = adaptador de `CompartidoService`): subcarpetas persistidas (incl. vacías, tabla `carpeta_compartida_carpetas`), mover/renombrar/copiar archivos y carpetas, drag&drop, selección múltiple, paginación y descarga zip. Se desactivan las acciones de IA (describir/escanear); los borrados son definitivos (no papelera).
 
 ## Preferencias de trabajo (Vlad)
 - **Solo pedir confirmación para decisiones de diseño**, no para llamadas de herramienta rutinarias.

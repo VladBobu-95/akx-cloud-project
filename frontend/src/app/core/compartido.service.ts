@@ -73,8 +73,8 @@ export class CompartidoService {
     return this.http.get<Archivo[]>(`${this.base}/${carpetaCompartidaId}/todos`);
   }
 
-  // Búsqueda semántica acotada a esta carpeta compartida (solo su contenido).
-  buscarSemantica(carpetaCompartidaId: string, q: string): Observable<ResultadoBusqueda[]> {
+  // Buscador acotado a esta carpeta compartida (nombre y contenido).
+  buscar(carpetaCompartidaId: string, q: string): Observable<ResultadoBusqueda[]> {
     return this.http.get<ResultadoBusqueda[]>(`${this.base}/${carpetaCompartidaId}/buscar`, {
       params: new HttpParams().set('q', q),
     });

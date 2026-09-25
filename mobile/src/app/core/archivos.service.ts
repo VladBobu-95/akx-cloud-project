@@ -34,7 +34,6 @@ export type ResultadoBusqueda = {
   nombre: string;
   carpeta: string;
   fragmento: string;
-  score: number;
 };
 
 export type Visor = { url: string; mime: string; nombre: string; texto?: string };

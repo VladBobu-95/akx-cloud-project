@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AppDataSource } from "../config/database";
 import { env } from "../config/env";
-import { ollamaHeaders } from "../config/ollama";
+import { ollamaHeaders, campoThink } from "../config/ollama";
 import { Archivo } from "../entities/Archivo";
 import { Usuario } from "../entities/Usuario";
 import { Empresa } from "../entities/Empresa";
@@ -9,7 +9,7 @@ import { Factura } from "../entities/Factura";
 import { LineaFactura } from "../entities/LineaFactura";
 import { AppError } from "../utils/errors";
 import { combinarContenido } from "./archivos.service";
-import { actualizarDescripcionManual } from "./rag.service";
+import { actualizarDescripcionManual } from "./contenido.service";
 import { pareceFacturaConImportes } from "./extraccion.service";
 // Cola durable: encolarEscaneoManual encola aquí en vez de en la cola en memoria.
 // (Import circular tareas<->facturas: ambos se usan solo dentro de funciones, no
@@ -114,14 +114,18 @@ const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => 
         messages,
         stream: false,
         format: SCHEMA_FACTURA,
+        // Sin modo pensamiento: con la salida restringida al JSON no aporta y
+        // multiplica el tiempo de cada factura.
+        ...(await campoThink(env.OLLAMA_MODEL, false)),
         // num_ctx explícito: el contexto por defecto de Ollama (2048/4096 según
         // versión) TRUNCA en silencio una factura larga — `textoExtraido` llega
         // hasta ~20k chars (≈6-7k tokens) y `leerContenidoFactura` no lo recorta,
         // así que sin esto las líneas/totales del final de una factura densa se
-        // perdían. 8192 cubre el texto completo + el JSON de salida de muchas líneas.
-        // keep_alive mantiene qwen cargado entre facturas de un mismo lote (escanear
-        // 40 de golpe) en vez de descargarlo y recargarlo en cada una.
-        options: { temperature: 0, num_ctx: 8192 },
+        // perdían. Es el MISMO valor que usa el chat (mismo modelo): si difiriera,
+        // Ollama recargaría el modelo cada vez que se alternan chat y escaneo.
+        // keep_alive mantiene el modelo cargado entre facturas de un mismo lote
+        // (escanear 40 de golpe) en vez de descargarlo y recargarlo en cada una.
+        options: { temperature: 0, num_ctx: env.OLLAMA_NUM_CTX },
         keep_alive: "10m",
       }),
       // Timeout para no colgarse si Ollama no libera VRAM para cargar el modelo
@@ -557,43 +561,23 @@ const dinero = (n: number | string, moneda = "EUR"): string => {
   return /[^\d.,\s-]/.test(txt) ? txt : `${txt} ${cod}`;
 };
 
-// Etiqueta legible de una divisa para los encabezados de sección (solo se usan
-// cuando hay más de una moneda). El símbolo entre paréntesis lo da el propio
-// formateador de 0 (Intl), así no mantenemos otra tabla de símbolos a mano.
-const NOMBRES_MONEDA: Record<string, string> = {
-  EUR: "Euros", USD: "Dólares", GBP: "Libras", JPY: "Yenes",
-  CHF: "Francos suizos", MXN: "Pesos mexicanos", BRL: "Reales", CNY: "Yuanes",
-  CAD: "Dólares canadienses", AUD: "Dólares australianos",
-};
-export const nombreMoneda = (m: string): string => NOMBRES_MONEDA[m] ?? m;
-
 // Formato de cantidades (unidades): separador de miles, sin decimales forzados,
 // p. ej. 1500 → "1.500", 2.5 → "2,5".
 const fmtNum = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 2 });
 const unidadesMd = (n: number | string): string => fmtNum.format(Number(n) || 0);
-
-// Monedas distintas presentes en un conjunto de filas, preservando orden de aparición.
-const monedasDistintas = <T extends { moneda: string }>(filas: T[]): string[] =>
-  [...new Set(filas.map((f) => f.moneda))];
 
 // Sanea un texto libre (cliente/emisor/producto/descripción) antes de meterlo en
 // una celda de tabla o línea de lista markdown: colapsa saltos de línea y espacios,
 // cambia el `|` por `/` (un `|` partiría la columna) y acota la longitud. Así un
 // valor mal extraído por la IA —p. ej. un `cliente` con nombre+email+teléfono
 // pegados o con un salto de línea dentro, típico del modelo pequeño— no rompe la
-// estructura de la tabla del chat.
+// estructura del resumen.
 const celdaMd = (texto: string | number | null | undefined, max = 80): string => {
   const limpio = String(texto ?? "")
     .replace(/\s+/g, " ")
     .replace(/\|/g, "/")
     .trim();
   return limpio.length > max ? `${limpio.slice(0, max - 1)}…` : limpio;
-};
-
-// Formatea una fecha ISO (YYYY-MM-DD) como DD/MM/YYYY para mostrar al usuario.
-export const formatearFecha = (iso: string): string => {
-  const [anio, mes, dia] = iso.split("-");
-  return `${dia}/${mes}/${anio}`;
 };
 
 // Serializa tareas por usuario: las que llegan para el mismo usuario se
@@ -724,7 +708,7 @@ export const escanearFactura = async (
         const nuevaDescripcion = [archivo.descripcionManual?.trim(), ...nuevas]
           .filter(Boolean)
           .join("\n\n");
-        await actualizarDescripcionManual(archivo.id, nuevaDescripcion, usuarioId);
+        await actualizarDescripcionManual(archivo.id, nuevaDescripcion);
       }
 
       throw new AppError(
@@ -790,9 +774,8 @@ export const escanearFactura = async (
       );
     }
 
-    // Nada que escribir aquí: los resúmenes (individual y agregados) se generan
-    // al vuelo desde la BD cuando el chat los pide (ver generarResumen*Md). La
-    // factura ya está guardada, que es lo único que importa persistir.
+    // Nada más que escribir: la analítica se calcula al vuelo desde la BD (página
+    // Facturas y consultas del chat). La factura ya está guardada.
     return {
       numero: datos.numero,
       total: datos.total,
@@ -822,8 +805,8 @@ export const esArchivoFactura = (archivo: Archivo): boolean =>
 // Marca el archivo recién subido como "pendiente", para que la columna
 // "Estado" del explorador muestre la animación desde el instante de la subida
 // (antes de que el pipeline en segundo plano lo recoja). Se aplica a CUALQUIER
-// archivo, no solo a los candidatos a factura: el indexado RAG (extracción de
-// texto + embeddings) corre para todos, y el usuario debe ver que algo está
+// archivo, no solo a los candidatos a factura: la extracción de texto corre
+// para todos, y el usuario debe ver que algo está
 // pasando aunque luego no termine en ✓/✕ (ej. un .txt o una foto sin factura).
 export const marcarPendiente = async (archivo: Archivo): Promise<void> => {
   archivo.estadoEscaneo = "pendiente";
@@ -832,7 +815,7 @@ export const marcarPendiente = async (archivo: Archivo): Promise<void> => {
 
 // Marca el archivo como "en proceso" al arrancar el pipeline en segundo plano
 // (indexado + auto-escaneo), también para cualquier archivo — así el spinner
-// cubre el indexado RAG entero, no solo el escaneo de factura en sí.
+// cubre la extracción de texto entera, no solo el escaneo de factura en sí.
 export const marcarEnProceso = async (archivo: Archivo): Promise<void> => {
   archivo.estadoEscaneo = "escaneando";
   await AppDataSource.getRepository(Archivo).update(archivo.id, { estadoEscaneo: "escaneando" });
@@ -904,39 +887,6 @@ ${lineas}
 `;
 };
 
-// Lee los datos de una factura YA ESCANEADA desde la BD (sin re-procesar el PDF).
-export const obtenerFactura = async (
-  usuarioId: string,
-  archivoId: string,
-  archivoNombre?: string,
-): Promise<{ encontrada: boolean; resumen?: string; numero?: string }> => {
-  const facturaRepo = AppDataSource.getRepository(Factura);
-  const factura = await facturaRepo.findOne({
-    where: { archivo: { id: archivoId }, propietario: { id: usuarioId } },
-    relations: { lineas: true },
-  });
-  if (!factura) return { encontrada: false };
-
-  const datos: DatosFactura = {
-    numero: factura.numero,
-    archivoNombre,
-    fecha: factura.fecha ?? undefined,
-    emisor: factura.emisor,
-    cliente: factura.cliente,
-    moneda: factura.moneda,
-    subtotal: Number(factura.subtotal),
-    iva: Number(factura.iva),
-    total: Number(factura.total),
-    lineas: factura.lineas.map((l) => ({
-      descripcion: l.descripcion,
-      cantidad: Number(l.cantidad),
-      precioUnit: Number(l.precioUnit),
-      total: Number(l.total),
-    })),
-  };
-  return { encontrada: true, resumen: resumenFacturaMd(datos), numero: factura.numero };
-};
-
 // Filtro común para las consultas analíticas de facturas. Todos los campos son
 // opcionales y se combinan en AND. `facturas` admite nº de factura o nombre de
 // archivo (se busca en ambos). `producto` solo aplica a los rankings.
@@ -948,8 +898,7 @@ export type FiltroFacturas = {
   hasta?: string;
   producto?: string;
   // Ruta de carpeta YA normalizada (ej. "/facturas/2026"): incluye esa
-  // carpeta y todo su subárbol. La resolución de nombre→ruta (con manejo de
-  // ambigüedad) se hace en el caller (chat.service.ts, vía resolverCarpeta).
+  // carpeta y todo su subárbol.
   carpeta?: string;
   // Código ISO 4217 de divisa (ej. "USD", "JPY") YA normalizado por el caller.
   // Filtra solo las facturas en esa moneda — útil para "facturas en dólares" o
@@ -1026,143 +975,6 @@ const construirFiltro = (
   return { where: cond.join(" AND "), params };
 };
 
-// Encabezado de sección de moneda; solo se muestra cuando hay más de una divisa
-// (con una sola, la columna de importe ya lleva el símbolo y un subtítulo sobra).
-const encabezadoMoneda = (m: string, varias: boolean): string =>
-  varias ? `### ${nombreMoneda(m)} (${dinero(0, m).replace(/[\d.,\s-]/g, "").trim()})\n\n` : "";
-
-// Markdown de un ranking de productos, AGRUPADO POR MONEDA (importes con su
-// símbolo server-side). Una sección por divisa cuando hay varias.
-export const rankingMd = (
-  filas: { producto: string; moneda: string; unidades: number; importe: number }[],
-  titulo: string,
-): string => {
-  if (filas.length === 0) return "No hay datos de ventas para esa consulta.";
-  const monedas = monedasDistintas(filas);
-  const varias = monedas.length > 1;
-  const secciones = monedas.map((m) => {
-    const cuerpo = filas
-      .filter((t) => t.moneda === m)
-      .map((t, i) => `| ${i + 1} | ${celdaMd(t.producto)} | ${unidadesMd(t.unidades)} | ${dinero(t.importe, m)} |`)
-      .join("\n");
-    return `${encabezadoMoneda(m, varias)}| # | Producto | Unidades | Importe |\n|---|---|---|---|\n${cuerpo}`;
-  });
-  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
-};
-
-// Markdown de los totales facturados, AGRUPADO POR MONEDA. Una sección por divisa
-// cuando hay varias (nunca se suman importes de divisas distintas).
-export const totalesMd = (filas: TotalesMoneda[], titulo: string): string => {
-  if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
-  const varias = filas.length > 1;
-  const secciones = filas.map(
-    (t) =>
-      `${encabezadoMoneda(t.moneda, varias)}- **Facturas:** ${unidadesMd(t.numFacturas)}\n- **Subtotal:** ${dinero(t.subtotal, t.moneda)}\n- **IVA:** ${dinero(t.iva, t.moneda)}\n- **TOTAL:** ${dinero(t.total, t.moneda)}`,
-  );
-  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
-};
-
-// Markdown de un listado de facturas (importe con su moneda server-side). Se usa
-// para "facturas de [mes/año]" cuando se pide el LISTADO, no el total agregado.
-// Es el texto de respaldo para clientes sin UI (curl, etc.); el frontend renderiza
-// estas mismas filas como una tabla con botón "Abrir" (ver `archivos` en chat.service.ts).
-// Aquí NO se agrupa por moneda (es un listado cronológico): cada línea lleva su divisa.
-export const listadoFacturasMd = (
-  filas: { archivoId: string | null; archivoNombre: string | null; numero: string; fecha: string; total: number; moneda: string }[],
-  titulo: string,
-): string => {
-  if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
-  const cuerpo = filas
-    .map((f) => `- **${f.archivoNombre ?? f.numero}** (${formatearFecha(f.fecha)}): ${dinero(f.total, f.moneda)}`)
-    .join("\n");
-  return `## ${titulo}\n\n${cuerpo}`;
-};
-
-// Ranking de productos (por importe) sobre las facturas que cumplen el filtro.
-// orden 'desc' = más vendido (defecto); 'asc' = menos vendido.
-export const ventasTop = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  opts: { orden?: "desc" | "asc"; limite?: number } = {},
-): Promise<{ producto: string; moneda: string; unidades: number; importe: number }[]> => {
-  // Por defecto solo ventas; el ranking de compras reusa esta función con tipo="compra".
-  const { where, params } = construirFiltro(usuarioId, { ...filtro, tipo: filtro.tipo ?? "venta" });
-  const orden = opts.orden === "asc" ? "ASC" : "DESC";
-  const limiteParam = `$${params.length + 1}`;
-  // Ranking TOP-N POR MONEDA: no se puede sumar unidades de productos facturados
-  // en divisas distintas en una misma tabla. ROW_NUMBER particionado por moneda
-  // da las N primeras de cada divisa; el llamador (rankingMd) las agrupa en una
-  // sección por moneda. `l."total" > 0` descarta las líneas de importe 0 (una
-  // devolución/RMA sin cargo NO es una venta: no debe salir en "más vendidos").
-  const filas: { producto: string; moneda: string; unidades: number; importe: number }[] =
-    await AppDataSource.query(
-      `SELECT t.producto, t.moneda, t.unidades, t.importe FROM (
-         SELECT lower(l."descripcion") AS producto,
-                f."moneda" AS moneda,
-                SUM(l."cantidad")::float AS unidades,
-                SUM(l."total")::float AS importe,
-                ROW_NUMBER() OVER (PARTITION BY f."moneda" ORDER BY SUM(l."cantidad") ${orden}) AS rn
-         FROM "lineas_factura" l
-         JOIN "facturas" f ON f."id" = l."facturaId"
-         LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-         WHERE ${where} AND l."total" > 0
-         GROUP BY lower(l."descripcion"), f."moneda"
-       ) t
-       WHERE t.rn <= ${limiteParam}
-       ORDER BY t.moneda, t.unidades ${orden}`,
-      [...params, opts.limite ?? 10],
-    );
-  return filas.map((r) => ({
-    producto: r.producto,
-    moneda: r.moneda,
-    unidades: Number(r.unidades),
-    importe: Number(r.importe),
-  }));
-};
-
-// Totales facturados (nº facturas, subtotal, IVA, total) sobre el filtro dado.
-// El campo `producto` del filtro no aplica aquí (son totales de cabecera).
-export type TotalesMoneda = {
-  moneda: string;
-  numFacturas: number;
-  subtotal: number;
-  iva: number;
-  total: number;
-};
-
-// Totales facturados AGRUPADOS POR MONEDA (una fila por divisa), ordenados por
-// total descendente. Sumar importes de divisas distintas no tiene sentido, así
-// que cada moneda lleva su propio total/subtotal/IVA. Con una sola moneda (el
-// caso normal) devuelve un único elemento.
-export const totalesFacturado = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-): Promise<TotalesMoneda[]> => {
-  const { producto: _producto, ...rest } = filtro;
-  // Por defecto solo ventas; los totales de compras reusan esta función con tipo="compra".
-  const { where, params } = construirFiltro(usuarioId, { ...rest, tipo: rest.tipo ?? "venta" });
-  const filas = await AppDataSource.query(
-    `SELECT f."moneda" AS moneda,
-            COUNT(DISTINCT f."id")::int AS numfacturas,
-            COALESCE(SUM(f."subtotal"), 0)::float AS subtotal,
-            COALESCE(SUM(f."iva"), 0)::float AS iva,
-            COALESCE(SUM(f."total"), 0)::float AS total
-     FROM "facturas" f
-     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-     WHERE ${where}
-     GROUP BY f."moneda"
-     ORDER BY total DESC`,
-    params,
-  );
-  return filas.map((row: Record<string, unknown>) => ({
-    moneda: (row.moneda as string) || "EUR",
-    numFacturas: Number(row.numfacturas),
-    subtotal: Number(row.subtotal),
-    iva: Number(row.iva),
-    total: Number(row.total),
-  }));
-};
-
 export type FilaFactura = {
   id: string;
   archivoId: string | null;
@@ -1179,14 +991,9 @@ export type FilaFactura = {
 };
 
 // Lista (no agrega) las facturas que cumplen el filtro, con el archivo asociado
-// para poder ofrecer un botón "Abrir" por cada una. El filtro `producto` SÍ
-// aplica aquí (para "facturas donde he vendido X" / "facturas con X"): se resuelve
-// con un EXISTS sobre lineas_factura, en vez de un JOIN, para no duplicar filas ni
-// alterar la semántica del ranking (ventasTop, que sí usa el JOIN con alias `l`).
-// Paginado (pagina 1-indexada): con muchas facturas, devolver todas de golpe
-// en el chat sería una tabla enorme — el cuadro HTML del chat pagina pidiendo
-// página a página a esta misma función vía un endpoint dedicado (ver
-// ctrlListarFacturas).
+// para poder ofrecer un botón "Abrir" por cada una. El filtro `producto` se
+// resuelve con un EXISTS sobre lineas_factura, en vez de un JOIN, para no
+// duplicar filas. Paginado (pagina 1-indexada) para la página Facturas.
 export const listarFacturas = async (
   usuarioId: string,
   filtro: FiltroFacturas = {},
@@ -1264,8 +1071,7 @@ const aFilaFactura = (r: FilaRaw): FilaFactura => ({
 });
 
 // Lista las facturas cuyo archivo está en la papelera (soft-deleted) — lo
-// inverso de listarFacturas/construirFiltro, que las excluyen siempre. Para
-// "facturas de la papelera" en el chat, antes de restaurarlas o vaciar.
+// inverso de listarFacturas/construirFiltro, que las excluyen siempre.
 export const listarFacturasPapelera = async (
   usuarioId: string,
   opts: { pagina?: number; limite?: number } = {},
@@ -1464,602 +1270,4 @@ export const reclasificarFacturas = async (
   // Los resúmenes se generan al vuelo desde la BD: la reclasificación ya queda
   // reflejada sin necesidad de regenerar ningún .md.
   return { actualizadas, total: facturas.length };
-};
-
-// Ranking de clientes por gasto total. orden 'desc' = quién más gastó (defecto);
-// 'asc' = quién menos. El campo `producto` del filtro no aplica aquí (no hay
-// JOIN con lineas_factura, igual que en totalesFacturado).
-export const clientesTop = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  opts: { orden?: "desc" | "asc"; limite?: number } = {},
-): Promise<{ cliente: string; moneda: string; numFacturas: number; importe: number }[]> => {
-  const { producto: _producto, ...rest } = filtro;
-  // El ranking de clientes es solo de ventas (el gasto en compras se rankea por
-  // proveedor/emisor, ver proveedoresTop).
-  const { where, params } = construirFiltro(usuarioId, { ...rest, tipo: rest.tipo ?? "venta" });
-  const orden = opts.orden === "asc" ? "ASC" : "DESC";
-  const limiteParam = `$${params.length + 1}`;
-  // TOP-N POR MONEDA: el gasto de un cliente en € y en $ son cifras distintas
-  // que no se suman. ROW_NUMBER particionado por moneda da las N de cada divisa.
-  // `HAVING SUM(total) > 0` excluye del ranking a un cliente cuyo gasto total es
-  // 0 (solo facturas de devolución sin cargo): no es "quién más/menos gastó".
-  const filas: { cliente: string; moneda: string; numfacturas: string; importe: string }[] =
-    await AppDataSource.query(
-      `SELECT t.cliente, t.moneda, t.numfacturas, t.importe FROM (
-         SELECT f."cliente" AS cliente,
-                f."moneda" AS moneda,
-                COUNT(*)::int AS numfacturas,
-                SUM(f."total")::float AS importe,
-                ROW_NUMBER() OVER (PARTITION BY f."moneda" ORDER BY SUM(f."total") ${orden}) AS rn
-         FROM "facturas" f
-         LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-         WHERE ${where} AND f."cliente" IS NOT NULL AND f."cliente" <> ''
-         GROUP BY f."cliente", f."moneda"
-         HAVING SUM(f."total") > 0
-       ) t
-       WHERE t.rn <= ${limiteParam}
-       ORDER BY t.moneda, t.importe ${orden}`,
-      [...params, opts.limite ?? 10],
-    );
-  return filas.map((r) => ({
-    cliente: r.cliente,
-    moneda: r.moneda,
-    numFacturas: Number(r.numfacturas),
-    importe: Number(r.importe),
-  }));
-};
-
-// Markdown de un ranking de clientes por gasto total, AGRUPADO POR MONEDA
-// (importes con su símbolo server-side). Una sección por divisa cuando hay varias.
-export const clientesTopMd = (
-  filas: { cliente: string; moneda: string; numFacturas: number; importe: number }[],
-  titulo: string,
-): string => {
-  if (filas.length === 0) return "No hay datos de clientes para esa consulta.";
-  const monedas = monedasDistintas(filas);
-  const varias = monedas.length > 1;
-  const secciones = monedas.map((m) => {
-    const cuerpo = filas
-      .filter((c) => c.moneda === m)
-      .map((c, i) => `| ${i + 1} | ${celdaMd(c.cliente)} | ${unidadesMd(c.numFacturas)} | ${dinero(c.importe, m)} |`)
-      .join("\n");
-    return `${encabezadoMoneda(m, varias)}| # | Cliente | Facturas | Importe |\n|---|---|---|---|\n${cuerpo}`;
-  });
-  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
-};
-
-// Ranking de PROVEEDORES por gasto total (facturas de COMPRA), espejo de
-// clientesTop pero agrupando por f."emisor" (el proveedor que nos factura). orden
-// 'desc' = a quién más le compramos (defecto); 'asc' = a quién menos.
-export const proveedoresTop = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  opts: { orden?: "desc" | "asc"; limite?: number } = {},
-): Promise<{ proveedor: string; moneda: string; numFacturas: number; importe: number }[]> => {
-  const { producto: _producto, ...rest } = filtro;
-  const { where, params } = construirFiltro(usuarioId, { ...rest, tipo: "compra" });
-  const orden = opts.orden === "asc" ? "ASC" : "DESC";
-  const limiteParam = `$${params.length + 1}`;
-  const filas: { proveedor: string; moneda: string; numfacturas: string; importe: string }[] =
-    await AppDataSource.query(
-      `SELECT t.proveedor, t.moneda, t.numfacturas, t.importe FROM (
-         SELECT f."emisor" AS proveedor,
-                f."moneda" AS moneda,
-                COUNT(*)::int AS numfacturas,
-                SUM(f."total")::float AS importe,
-                ROW_NUMBER() OVER (PARTITION BY f."moneda" ORDER BY SUM(f."total") ${orden}) AS rn
-         FROM "facturas" f
-         LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-         WHERE ${where} AND f."emisor" IS NOT NULL AND f."emisor" <> ''
-         GROUP BY f."emisor", f."moneda"
-         HAVING SUM(f."total") > 0
-       ) t
-       WHERE t.rn <= ${limiteParam}
-       ORDER BY t.moneda, t.importe ${orden}`,
-      [...params, opts.limite ?? 10],
-    );
-  return filas.map((r) => ({
-    proveedor: r.proveedor,
-    moneda: r.moneda,
-    numFacturas: Number(r.numfacturas),
-    importe: Number(r.importe),
-  }));
-};
-
-// Markdown de un ranking de proveedores por gasto total, AGRUPADO POR MONEDA.
-export const proveedoresTopMd = (
-  filas: { proveedor: string; moneda: string; numFacturas: number; importe: number }[],
-  titulo: string,
-): string => {
-  if (filas.length === 0) return "No hay datos de proveedores para esa consulta.";
-  const monedas = monedasDistintas(filas);
-  const varias = monedas.length > 1;
-  const secciones = monedas.map((m) => {
-    const cuerpo = filas
-      .filter((c) => c.moneda === m)
-      .map((c, i) => `| ${i + 1} | ${celdaMd(c.proveedor)} | ${unidadesMd(c.numFacturas)} | ${dinero(c.importe, m)} |`)
-      .join("\n");
-    return `${encabezadoMoneda(m, varias)}| # | Proveedor | Facturas | Importe |\n|---|---|---|---|\n${cuerpo}`;
-  });
-  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
-};
-
-// Dado un conjunto de identificadores (nº/nombre de archivo), localiza los ficheros
-// de factura que casan y PONE A ESCANEAR en segundo plano los que aún no lo
-// estén (vía encolarEscaneoManual: no espera al OCR/IA, que puede tardar
-// minutos y colgaría la petición del chat — ver bugs.txt "escanea todas las
-// facturas... 504"). Devuelve cuántas quedaron encoladas: el llamador debe
-// avisar de que esas aún no entran en el resultado y reintentar más tarde.
-export const asegurarFacturasEscaneadas = async (
-  usuarioId: string,
-  identificadores: string[],
-): Promise<number> => {
-  const ids = identificadores.map((s) => String(s).trim()).filter(Boolean);
-  if (ids.length === 0) return 0;
-
-  const archivoRepo = AppDataSource.getRepository(Archivo);
-  const qb = archivoRepo
-    .createQueryBuilder("a")
-    .where("a.propietarioId = :uid", { uid: usuarioId })
-    .andWhere("a.eliminadoEn IS NULL");
-  // Mismo matching con límites de dígito que el filtro de analítica.
-  const ors = ids.map((_, i) => `a."nombre" ~* :re${i}`);
-  qb.andWhere(`(${ors.join(" OR ")})`);
-  ids.forEach((id, i) => {
-    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    qb.setParameter(`re${i}`, `(^|[^0-9])${escaped}([^0-9]|$)`);
-  });
-  const archivos = await qb.getMany();
-
-  // Solo ficheros que parezcan factura (PDF/imagen).
-  const facturasArchivo = archivos.filter(
-    (a) =>
-      /\.(pdf|jpe?g|png|webp|tiff?)$/i.test(a.nombre) ||
-      /^(application\/pdf|image\/)/.test(a.mimeType),
-  );
-  if (facturasArchivo.length === 0) return 0;
-
-  const facturaRepo = AppDataSource.getRepository(Factura);
-  let encoladas = 0;
-  for (const archivo of facturasArchivo) {
-    if (archivo.estadoEscaneo === "pendiente" || archivo.estadoEscaneo === "escaneando") continue;
-    const ya = await facturaRepo.findOne({
-      where: { archivo: { id: archivo.id }, propietario: { id: usuarioId } },
-    });
-    if (ya) continue; // ya estaba escaneada
-    await encolarEscaneoManual(usuarioId, archivo.id);
-    encoladas++;
-  }
-  return encoladas;
-};
-
-// Totales globales de ventas + top productos/clientes. Usa el mismo
-// `construirFiltro` (sin filtro real, solo el usuario) que ventasTop/
-// totalesFacturado, así que excluye igual las facturas cuyo archivo está en
-// la papelera — antes este conteo iba por su cuenta con un COUNT(*) directo
-// sobre "facturas" sin ese JOIN/exclusión, así que una factura borrada (o
-// restaurada) no movía nunca este número.
-type ResumenMoneda = {
-  moneda: string;
-  numFacturas: number;
-  subtotal: number;
-  iva: number;
-  total: number;
-  ticketMedio: number;
-  top: { producto: string; moneda: string; unidades: number; importe: number }[];
-  clientes: { cliente: string; moneda: string; numFacturas: number; importe: number }[];
-};
-
-const resumenVentas = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-): Promise<{
-  numFacturas: number; // total de facturas (todas las monedas), para la cabecera general
-  primeraFecha: string | null;
-  ultimaFecha: string | null;
-  porMoneda: ResumenMoneda[];
-}> => {
-  // `filtro` solo aporta acotaciones (periodo, moneda...); el `tipo` lo fija esta
-  // función a "venta". Se thread-ea a las sub-consultas para que un resumen por
-  // periodo ("resumen de junio 2026") cuente/rankee solo las facturas de ese rango.
-  const { where, params } = construirFiltro(usuarioId, { ...filtro, tipo: "venta" });
-  // Cabecera general: conteo y periodo son independientes de la divisa (no se
-  // suman importes aquí, solo se cuentan facturas y se mira el rango de fechas).
-  const [row] = await AppDataSource.query(
-    `SELECT COUNT(DISTINCT f."id")::int AS numfacturas,
-            MIN(f."fecha")::text AS primera,
-            MAX(f."fecha")::text AS ultima
-     FROM "facturas" f
-     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-     WHERE ${where}`,
-    params,
-  );
-  const [totales, top, clientes] = await Promise.all([
-    totalesFacturado(usuarioId, filtro),
-    ventasTop(usuarioId, filtro, { limite: 5 }),
-    clientesTop(usuarioId, filtro, { limite: 3 }),
-  ]);
-  const porMoneda: ResumenMoneda[] = totales.map((t) => ({
-    moneda: t.moneda,
-    numFacturas: t.numFacturas,
-    subtotal: t.subtotal,
-    iva: t.iva,
-    total: t.total,
-    ticketMedio: t.numFacturas > 0 ? t.total / t.numFacturas : 0,
-    top: top.filter((p) => p.moneda === t.moneda),
-    clientes: clientes.filter((c) => c.moneda === t.moneda),
-  }));
-  return {
-    numFacturas: Number(row.numfacturas),
-    primeraFecha: row.primera ?? null,
-    ultimaFecha: row.ultima ?? null,
-    porMoneda,
-  };
-};
-
-// Genera el markdown del resumen AGREGADO de ventas leyendo la BD al vuelo.
-// Devuelve null si el usuario no tiene ninguna venta (el chat responde con su
-// propio mensaje de "todavía no hay resumen"). Antes esto se materializaba como
-// un archivo "resumen-ventas.md" en /facturas; ahora es datos derivados que se
-// calculan solo cuando el chat los pide.
-export const generarResumenVentasMd = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  etiqueta?: string,
-): Promise<string | null> => {
-  const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenVentas(usuarioId, filtro);
-
-  if (numFacturas === 0) return null;
-
-  const periodo =
-    primeraFecha && ultimaFecha
-      ? `${formatearFecha(primeraFecha)} – ${formatearFecha(ultimaFecha)}`
-      : "—";
-  const varias = porMoneda.length > 1;
-
-  // Una sección por moneda: totales + más vendidos + mejores clientes de esa
-  // divisa. Con una sola moneda (caso normal) el encabezado de divisa se omite y
-  // el resultado se lee igual que el resumen de antes, pero con el símbolo correcto.
-  const secciones = porMoneda
-    .map((m) => {
-      const ranking = m.top
-        .map((t, i) => `${i + 1}. **${t.producto}** — ${unidadesMd(t.unidades)} ud. — ${dinero(t.importe, m.moneda)}`)
-        .join("\n");
-      const rankingClientes = m.clientes
-        .map((c, i) => `${i + 1}. **${c.cliente}** — ${unidadesMd(c.numFacturas)} factura/s — ${dinero(c.importe, m.moneda)}`)
-        .join("\n");
-      const cab = varias ? `## ${nombreMoneda(m.moneda)} (${dinero(0, m.moneda).replace(/[\d.,\s-]/g, "").trim()})\n\n` : "";
-      return `${cab}- **Facturas:** ${unidadesMd(m.numFacturas)}
-- **Total facturado:** ${dinero(m.total, m.moneda)}
-- **Subtotal:** ${dinero(m.subtotal, m.moneda)}
-- **IVA:** ${dinero(m.iva, m.moneda)}
-- **Ticket medio:** ${dinero(m.ticketMedio, m.moneda)}
-
-${varias ? "### Más vendidos" : "## Más vendidos"}
-${ranking || "_(todavía no hay datos)_"}
-
-${varias ? "### Mejores clientes" : "## Mejores clientes"}
-${rankingClientes || "_(todavía no hay datos)_"}`;
-    })
-    .join("\n\n");
-
-  // Cabecera general (independiente de la divisa) + el desglose por moneda.
-  const cabeceraGeneral = `- **Facturas escaneadas:** ${unidadesMd(numFacturas)}
-- **Periodo:** ${periodo}${varias ? `\n- **Monedas:** ${porMoneda.map((m) => m.moneda).join(", ")}` : ""}`;
-
-  return `# Resumen de ventas${etiqueta ? ` de ${etiqueta}` : ""}
-
-${cabeceraGeneral}
-
-${secciones}
-`;
-};
-
-// --- Resumen de COMPRAS (facturas donde la empresa es el cliente) ---
-// Espejo de resumenVentas pero con tipo="compra" y ranking por PROVEEDOR (emisor)
-// en vez de por cliente.
-type ResumenComprasMoneda = {
-  moneda: string;
-  numFacturas: number;
-  subtotal: number;
-  iva: number;
-  total: number;
-  ticketMedio: number;
-  top: { producto: string; moneda: string; unidades: number; importe: number }[];
-  proveedores: { proveedor: string; moneda: string; numFacturas: number; importe: number }[];
-};
-
-const resumenCompras = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-): Promise<{
-  numFacturas: number;
-  primeraFecha: string | null;
-  ultimaFecha: string | null;
-  porMoneda: ResumenComprasMoneda[];
-}> => {
-  const { where, params } = construirFiltro(usuarioId, { ...filtro, tipo: "compra" });
-  const [row] = await AppDataSource.query(
-    `SELECT COUNT(DISTINCT f."id")::int AS numfacturas,
-            MIN(f."fecha")::text AS primera,
-            MAX(f."fecha")::text AS ultima
-     FROM "facturas" f
-     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-     WHERE ${where}`,
-    params,
-  );
-  const [totales, top, proveedores] = await Promise.all([
-    totalesFacturado(usuarioId, { ...filtro, tipo: "compra" }),
-    ventasTop(usuarioId, { ...filtro, tipo: "compra" }, { limite: 5 }),
-    proveedoresTop(usuarioId, filtro, { limite: 3 }),
-  ]);
-  const porMoneda: ResumenComprasMoneda[] = totales.map((t) => ({
-    moneda: t.moneda,
-    numFacturas: t.numFacturas,
-    subtotal: t.subtotal,
-    iva: t.iva,
-    total: t.total,
-    ticketMedio: t.numFacturas > 0 ? t.total / t.numFacturas : 0,
-    top: top.filter((p) => p.moneda === t.moneda),
-    proveedores: proveedores.filter((p) => p.moneda === t.moneda),
-  }));
-  return {
-    numFacturas: Number(row.numfacturas),
-    primeraFecha: row.primera ?? null,
-    ultimaFecha: row.ultima ?? null,
-    porMoneda,
-  };
-};
-
-// Espejo de generarResumenVentasMd para las COMPRAS. null si no hay compras.
-export const generarResumenComprasMd = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  etiqueta?: string,
-): Promise<string | null> => {
-  const { numFacturas, primeraFecha, ultimaFecha, porMoneda } = await resumenCompras(usuarioId, filtro);
-
-  if (numFacturas === 0) return null;
-
-  const periodo =
-    primeraFecha && ultimaFecha
-      ? `${formatearFecha(primeraFecha)} – ${formatearFecha(ultimaFecha)}`
-      : "—";
-  const varias = porMoneda.length > 1;
-
-  const secciones = porMoneda
-    .map((m) => {
-      const ranking = m.top
-        .map((t, i) => `${i + 1}. **${t.producto}** — ${unidadesMd(t.unidades)} ud. — ${dinero(t.importe, m.moneda)}`)
-        .join("\n");
-      const rankingProveedores = m.proveedores
-        .map((p, i) => `${i + 1}. **${p.proveedor}** — ${unidadesMd(p.numFacturas)} factura/s — ${dinero(p.importe, m.moneda)}`)
-        .join("\n");
-      const cab = varias ? `## ${nombreMoneda(m.moneda)} (${dinero(0, m.moneda).replace(/[\d.,\s-]/g, "").trim()})\n\n` : "";
-      return `${cab}- **Facturas:** ${unidadesMd(m.numFacturas)}
-- **Total gastado:** ${dinero(m.total, m.moneda)}
-- **Subtotal:** ${dinero(m.subtotal, m.moneda)}
-- **IVA:** ${dinero(m.iva, m.moneda)}
-- **Gasto medio:** ${dinero(m.ticketMedio, m.moneda)}
-
-${varias ? "### Más comprados" : "## Más comprados"}
-${ranking || "_(todavía no hay datos)_"}
-
-${varias ? "### Principales proveedores" : "## Principales proveedores"}
-${rankingProveedores || "_(todavía no hay datos)_"}`;
-    })
-    .join("\n\n");
-
-  const cabeceraGeneral = `- **Facturas escaneadas:** ${unidadesMd(numFacturas)}
-- **Periodo:** ${periodo}${varias ? `\n- **Monedas:** ${porMoneda.map((m) => m.moneda).join(", ")}` : ""}`;
-
-  return `# Resumen de compras${etiqueta ? ` de ${etiqueta}` : ""}
-
-${cabeceraGeneral}
-
-${secciones}
-`;
-};
-
-// Resumen COMBINADO por periodo (o global): ventas + compras + un listado de las
-// facturas "sin clasificar" (tipo="desconocido") al final. Es lo que devuelve el
-// chat para "resumen de junio 2026" / "resumen de todo": un modelo pequeño no
-// agregaba compras ni mostraba las desconocidas, así que se hace aquí, determinista.
-// Solo se incluyen las secciones con datos: si no hay ventas (o compras, o sin
-// clasificar) esa sección se omite; si no hay ninguna, un mensaje único.
-// `md` es todo el markdown (una sola burbuja: el front oculta el texto si además
-// mandas una tabla, por eso las desconocidas van embebidas). `desconocidas` son
-// {id,nombre} para que el chat ofrezca un botón "Abrir" por cada una y el usuario
-// pueda ir a clasificarla en la página Facturas.
-export const generarResumenCombinadoMd = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  etiqueta?: string,
-): Promise<{ md: string; desconocidas: { id: string; nombre: string }[] }> => {
-  const [ventas, compras, desc] = await Promise.all([
-    generarResumenVentasMd(usuarioId, filtro, etiqueta),
-    generarResumenComprasMd(usuarioId, filtro, etiqueta),
-    listarFacturas(usuarioId, { ...filtro, tipo: "desconocido" }, { pagina: 1, limite: 100 }),
-  ]);
-  const en = etiqueta ? ` en ${etiqueta}` : "";
-  const de = etiqueta ? ` de ${etiqueta}` : "";
-
-  // Solo se incluye la sección que TENGA datos: si no hay ventas / compras / sin
-  // clasificar, esa sección no aparece (no se muestran bloques "No hay ...").
-  const bloques: string[] = [];
-  if (ventas) bloques.push(ventas);
-  if (compras) bloques.push(compras);
-
-  if (desc.total > 0) {
-    const lista = desc.filas
-      .map((f) => `- **${f.archivoNombre ?? f.numero}** (${formatearFecha(f.fecha)}): ${dinero(f.total, f.moneda)}`)
-      .join("\n");
-    bloques.push(
-      `## Facturas sin clasificar${de} (${desc.total})\n\n${lista}\n\n_Ábrelas para asignarles venta o compra en la página **Facturas**._`,
-    );
-  }
-
-  const desconocidas = desc.filas
-    .filter((f) => f.archivoId && f.archivoNombre)
-    .map((f) => ({ id: f.archivoId as string, nombre: f.archivoNombre as string }));
-
-  // Ninguna de las tres tiene datos: un único mensaje claro en vez de tres vacíos.
-  if (bloques.length === 0) {
-    return { md: `No tienes ninguna factura${en} todavía.`, desconocidas: [] };
-  }
-
-  return { md: bloques.join("\n\n---\n\n"), desconocidas };
-};
-
-// --- Beneficio / balance neto (ventas − compras) ---
-// "¿cuánto he ganado?", "mi balance de abril", "beneficio del trimestre".
-// SIEMPRE por moneda: no se restan divisas distintas (una venta en USD y una
-// compra en EUR no se compensan). Si en una moneda solo hay ventas o solo
-// compras, el otro lado cuenta como 0.
-export const generarResumenNetoMd = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  etiqueta?: string,
-): Promise<string> => {
-  const [ventas, compras] = await Promise.all([
-    totalesFacturado(usuarioId, { ...filtro, tipo: "venta" }),
-    totalesFacturado(usuarioId, { ...filtro, tipo: "compra" }),
-  ]);
-  const monedas = monedasDistintas([...ventas, ...compras]);
-  const en = etiqueta ? ` en ${etiqueta}` : "";
-  if (monedas.length === 0) {
-    return `No tienes facturas clasificadas${en} todavía, así que no puedo calcular el beneficio. Clasifica las facturas "Sin clasificar" en la página **Facturas**.`;
-  }
-  const varias = monedas.length > 1;
-  const secciones = monedas.map((m) => {
-    const v = ventas.find((t) => t.moneda === m);
-    const c = compras.find((t) => t.moneda === m);
-    const ingresos = v?.total ?? 0;
-    const gastos = c?.total ?? 0;
-    const neto = ingresos - gastos;
-    const etiquetaNeto = neto >= 0 ? "Beneficio" : "Pérdida";
-    return `${encabezadoMoneda(m, varias)}- **Ingresos (ventas):** ${dinero(ingresos, m)}${v ? ` — ${unidadesMd(v.numFacturas)} factura/s` : ""}
-- **Gastos (compras):** ${dinero(gastos, m)}${c ? ` — ${unidadesMd(c.numFacturas)} factura/s` : ""}
-- **${etiquetaNeto}:** ${dinero(Math.abs(neto), m)}`;
-  });
-  return `## Balance${etiqueta ? ` de ${etiqueta}` : ""}\n\n${secciones.join("\n\n")}`;
-};
-
-// --- IVA (repercutido / soportado / a liquidar) ---
-// "¿cuánto IVA he cobrado?" (repercutido, ventas) · "¿cuánto IVA he pagado?"
-// (soportado, compras) · "¿cuánto IVA me toca declarar/liquidar este trimestre?"
-// (repercutido − soportado). Todo por moneda. El resultado a liquidar positivo =
-// a ingresar a Hacienda; negativo = a compensar/devolver.
-export const generarResumenIvaMd = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  etiqueta?: string,
-  modo: "cobrado" | "soportado" | "liquidacion" = "liquidacion",
-): Promise<string> => {
-  const [ventas, compras] = await Promise.all([
-    totalesFacturado(usuarioId, { ...filtro, tipo: "venta" }),
-    totalesFacturado(usuarioId, { ...filtro, tipo: "compra" }),
-  ]);
-  const relevantes =
-    modo === "cobrado" ? ventas : modo === "soportado" ? compras : [...ventas, ...compras];
-  const monedas = monedasDistintas(relevantes);
-  const en = etiqueta ? ` en ${etiqueta}` : "";
-  if (monedas.length === 0) {
-    return `No tengo IVA que mostrar${en}: no hay facturas ${modo === "soportado" ? "de compra" : modo === "cobrado" ? "de venta" : "clasificadas"} todavía.`;
-  }
-  const varias = monedas.length > 1;
-  const secciones = monedas.map((m) => {
-    const rep = ventas.find((t) => t.moneda === m)?.iva ?? 0;
-    const sop = compras.find((t) => t.moneda === m)?.iva ?? 0;
-    const cab = encabezadoMoneda(m, varias);
-    if (modo === "cobrado") return `${cab}- **IVA repercutido (cobrado en ventas):** ${dinero(rep, m)}`;
-    if (modo === "soportado") return `${cab}- **IVA soportado (pagado en compras):** ${dinero(sop, m)}`;
-    const liq = rep - sop;
-    const etiquetaLiq = liq >= 0 ? "A ingresar a Hacienda" : "A compensar/devolver";
-    return `${cab}- **IVA repercutido (ventas):** ${dinero(rep, m)}
-- **IVA soportado (compras):** ${dinero(sop, m)}
-- **${etiquetaLiq}:** ${dinero(Math.abs(liq), m)}`;
-  });
-  const titulo =
-    modo === "cobrado" ? "IVA repercutido" : modo === "soportado" ? "IVA soportado" : "Liquidación de IVA";
-  return `## ${titulo}${etiqueta ? ` de ${etiqueta}` : ""}\n\n${secciones.join("\n\n")}`;
-};
-
-// --- Facturas ordenadas por importe ("la factura más grande/cara", "las 5 de
-// menor importe"). Distinto de los rankings de producto/cliente: aquí cada fila
-// es una FACTURA individual. Se compara dentro del filtro dado (opcionalmente
-// acotado a venta/compra); las divisas conviven (cada fila lleva la suya).
-export const facturasPorImporte = async (
-  usuarioId: string,
-  filtro: FiltroFacturas = {},
-  opts: { orden?: "asc" | "desc"; limite?: number } = {},
-): Promise<FilaFactura[]> => {
-  const orden = opts.orden === "asc" ? "ASC" : "DESC";
-  const limite = Math.min(Math.max(1, opts.limite ?? 5), 50);
-  const { producto: _producto, ...rest } = filtro;
-  const { where, params } = construirFiltro(usuarioId, rest);
-  const filas: FilaRaw[] = await AppDataSource.query(
-    `SELECT f."id" AS id, a."id" AS archivoid, a."nombre" AS archivonombre, f."numero" AS numero,
-            f."fecha"::text AS fecha, f."emisor" AS emisor, f."cliente" AS cliente, f."tipo" AS tipo,
-            f."subtotal" AS subtotal, f."iva" AS iva, f."total" AS total, f."moneda" AS moneda
-     FROM "facturas" f
-     LEFT JOIN "archivos" a ON a."id" = f."archivoId"
-     WHERE ${where}
-     ORDER BY f."total" ${orden} NULLS LAST, f."fecha" DESC
-     LIMIT ${limite}`,
-    params,
-  );
-  return filas.map(aFilaFactura);
-};
-
-// --- Comparativa de dos periodos (ventas o compras) ---
-// "¿vendí más en abril o en mayo?", "compara este trimestre con el anterior".
-// Compara el TOTAL por moneda de cada periodo y marca la diferencia. Por moneda
-// (no se comparan divisas distintas).
-export const generarComparativaMd = async (
-  usuarioId: string,
-  a: { filtro: FiltroFacturas; etiqueta: string },
-  b: { filtro: FiltroFacturas; etiqueta: string },
-  tipo: "venta" | "compra" = "venta",
-): Promise<string> => {
-  const [ta, tb] = await Promise.all([
-    totalesFacturado(usuarioId, { ...a.filtro, tipo }),
-    totalesFacturado(usuarioId, { ...b.filtro, tipo }),
-  ]);
-  const concepto = tipo === "venta" ? "Ventas" : "Compras";
-  const monedas = monedasDistintas([...ta, ...tb]);
-  if (monedas.length === 0) {
-    return `No hay ${tipo === "venta" ? "ventas" : "compras"} en ninguno de los dos periodos para comparar.`;
-  }
-  const varias = monedas.length > 1;
-  const secciones = monedas.map((m) => {
-    const va = ta.find((t) => t.moneda === m)?.total ?? 0;
-    const vb = tb.find((t) => t.moneda === m)?.total ?? 0;
-    const dif = va - vb;
-    let veredicto: string;
-    if (dif === 0) veredicto = `Empate: lo mismo en ambos periodos.`;
-    else {
-      const mayor = dif > 0 ? a.etiqueta : b.etiqueta;
-      veredicto = `Más en **${mayor}** (diferencia de ${dinero(Math.abs(dif), m)}).`;
-    }
-    return `${encabezadoMoneda(m, varias)}- **${a.etiqueta}:** ${dinero(va, m)}
-- **${b.etiqueta}:** ${dinero(vb, m)}
-- ${veredicto}`;
-  });
-  return `## ${concepto}: ${a.etiqueta} vs ${b.etiqueta}\n\n${secciones.join("\n\n")}`;
-};
-
-// --- Ticket medio (importe medio por factura) ---
-// "¿cuál es mi factura media?", "importe medio por factura". Se deriva de los
-// totales ya agregados (total / nº de facturas), por moneda.
-export const ticketMedioMd = (filas: TotalesMoneda[], titulo: string): string => {
-  if (filas.length === 0) return "No hay facturas que cumplan esa consulta.";
-  const varias = filas.length > 1;
-  const secciones = filas.map((t) => {
-    const medio = t.numFacturas > 0 ? t.total / t.numFacturas : 0;
-    return `${encabezadoMoneda(t.moneda, varias)}- **Ticket medio:** ${dinero(medio, t.moneda)}
-- **Total:** ${dinero(t.total, t.moneda)} en ${unidadesMd(t.numFacturas)} factura/s`;
-  });
-  return `## ${titulo}\n\n${secciones.join("\n\n")}`;
 };

@@ -2,6 +2,7 @@ import { Server } from "http";
 import { app } from "./app";
 import { env } from "./config/env";
 import { AppDataSource } from "./config/database";
+import { prepararRolChat, cerrarPoolChat } from "./config/chatDb";
 import { inicializarBucket } from "./config/minio";
 import { verificarModelosOllama } from "./config/ollama";
 import { iniciarWorker, detenerWorker } from "./services/tareas.service";
@@ -12,6 +13,9 @@ const main = async (): Promise<void> => {
   await AppDataSource.initialize();
   console.log("Base de datos conectada");
 
+  // Login del rol de solo lectura con el que corren las consultas del chat.
+  await prepararRolChat();
+
   // Bootstrap multi-tenant: asegura que exista el superadmin de la plataforma.
   await sembrarSuperadmin();
 
@@ -20,7 +24,7 @@ const main = async (): Promise<void> => {
 
   await verificarModelosOllama();
 
-  // Worker de la cola durable (indexado RAG + auto-escaneo de facturas).
+  // Worker de la cola durable (extracción de texto + auto-escaneo de facturas).
   await iniciarWorker();
 
   // Mantenimiento periódico: reconciliación MinIO↔Postgres + retención de papelera.
@@ -49,6 +53,7 @@ const instalarApagadoOrdenado = (server: Server): void => {
     server.close();
     detenerMantenimiento();
     await detenerWorker();
+    await cerrarPoolChat();
     await AppDataSource.destroy();
     console.log("[apagado] listo.");
     process.exit(0);

@@ -6,6 +6,7 @@ import { limitadorSubida, limiteBacklogUsuario } from "../middlewares/limites.mi
 import {
   ctrlSubir,
   ctrlListar,
+  ctrlBuscar,
   ctrlObtener,
   ctrlDescargar,
   ctrlEliminar,
@@ -20,7 +21,6 @@ import {
   ctrlCrearCarpeta,
   ctrlReubicarCarpeta,
   ctrlEliminarCarpeta,
-  ctrlBuscarSemantica,
   ctrlDescribir,
 } from "../controllers/archivos.controller";
 import { AppError } from "../utils/errors";
@@ -63,7 +63,7 @@ router.post(
   ctrlSubir,
 );
 router.get("/", verificarToken, ctrlListar);
-router.get("/buscar", verificarToken, ctrlBuscarSemantica);
+router.get("/buscar", verificarToken, ctrlBuscar);
 router.get("/papelera", verificarToken, ctrlPapelera);
 router.get("/carpeta/descargar", verificarToken, ctrlDescargarCarpeta);
 // Carpetas (metadata): listar / crear / mover-renombrar / borrar

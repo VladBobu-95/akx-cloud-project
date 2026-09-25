@@ -27,7 +27,7 @@ describe("claves API (n8n por usuario)", () => {
       .set(auth(tokenMiembro))
       .send({ nombre: "telegram" });
     expect(res.status).toBe(201);
-    expect(res.body.clave).toMatch(/^akx_live_/);
+    expect(res.body.clave).toMatch(/^ateka_live_/);
     expect(res.body.prefijo).toBe(res.body.clave.slice(0, 16));
     expect(res.body.nombre).toBe("telegram");
     expect(res.body.hash).toBeUndefined();
@@ -39,7 +39,7 @@ describe("claves API (n8n por usuario)", () => {
     expect(res.body.length).toBeGreaterThanOrEqual(1);
     expect(res.body[0].clave).toBeUndefined();
     expect(res.body[0].hash).toBeUndefined();
-    expect(res.body[0].prefijo).toMatch(/^akx_live_/);
+    expect(res.body[0].prefijo).toMatch(/^ateka_live_/);
   });
 
   it("la clave de BD autentica POST /api/n8n/facturas", async () => {

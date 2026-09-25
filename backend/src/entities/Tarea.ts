@@ -8,7 +8,7 @@ import {
 } from "typeorm";
 
 // Cola de trabajos DURABLE (sobrevive a reinicios de la API), en Postgres.
-// Sustituye a las colas en memoria que alimentaban el indexado RAG y el
+// Sustituye a las colas en memoria que alimentaban la extracción de texto y el
 // auto-escaneo de facturas al subir: aquellas perdían la tarea (y los bytes,
 // que vivían en el `req.file.buffer` de un closure) si el proceso se reiniciaba
 // a mitad. Aquí el worker (tareas.service.ts) RELEE los bytes desde MinIO, así
@@ -25,7 +25,7 @@ export class Tarea {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
-  // "indexar"     → extrae texto (OCR de imágenes / pdf-parse / docx) + embeddings.
+  // "indexar"     → extrae texto (OCR de imágenes / pdf-parse / docx).
   // "autoescanear" → extrae los datos de factura (qwen) del texto ya indexado.
   @Column({ type: "varchar" })
   tipo!: "indexar" | "autoescanear";

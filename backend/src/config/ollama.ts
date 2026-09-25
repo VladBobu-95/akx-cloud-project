@@ -14,6 +14,36 @@ export const ollamaHeaders = (): Record<string, string> => {
   return headers;
 };
 
+// ¿El modelo tiene modo "pensamiento" (qwen3, deepseek-r1…)? Se consulta una vez
+// a /api/show y se cachea. Hace falta porque a esos modelos hay que decirles
+// `think` explícitamente (si no, piensan por defecto y tardan mucho), y a los que
+// no lo tienen no se les puede mandar `think: true` (Ollama responde error).
+const cacheThink = new Map<string, boolean>();
+export const soportaThink = async (modelo: string): Promise<boolean> => {
+  const cacheado = cacheThink.get(modelo);
+  if (cacheado !== undefined) return cacheado;
+  try {
+    const res = await fetch(`${env.OLLAMA_URL}/api/show`, {
+      method: "POST",
+      headers: ollamaHeaders(),
+      body: JSON.stringify({ model: modelo }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = (await res.json()) as { capabilities?: string[] };
+    const soporta = res.ok && (data.capabilities ?? []).includes("thinking");
+    cacheThink.set(modelo, soporta);
+    return soporta;
+  } catch {
+    return false; // sin cachear: se reintenta en la siguiente llamada
+  }
+};
+
+// Campo `think` para el body de /api/chat: solo se manda si el modelo lo admite.
+export const campoThink = async (
+  modelo: string,
+  pensar: boolean,
+): Promise<{ think?: boolean }> => ((await soportaThink(modelo)) ? { think: pensar } : {});
+
 // Compara contra el nombre exacto y también sin el sufijo ":tag" (ollama list
 // puede devolver "deepseek-ocr:latest" cuando en .env solo se puso "deepseek-ocr").
 const coincide = (instalado: string, esperado: string): boolean =>
@@ -38,7 +68,6 @@ export const verificarModelosOllama = async (): Promise<void> => {
   // degrada sin romper. Avisar por él solo generaba ruido en máquinas que no lo usan.
   const requeridos = {
     OLLAMA_MODEL: env.OLLAMA_MODEL,
-    OLLAMA_EMBED_MODEL: env.OLLAMA_EMBED_MODEL,
     OLLAMA_OCR_MODEL: env.OLLAMA_OCR_MODEL,
   };
   for (const [variable, modelo] of Object.entries(requeridos)) {

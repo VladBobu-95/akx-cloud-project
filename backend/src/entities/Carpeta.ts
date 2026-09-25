@@ -8,7 +8,7 @@ import {
 } from "typeorm";
 import { Usuario } from "./Usuario";
 
-// Carpeta "explícita" del usuario (creada a mano o por el chatbot). Las carpetas
+// Carpeta "explícita" del usuario (creada a mano). Las carpetas
 // que solo existen porque contienen archivos se derivan de la ruta del archivo;
 // esta tabla guarda además las carpetas (incluidas las vacías) para que persistan
 // y se vean igual desde la web y desde el asistente.

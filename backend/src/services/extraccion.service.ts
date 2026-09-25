@@ -126,7 +126,7 @@ const pareceBucleDegenerado = (texto: string): boolean => {
 // deepseek-ocr transcribe las tablas de una factura como HTML (<table><td>...),
 // pero pdf-parse (el otro origen posible de este mismo texto) nunca devuelve
 // HTML, solo texto plano. Sin esto, el contenido guardado (lo que se ve al
-// "abrir"/"leer" el archivo en el chat, lo que se indexa para RAG, y lo que se
+// leer el archivo en el chat y lo que se
 // le pasa a la extracción de datos de la factura) sale con pinta distinta según
 // si vino de OCR o de un PDF. Se aplica DESPUÉS de pareceBucleDegenerado (que sí
 // necesita ver las etiquetas originales para distinguir tabla legítima de sopa

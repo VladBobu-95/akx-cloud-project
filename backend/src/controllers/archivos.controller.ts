@@ -26,7 +26,7 @@ import {
   eliminarCarpetaConContenido,
   moverCarpetaConContenido,
 } from "../services/carpetas.service";
-import { actualizarDescripcionManual, buscarSemantica } from "../services/rag.service";
+import { actualizarDescripcionManual, buscarEnPersonales } from "../services/contenido.service";
 import { marcarPendiente } from "../services/facturas.service";
 import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
@@ -146,8 +146,7 @@ export const ctrlSubir = async (
     const carpeta = (req.body.carpeta as string) || "/";
 
     // Deduplicación por hash (#4): si el usuario ya tiene un archivo VIVO con el
-    // mismo contenido, no lo volvemos a subir a MinIO ni a reprocesar (OCR/
-    // embeddings). Devolvemos el existente con `duplicado: true` para que el
+    // mismo contenido, no lo volvemos a subir a MinIO ni a reprocesar (OCR). Devolvemos el existente con `duplicado: true` para que el
     // front avise. Evita además duplicar facturas en la analítica.
     const hash = calcularHashSha256(req.file.buffer);
     const existente = await buscarArchivoPorHash(req.usuario!.id, hash);
@@ -160,7 +159,7 @@ export const ctrlSubir = async (
     await marcarPendiente(archivo);
     await marcarIndexadoPendiente(archivo.id);
 
-    // Indexado (RAG) + auto-escaneo de factura, EN SEGUNDO PLANO mediante la
+    // Extracción de texto + auto-escaneo de factura, EN SEGUNDO PLANO mediante la
     // COLA DURABLE (tareas.service.ts): encolamos una tarea "indexar" y el worker
     // la procesa releyendo los bytes desde MinIO. Si la API se reinicia a mitad,
     // la tarea se reanuda (antes, con la cola en memoria, se perdía con todo y
@@ -187,22 +186,16 @@ export const ctrlSubir = async (
   }
 };
 
-// GET /api/archivos/buscar?q=...  (búsqueda semántica sobre el contenido)
-export const ctrlBuscarSemantica = async (
+// GET /api/archivos/buscar?q=...  (por nombre y contenido, solo lo personal:
+// cada carpeta compartida tiene su propio buscador)
+export const ctrlBuscar = async (
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> => {
   try {
     const q = typeof req.query.q === "string" ? req.query.q : "";
-    if (!q.trim()) {
-      res.json([]);
-      return;
-    }
-    // Solo contenido PERSONAL: lo compartido tiene su propio buscador acotado a
-    // cada carpeta compartida (mismo explorador, distinto ámbito).
-    const resultados = await buscarSemantica(req.usuario!.id, q, 5);
-    res.json(resultados);
+    res.json(await buscarEnPersonales(req.usuario!.id, q));
   } catch (error) {
     next(error);
   }
@@ -312,9 +305,8 @@ export const ctrlRestaurar = async (
 
 // PATCH /api/archivos/:id/descripcion  { descripcion }
 // Permite que el usuario describa a mano una imagen (modal obligatorio al
-// subir): se guarda separada del texto que haya extraído el OCR y se reindexa
-// con las dos combinadas, para que "muéstrame"/la búsqueda semántica tengan
-// siempre lo mejor de ambas (ver `combinarContenido`).
+// subir): se guarda separada del texto que haya extraído el OCR; el chat y el
+// escaneo de facturas leen las dos combinadas (ver `combinarContenido`).
 export const ctrlDescribir = async (
   req: Request,
   res: Response,
@@ -324,7 +316,7 @@ export const ctrlDescribir = async (
     const descripcion = String(req.body.descripcion ?? "").trim();
     if (!descripcion) throw new AppError(400, "Falta la descripción");
     const archivo = await obtenerArchivo(String(req.params.id), req.usuario!.id);
-    await actualizarDescripcionManual(archivo.id, descripcion, req.usuario!.id);
+    await actualizarDescripcionManual(archivo.id, descripcion);
     res.json({ mensaje: "Descripción guardada" });
   } catch (error) {
     next(error);

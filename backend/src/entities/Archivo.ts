@@ -48,7 +48,7 @@ export class Archivo {
   @Column({ type: "text", nullable: true })
   descripcionManual?: string;
 
-  // Estado del pipeline en segundo plano al subir (indexado RAG + escaneo de
+  // Estado del pipeline en segundo plano al subir (extracción de texto + escaneo de
   // factura). "pendiente"/"escaneando" se ponen para CUALQUIER archivo (para
   // que la columna "Estado" del explorador muestre la animación mientras se
   // procesa, sea o no candidato a factura). Al terminar: "escaneada" = factura
@@ -58,13 +58,12 @@ export class Archivo {
   @Column({ type: "varchar", nullable: true })
   estadoEscaneo?: "pendiente" | "escaneando" | "escaneada" | "no_factura" | "error" | null;
 
-  // Estado del indexado RAG (extracción de texto + embeddings), separado de
+  // Estado de la extracción de texto ("indexado"), separado de
   // `estadoEscaneo` (que es específico de facturas). Lo gestiona el worker
   // durable (tareas.service.ts): "indexando" mientras se procesa, "indexado"
-  // cuando hay texto/embeddings, "error" si la extracción falló tras agotar
+  // cuando ya se extrajo el texto, "error" si la extracción falló tras agotar
   // reintentos. null = aún sin indexar / no aplica. Permite mostrar en el
-  // explorador "procesando…" o "no se pudo leer el contenido" en vez de que un
-  // archivo recién subido simplemente no aparezca en las búsquedas sin motivo.
+  // explorador "procesando…" o "no se pudo leer el contenido".
   @Column({ type: "varchar", nullable: true })
   estadoIndexado?: "pendiente" | "indexando" | "indexado" | "error" | null;
 
