@@ -103,8 +103,9 @@ chat.lineas_factura — conceptos de cada factura
     : `- El usuario NO tiene acceso a facturas: si pregunta por ellas, dile que no está disponible para su rol (sin consultar nada).`;
 
   const reglaContenido = c.puedeContenido
-    ? `- Para buscar qué documento habla de algo: unaccent(contenido) ILIKE unaccent('%palabra%'). Para leer un documento: left(contenido, 2500) de ESE archivo. Nunca pidas el contenido completo de muchos archivos a la vez.`
-    : `- El usuario NO puede leer el contenido de los documentos (la columna contenido viene vacía): si lo pide, dile que no está disponible para su rol.`;
+    ? `- Para buscar qué documento habla de algo: unaccent(contenido) ILIKE unaccent('%palabra%'). Para leer un documento: left(contenido, 2500) de ESE archivo. Nunca pidas el contenido completo de muchos archivos a la vez.
+- Las IMÁGENES y fotos ya están leídas: su contenido es el texto que aparece en ellas o, si no tienen texto, una descripción de lo que se ve. NUNCA digas que no puedes ver imágenes: consulta su contenido y responde con él.`
+    : `- El usuario NO puede leer el contenido de los documentos ni de las imágenes (la columna contenido viene vacía): si lo pide, dile que no está disponible para su rol.`;
 
   return `Eres el asistente de ATEKA Cloud, una app de almacenamiento de archivos y facturas de empresa.
 Hablas con ${c.nombre}${c.empresa ? `, de la empresa "${c.empresa}"${c.nif ? ` (CIF ${c.nif})` : ""}` : ""}.
@@ -118,7 +119,7 @@ chat.archivos — archivos personales del usuario (incluida su papelera) y los d
   carpeta_compartida text (NULL = archivo personal; si no, nombre de la carpeta compartida),
   tipo_mime text, tamano_bytes bigint, subido_en timestamptz, modificado_en timestamptz,
   en_papelera boolean, eliminado_en timestamptz,
-  contenido text (texto del documento: PDF, Word, OCR de imágenes y descripción manual),
+  contenido text (texto del documento: PDF, Word, descripción manual; en imágenes, el texto que aparece o una descripción de la foto),
   procesando boolean (true = recién subido, aún se está leyendo/escaneando)
 
 chat.carpetas — carpetas creadas
@@ -134,6 +135,7 @@ CÓMO RESPONDER
 SELECT ...
 \`\`\`
    Recibirás el resultado y podrás hacer otra consulta si hace falta, o responder.
+   Ante CUALQUIER pregunta sobre sus archivos, fotos, documentos, carpetas o facturas, consulta SIEMPRE antes de responder: nunca contestes de memoria ni digas que no tienes acceso o que no puedes verlo.
 2. Cuando tengas los datos (o si no hacen falta, p. ej. un saludo), responde al usuario en español, en markdown, breve y claro.
    - Usa SOLO los datos de los resultados. No inventes nombres, cifras ni fechas. Si no hay resultados, dilo.
    - No menciones SQL, consultas, tablas ni columnas.
@@ -178,7 +180,13 @@ WHERE tipo = 'venta' GROUP BY cliente, moneda ORDER BY total DESC LIMIT 5
     : ""
 }${
   c.puedeContenido
-    ? `Usuario: ¿qué documento habla de la garantía?
+    ? `Usuario: ¿qué pone en la foto texto.webp?
+\`\`\`sql
+SELECT archivo_id, nombre, carpeta, left(contenido, 2500) AS contenido FROM chat.archivos
+WHERE NOT en_papelera AND unaccent(nombre) ILIKE unaccent('%texto%')
+ORDER BY modificado_en DESC LIMIT 5
+\`\`\`
+Usuario: ¿qué documento habla de la garantía?
 \`\`\`sql
 SELECT archivo_id, nombre, carpeta, left(contenido, 300) AS extracto FROM chat.archivos
 WHERE NOT en_papelera AND unaccent(contenido) ILIKE unaccent('%garantia%')
