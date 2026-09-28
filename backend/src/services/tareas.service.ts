@@ -145,17 +145,36 @@ const ejecutarAutoescanear = async (t: Tarea): Promise<void> => {
 // Reclama la siguiente tarea disponible de forma atómica. FOR UPDATE SKIP
 // LOCKED permite que varios bucles (o, a futuro, varias instancias de API) no
 // se pisen: cada uno coge una fila distinta sin bloquearse entre sí.
+//
+// Cola JUSTA por usuario: no se coge la tarea más antigua sin más, sino la del
+// usuario al que hace MÁS TIEMPO que no se atiende (el último "actualizadoEn" de
+// sus tareas ya reclamadas; se actualiza al reclamar). Con orden de llegada puro,
+// si uno subía 200 fotos, los demás esperaban detrás de todas (horas, a ~30 s
+// por imagen). Así los usuarios con trabajo pendiente se turnan tarea a tarea, y
+// uno que no ha usado la cola en un rato pasa delante. Dentro de un mismo
+// usuario se sigue el orden de llegada.
 const reclamarSiguiente = async (): Promise<Tarea | null> => {
   const qr = AppDataSource.createQueryRunner();
   await qr.connect();
   await qr.startTransaction();
   try {
     const filas = (await qr.query(
-      `SELECT * FROM "tareas"
-         WHERE "estado" = 'pendiente' AND "disponibleEn" <= now()
-         ORDER BY "prioridad" ASC, "creadoEn" ASC
-         LIMIT 1
-         FOR UPDATE SKIP LOCKED`,
+      `WITH candidatas AS (
+         SELECT "id", "usuarioId" FROM "tareas"
+          WHERE "estado" = 'pendiente' AND "disponibleEn" <= now()
+       ),
+       servicio AS (
+         SELECT "usuarioId", max("actualizadoEn") AS "ultimo" FROM "tareas"
+          WHERE "estado" <> 'pendiente'
+            AND "usuarioId" IN (SELECT DISTINCT "usuarioId" FROM candidatas)
+          GROUP BY "usuarioId"
+       )
+       SELECT t.* FROM "tareas" t
+         JOIN candidatas c ON c."id" = t."id"
+         LEFT JOIN servicio s ON s."usuarioId" = t."usuarioId"
+        ORDER BY t."prioridad" ASC, s."ultimo" ASC NULLS FIRST, t."creadoEn" ASC
+        LIMIT 1
+        FOR UPDATE OF t SKIP LOCKED`,
     )) as Tarea[];
     if (filas.length === 0) {
       await qr.commitTransaction();

@@ -21,6 +21,8 @@ import {
 @Entity("tareas")
 // Índice que usa el worker para reclamar la siguiente tarea disponible.
 @Index(["estado", "disponibleEn", "prioridad"])
+// Cola justa: último servicio de cada usuario (ver reclamarSiguiente).
+@Index("IDX_tareas_usuario_actualizado", ["usuarioId", "actualizadoEn"])
 export class Tarea {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
