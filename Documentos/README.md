@@ -12,8 +12,8 @@ la base de datos con SQL de solo lectura, y se puede buscar por nombre y por el
 | Servidor HTTP / rutas | Express 5 + TypeScript (ts-node en dev, `tsc` en build) |
 | ORM / base de datos | TypeORM + PostgreSQL 16 (imagen **pgvector**) |
 | Almacenamiento de archivos | **MinIO** (S3-compatible), descarga por streaming desde la API |
-| IA / asistente | **Ollama** con un **único modelo multimodal** `qwen3.5:9b`: chat (escribe SQL de solo lectura), extracción de facturas y visión/OCR; **Tesseract.js** como red de seguridad por CPU |
-| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: el modelo de visión transcribe el texto o describe la foto, y si no da algo aprovechable entra Tesseract.js (OCR clásico, preprocesado con sharp). Se puede añadir una descripción a mano (`PATCH .../descripcion`) |
+| IA / asistente | **Ollama** con un **único modelo multimodal** `qwen3.5:9b`: chat (escribe SQL de solo lectura), extracción de facturas y visión/OCR |
+| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes y páginas de PDF escaneadas: el modelo de visión transcribe el texto o describe la foto (imágenes normalizadas a PNG con sharp). Se puede añadir una descripción a mano (`PATCH .../descripcion`) |
 | Subida de ficheros | Multer (en memoria, filtro MIME, límite 50 MB) |
 | Auth | JWT (`jsonwebtoken`) + bcrypt |
 | Validación | Zod (entrada y variables de entorno) |
@@ -251,4 +251,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 4 — Facturas:** visión en cascada de 3 pasadas (granite3.2-vision → deepseek-ocr para facturas → Tesseract.js como red de seguridad por CPU), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción de fotos a mano opcional
 - [x] **Fase 5 — Robustez:** cola de trabajos durable en Postgres + worker (reintentos, backoff, sobrevive a reinicios) que sustituye al procesado en memoria, estado de indexado en el explorador, estado del chat fuera de memoria, deduplicación por hash al subir, rate-limit + cap de backlog en los endpoints caros, confirmación para vaciar la papelera, validación del avatar, reconciliación MinIO↔Postgres + retención de papelera, y detección de intenciones del chat extraída a un módulo puro con tests
 - [x] **Fase 6 — Chat por SQL:** el asistente deja el *tool calling* y los pre-flights por regex y consulta la BD con SQL de solo lectura (rol `ateka_chat` + vistas filtradas por usuario); se quita la búsqueda semántica (bge-m3) y el buscador pasa a búsqueda de texto normal
-- [x] **Fase 7 — Un solo modelo:** un único modelo multimodal (`qwen3.5:9b`) para chat, facturas y visión; se quitan la cascada granite → deepseek-ocr, la traducción al español y el agrupado por fases de la cola
+- [x] **Fase 7 — Un solo modelo:** un único modelo multimodal (`qwen3.5:9b`) para chat, facturas y visión; se quitan la cascada granite → deepseek-ocr, Tesseract.js, la traducción al español y el agrupado por fases de la cola

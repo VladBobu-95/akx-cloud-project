@@ -181,6 +181,15 @@
         font-size: 0.85rem;
         white-space: nowrap;
       }
+      /* Datos comunes a todas las filas, una sola vez encima de la tabla. */
+      .ficha-chat {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 16px;
+        margin-top: 8px;
+        font-size: 0.85rem;
+      }
       /* Controles de paginación bajo cada tabla del chat. */
       .pag-chat {
         display: flex;

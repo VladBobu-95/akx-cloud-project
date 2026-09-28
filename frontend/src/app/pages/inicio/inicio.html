@@ -21,6 +21,16 @@
               @if (m.de === 'bot') {
                 <div class="md" [innerHTML]="renderBot(m.texto)"></div>
                 @if (m.tabla; as t) {
+                  @if (columnasFijas(t).length || archivoComun(t)) {
+                    <div class="ficha-chat">
+                      @for (c of columnasFijas(t); track c.i) {
+                        <span><span class="muted">{{ titulo(c.nombre) }}:</span> {{ celda(t, t.filas[0], c.i) }}</span>
+                      }
+                      @if (archivoComun(t); as a) {
+                        <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">📂 Abrir</button>
+                      }
+                    </div>
+                  }
                   <div class="tabla-scroll">
                     <table class="table tabla-chat">
                       <thead>
@@ -28,7 +38,7 @@
                           @for (c of columnasVisibles(t); track c.i) {
                             <th>{{ titulo(c.nombre) }}</th>
                           }
-                          @if (tieneArchivos(t)) {
+                          @if (tieneArchivos(t) && !archivoComun(t)) {
                             <th></th>
                           }
                         </tr>
@@ -39,7 +49,7 @@
                             @for (c of columnasVisibles(t); track c.i) {
                               <td [class]="claseCelda(fila, c.i)">{{ celda(t, fila, c.i) }}</td>
                             }
-                            @if (tieneArchivos(t)) {
+                            @if (tieneArchivos(t) && !archivoComun(t)) {
                               <td>
                                 @if (archivoDeFila(t, fila); as a) {
                                   <button class="btn btn-outline btn-sm" (click)="abrirArchivo(a)">📂 Abrir</button>

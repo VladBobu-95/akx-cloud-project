@@ -113,30 +113,33 @@ El sistema cataloga **ventas** (la empresa del propietario es el emisor) y **com
 
 **Resúmenes derivados, sin carpeta oculta** (cambio respecto al diseño anterior): los resúmenes agregados de ventas/compras **ya no** se materializan como archivos `resumen-ventas.md`/`resumen-compras.md` en una carpeta `/facturas`. Eran datos derivados de la BD que arrastraban mucha complejidad accidental (seguir la carpeta si el usuario la movía, colas de serialización para no pisar el `.md`, dedup/soft-delete/RAG de esos ficheros, y tener que ocultar la carpeta en cada listado). Ahora se calculan **al vuelo desde la BD** (página Facturas y consultas SQL del chat). Tampoco existen ya los `resumen-<archivo>.md` por factura (el markdown por factura sigue disponible como valor de retorno de `escanearFactura`, no como fichero). La migración `1776…-LimpiarResumenesFacturas` borra los `.md` y la carpeta `/facturas` que quedaran de la etapa anterior (los binarios MinIO quedan huérfanos, inofensivos). 
 
-**Rescate del membrete solo si hace falta** (`extraerTexto`, rama PDF): el OCR de la 1ª página existe para leer el emisor cuando va como imagen (TRAZA). Pero si la capa de texto YA trae "…Registro/Registre Mercantil…" (`tieneRegistroMercantil`), el emisor ya está en el texto y el OCR solo METE RUIDO (visto: el logo "AKX" leído como "ARX" desviaba la clasificación) — así que en ese caso NO se rasteriza. Repsol (texto completo, catalán) se salta el OCR y sale limpia; TRAZA (emisor solo en la imagen del pie) sí lo dispara.
+**Rescate del membrete solo si hace falta** (`extraerTexto`, rama PDF): el OCR de la 1ª página existe para leer el emisor cuando va como imagen (TRAZA). Pero si la capa de texto YA trae "…Registro/Registre Mercantil…" (`tieneRegistroMercantil`), el emisor ya está en el texto y el OCR solo METE RUIDO (visto con Tesseract: el logo "AKX" leído como "ARX" desviaba la clasificación) — así que en ese caso NO se rasteriza. Repsol (texto completo, catalán) se salta el OCR y sale limpia; TRAZA (emisor solo en la imagen del pie) sí lo dispara.
 
 **Edición manual** (`GET`/`PATCH /api/facturas/:id`, página Facturas): el modelo pequeño siempre falla algún campo; la edición es la red de seguridad. `actualizarFactura` parchea cabecera (con `normalizarFecha`/`normalizarMoneda`) y reemplaza las líneas enteras (borrar+insertar, para no dejar huérfanas); la corrección se refleja sola en los resúmenes, que se generan al vuelo desde la BD (ya no hay `.md` que regenerar). La pestaña "Sin clasificar" (filtro `tipo=desconocido`) lista las que hay que rescatar.
 
 **Reclasificar** (`POST /api/facturas/reclasificar`, botón "↻ Reclasificar"): el `tipo` se calcula y **guarda al escanear**, así que fijar/corregir el CIF de la empresa DESPUÉS no reclasifica lo ya escaneado — se quedaría todo en `desconocido`. `reclasificarFacturas` re-ejecuta `resolverDireccion` sobre los datos YA guardados (emisor/cliente/NIFs + el `textoExtraido` del archivo para el ancla CIF-en-texto), **sin re-escanear ni re-OCR** (instantáneo) y aprende el CIF por corroboración si aún no lo tiene (los resúmenes, al generarse desde la BD, ya reflejan el nuevo `tipo`). Caso típico: empresa creada sin CIF → todas `desconocido` → el admin pone su CIF en Equipo → "Reclasificar".
 
-## OCR y descripción de imágenes (`extraccion.service.ts`) — modelo de visión + Tesseract
+## OCR y descripción de imágenes (`extraccion.service.ts`) — solo el modelo de visión
 
-Un **único modelo** (`OLLAMA_MODEL`, multimodal) hace el chat, la extracción de facturas y el OCR
-de imágenes. Antes había una cascada de modelos (granite3.2-vision → deepseek-ocr → Tesseract, más
-una traducción al español con el modelo de chat); con un solo modelo se quitó todo eso, y con ello
-el agrupado por fases de la cola (prioridades `P_OCR`/`P_IMG_SCAN`), que solo servía para que
-Ollama no alternara modelos en la GPU. Todas las llamadas comparten `num_ctx` (`OLLAMA_NUM_CTX`) y
-`keep_alive` (`KEEP_ALIVE`, 30 min en `config/ollama.ts`): si difieren, Ollama recarga el modelo.
-Al arrancar, `verificarModelosOllama` avisa si el modelo no está descargado o no tiene visión.
+Un **único modelo** (`OLLAMA_MODEL`, multimodal) hace el chat, la extracción de facturas y todo el
+OCR: imágenes subidas y páginas de PDF (escaneados y membrete). Antes había una cascada de modelos
+(granite3.2-vision → deepseek-ocr → Tesseract.js, más una traducción al español con el modelo de
+chat); con un solo modelo se quitó todo eso, incluido **Tesseract** (`tesseract.js`,
+`backend/tessdata/`), y el agrupado por fases de la cola (prioridades `P_OCR`/`P_IMG_SCAN`), que
+solo servía para que Ollama no alternara modelos en la GPU. Tesseract se usaba para las páginas de
+PDF porque los VLM pequeños (granite) perdían el texto denso; con `qwen3.5` se lee con el mismo
+modelo (a validar con TRAZA y un PDF escaneado). Todas las llamadas comparten `num_ctx`
+(`OLLAMA_NUM_CTX`) y `keep_alive` (`KEEP_ALIVE`, 30 min en `config/ollama.ts`): si difieren, Ollama
+recarga el modelo. Al arrancar, `verificarModelosOllama` avisa si el modelo no está descargado o no
+tiene visión.
 
-`ocrImagen()`:
+`leerImagen()` (lo usan `ocrImagen` para imágenes y `ocrPaginasPdf` para páginas de PDF):
 
-1. **Normalización a PNG** (`aPng`, sharp): TODA imagen se reconvierte a PNG antes de mandarla a Ollama. Sin esto, **WEBP** hacía fallar la decodificación en llama.cpp (y en GPU llegaba a tirar el proceso de Ollama).
+1. **Normalización a PNG** (`aPng`, sharp, solo imágenes subidas; las páginas de PDF ya salen en PNG): sin esto, **WEBP** hacía fallar la decodificación en llama.cpp (y en GPU llegaba a tirar el proceso de Ollama).
 2. **Visión** (`consultarVision`, `OLLAMA_MODEL` sin modo pensamiento, máx. 1500 tokens): transcribe el texto si lo hay o describe la foto (en español) si no, en una sola llamada. Si trae tablas HTML, `limpiarTablasHtml()` las pasa a texto plano con `|`, consistente con pdf-parse.
-3. **¿Resultado pobre?** (`pareceResultadoPobre`): vacío, "meta-descripción" (habla SOBRE la estructura citando NOMBRES de campos en vez de valores) o negación de texto ("no hay texto...") sin nada útil detrás (<15 palabras) → Tesseract. Cuidado con falsos positivos: una descripción real puede empezar "La imagen presenta..." o terminar "No hay texto presente en la imagen"; por eso la meta-descripción se caza por frases concretas y la negación solo cuenta si el resto es corto.
-4. **Respaldo — Tesseract.js** (`ocrConTesseract`, worker singleton `createWorker(IDIOMAS_OCR)` con `IDIOMAS_OCR = "spa+cat+eng"` — castellano primero + catalán e inglés, para facturas escaneadas/fotos en esas lenguas; los `.traineddata` van vendorizados en `backend/tessdata/` y los copia el Dockerfile): OCR clásico por CPU, sin alucinaciones. Preprocesado (`prepararParaTesseract`: gris + normalización + reescalado a ancho mínimo 2000px) y **dos pasadas** (`PSM.AUTO` + `PSM.SPARSE_TEXT`) concatenadas: en pruebas reales `AUTO` se saltaba filas de tablas con bordes y `SPARSE_TEXT` las recuperaba pero perdía precisión en otros datos; ningún modo gana siempre, así que se quedan los dos y la IA de extracción escoge el dato correcto.
+3. **PDFs**: se rasterizan a escala 2 (~1190 px de ancho); un PDF sin capa de texto lee hasta `MAX_PAGINAS_OCR_PDF` = 5 páginas (una llamada al modelo por página; la tarea tiene un tope de `WORKER_TAREA_TIMEOUT_MS`).
 
-`pareceBucleDegenerado()` descarta la basura de un modelo de visión ante imagen sin texto (bucle repitiendo `<table:tr><td>…` o `None`). Juzga el contenido **tras quitar el HTML**, y la regla "menos de 3 palabras → basura" solo se aplica si el texto original TENÍA etiquetas (esas etiquetas también salen en tablas legítimas; una respuesta corta SIN etiquetas es pobre por otra razón).
+`pareceBucleDegenerado()` descarta la basura de un modelo de visión ante imagen sin texto (bucle repitiendo `<table:tr><td>…` o `None`). Juzga el contenido **tras quitar el HTML**, y la regla "menos de 3 palabras → basura" solo se aplica si el texto original TENÍA etiquetas (esas etiquetas también salen en tablas legítimas).
 
 ### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
 Ya **no** hay modal obligatorio al subir. El modelo de visión describe automáticamente al subir una foto sin texto. El endpoint queda para corregir/afinar a mano; lo que se guarde se combina con el OCR vía `combinarContenido` (que omite repetir el OCR si ya está contenido en la descripción) y lo leen el chat y el buscador. Escanear manualmente algo que no es factura ya no copia `textoExtraido` dentro de `descripcionManual` (solo guarda la pista real del usuario).
@@ -162,5 +165,5 @@ Para facturas subidas antes de esta función: escanearlas desde la página Factu
 
 - **Modelo**: el text-to-SQL depende del tamaño del modelo; con 3b/7b el SQL falla bastante más (columnas inventadas, sumas mezclando monedas). Los errores de Postgres se le devuelven para que corrija, pero con un modelo pequeño no siempre lo consigue. La extracción de facturas con un modelo pequeño también mezcla campos (p. ej. nombre+email+teléfono en `cliente`). Al ser un solo modelo para todo, tiene que ser multimodal (`qwen3.5:9b` por defecto).
 - **Cola compartida**: chat, OCR y facturas usan el mismo modelo; una subida masiva de imágenes ocupa la GPU y el chat responde más lento mientras tanto (el worker procesa de 1 en 1, `WORKER_CONCURRENCIA`).
-- **PDFs escaneados (sin capa de texto)**: se rasterizan las primeras páginas (`MAX_PAGINAS_OCR_PDF`) y se leen con Tesseract, no con el modelo de visión.
-- **Auto-escaneo al subir**: consume cómputo de OCR+IA por cada PDF/imagen, aunque la guardia `soloSiFactura` no guarde los que no son factura. Tesseract siempre en CPU.
+- **PDFs escaneados (sin capa de texto)**: solo se leen las primeras `MAX_PAGINAS_OCR_PDF` (5) páginas, con el modelo de visión. Sin él (Ollama caído o modelo sin visión) se quedan sin texto: ya no hay OCR por CPU de respaldo.
+- **Auto-escaneo al subir**: consume cómputo de OCR+IA por cada PDF/imagen, aunque la guardia `soloSiFactura` no guarde los que no son factura.

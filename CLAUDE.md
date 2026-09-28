@@ -30,7 +30,7 @@ akx-cloud-project/
 | ORM | TypeORM + PostgreSQL 16 |
 | Objetos | MinIO (S3-compatible) |
 | IA (chat + facturas + visión) | Ollama — un **único modelo multimodal** `qwen3.5:9b` (servidor, GPU); el chat lee la BD escribiendo SQL de solo lectura |
-| OCR | El mismo modelo de visión → Tesseract.js `spa+cat+eng` de respaldo (ver `NOTAS.md`) |
+| OCR | El mismo modelo de visión, para imágenes y páginas de PDF (ver `NOTAS.md`) |
 | Extracción | pdf-parse v2 (PDF), mammoth (DOCX) |
 | Auth / Validación | JWT + bcrypt / Zod |
 | Frontend | Angular 22 (signals, standalone), SCSS, marked v18 |
@@ -121,7 +121,7 @@ services/
   compartido.service.ts  carpetas compartidas por rol: CRUD admin, acceso por empresa+roles, subir/listar/descargar/borrar (almacenamiento único, dedup por hash)
   chat.service.ts        chatbot IA por SQL de solo lectura (ver abajo + NOTAS.md)
   contenido.service.ts   texto extraído / descripción manual de cada archivo + buscador del explorador (nombre y contenido, sin IA)
-  extraccion.service.ts  texto de PDF/DOCX/txt + OCR de imágenes (modelo de visión → Tesseract)
+  extraccion.service.ts  texto de PDF/DOCX/txt + OCR de imágenes y páginas de PDF (modelo de visión)
   facturas.service.ts    escaneo, auto-escaneo, clasificación venta/compra (CIF/nombre), edición manual, listados paginados
 ```
 
@@ -258,8 +258,8 @@ La petición actúa **como el usuario dueño de la clave** (mismos permisos/capa
 7. **Modelo**: `OLLAMA_THINK=true` activa el modo pensamiento (qwen3); `think` solo se manda a modelos que lo soportan (`soportaThink`). Mismo `OLLAMA_NUM_CTX` y `KEEP_ALIVE` (`config/ollama.ts`) en chat, facturas y OCR para que Ollama no recargue el modelo al alternar.
 
 ## OCR, texto extraído y buscador — resumen
-- **OCR imágenes** (`extraccion.service.ts`): una llamada al modelo de visión (`OLLAMA_MODEL`: transcribe o describe en español) y Tesseract si se queda corto, normalizando a PNG primero. Sin 2ª pasada ni traducción. Detalle completo en `NOTAS.md`.
-- **Tesseract multi-idioma**: `IDIOMAS_OCR = "spa+cat+eng"` (traineddata vendorizados en `backend/tessdata/`, copiados por el Dockerfile) — para facturas escaneadas/fotos en catalán/inglés, no solo castellano. Ampliar = editar la cadena + añadir el `.traineddata`.
+- **OCR** (`extraccion.service.ts`, `leerImagen`): todo con el modelo de visión (`OLLAMA_MODEL`: transcribe o describe en español), imágenes (normalizadas a PNG) y páginas de PDF. **Sin Tesseract** (se quitó), sin 2ª pasada ni traducción. Detalle completo en `NOTAS.md`.
+- **PDF escaneado** (sin capa de texto): se rasterizan y leen hasta 5 páginas (`MAX_PAGINAS_OCR_PDF`).
 - **OCR de página en PDFs con texto** (rescate del membrete): solo se rasteriza+OCR-ea la 1ª página si el texto `pareceFacturaConImportes` **y NO** trae ya la línea "Registro/Registre/Rexistro Mercantil" (`tieneRegistroMercantil`). Si el emisor ya está en la capa de texto (ej. factura de la luz), el OCR solo añadiría ruido (leer "AKX"→"ARX"); se salta.
 - **Texto extraído** (`contenido.service.ts`): al subir, la tarea `indexar` extrae el texto (PDF/DOCX/OCR) a `textoExtraido`. Sin embeddings (la búsqueda semántica con bge-m3 se quitó).
 - **Buscador del explorador**: todas las palabras de la consulta en nombre/descripción/texto (`unaccent ILIKE`, también parciales), primero las que casan por nombre; devuelve un trozo del contenido. Uno para lo personal y uno por carpeta compartida.

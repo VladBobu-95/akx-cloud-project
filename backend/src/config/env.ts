@@ -57,9 +57,10 @@ const envSchema = z.object({
   ),
   // El ÚNICO modelo de la app (multimodal): escribe el SQL del chat y redacta la
   // respuesta (chat.service.ts), extrae los datos de las facturas y hace el OCR /
-  // descripción de las imágenes (extraccion.service.ts). Al ser uno solo, Ollama
-  // no tiene que alternar modelos en la GPU. Debe tener visión (se avisa al
-  // arrancar si no la tiene: las imágenes caerían solo a Tesseract).
+  // descripción de las imágenes y de las páginas de PDF escaneadas
+  // (extraccion.service.ts). Al ser uno solo, Ollama no tiene que alternar modelos
+  // en la GPU. Debe tener visión (se avisa al arrancar si no la tiene: imágenes y
+  // PDFs escaneados se quedarían sin texto).
   OLLAMA_MODEL: z.string().default("qwen3.5:9b"),
   // Modo "pensamiento" del chat (qwen3 y similares). Mejora el SQL en preguntas
   // difíciles pero tarda bastante más. Se ignora si el modelo no lo tiene. El OCR
@@ -91,7 +92,7 @@ const envSchema = z.object({
   WORKER_POLL_MS: z.coerce.number().int().min(200).default(3000),
   WORKER_MAX_INTENTOS: z.coerce.number().int().min(1).default(3),
   //  - WORKER_TAREA_TIMEOUT_MS: tope DURO por tarea. Red de seguridad: aunque cada
-  //    operación pesada (rasterizado, Tesseract, Ollama) ya tiene su propio
+  //    operación pesada (rasterizado, Ollama) ya tiene su propio
   //    timeout, si alguna se colgara sin cortar (el archivo se queda "procesando"
   //    para siempre, tarea "en_proceso" eterna), este límite aborta la tarea, la
   //    marca como fallo y deja que reintente/termine. 10 min cubre de sobra el peor

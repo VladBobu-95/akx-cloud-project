@@ -67,7 +67,7 @@ const coincide = (instalado: string, esperado: string): boolean =>
 
 // Se llama al arrancar la API: avisa en los logs (sin bloquear el arranque) si el
 // modelo de .env no está descargado en Ollama o no tiene visión. Sin esto, falla
-// en silencio (chat caído, imágenes sin texto o solo con el de Tesseract) y nadie
+// en silencio (chat caído, imágenes y PDFs escaneados sin texto) y nadie
 // se entera hasta ver resultados de mala calidad.
 export const verificarModelosOllama = async (): Promise<void> => {
   const modelo = env.OLLAMA_MODEL;
@@ -91,8 +91,8 @@ export const verificarModelosOllama = async (): Promise<void> => {
   const capacidades = await capacidadesModelo(modelo);
   if (capacidades && !capacidades.includes("vision")) {
     console.warn(
-      `⚠️  OLLAMA_MODEL="${modelo}" no tiene visión: las imágenes solo se leerán con ` +
-        `Tesseract (sin descripción de fotos). Usa un modelo multimodal.`,
+      `⚠️  OLLAMA_MODEL="${modelo}" no tiene visión: las imágenes y los PDFs escaneados ` +
+        `se quedarán sin texto. Usa un modelo multimodal.`,
     );
   }
 };

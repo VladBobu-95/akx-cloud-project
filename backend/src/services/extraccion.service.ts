@@ -1,8 +1,6 @@
-import path from "path";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import sharp from "sharp";
-import { createWorker, OEM, PSM, type Worker } from "tesseract.js";
 import { env } from "../config/env";
 import { campoThink, KEEP_ALIVE, ollamaHeaders } from "../config/ollama";
 
@@ -43,7 +41,7 @@ const consultarVision = async (buffer: Buffer): Promise<string> => {
       keep_alive: KEEP_ALIVE,
     }),
     // Timeout para no colgarse si Ollama no puede cargar el modelo (ver
-    // OLLAMA_TIMEOUT_MS). Si salta, ocrImagen lo captura y prueba con Tesseract.
+    // OLLAMA_TIMEOUT_MS). Si salta, leerImagen lo captura y la imagen queda sin texto.
     signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
   });
   const data = (await res.json()) as {
@@ -83,9 +81,7 @@ const pareceBucleDegenerado = (texto: string): boolean => {
   if (palabras.length === 0) return true; // no quedó nada
   // Tras quitar etiquetas casi no queda texto → era sopa de tags vacía. OJO: esto
   // solo tiene sentido si el texto original tenía etiquetas — una respuesta corta
-  // SIN etiquetas (ej. "Factura" ante un documento denso que no llegó a
-  // transcribir) es pobre por otra razón y la juzga pareceResultadoPobre, que
-  // decide si probar con Tesseract.
+  // SIN etiquetas (ej. "Gato" como descripción de una foto) es válida.
   if (teniaTags && palabras.length < 3) return true;
   // Ristra de números sueltos ("1 2 3 ... 64"): un modelo de OCR que se cuelga
   // contando (visto al echar el prompt + contar). Todos los enteros son distintos,
@@ -149,177 +145,12 @@ const RE_REGISTRO_MERCANTIL_TXT = /(?:inscrit[ao]\b[^\n]{0,40}?)?re[gx]istr[eo]\
 export const tieneRegistroMercantil = (texto: string): boolean =>
   RE_REGISTRO_MERCANTIL_TXT.test(texto ?? "");
 
-// ¿Lo que sacó el modelo de visión se queda corto para ser un documento real?
-// OJO: NO es solo "pocas palabras", ni basta con buscar una frase concreta EN
-// CUALQUIER PARTE del texto — una buena descripción real de una foto sin texto
-// también puede empezar con "La imagen presenta..." (forma normal de describir
-// algo) o terminar con "No hay texto presente en la imagen" (el propio prompt le
-// pide confirmarlo), sin que eso la convierta en basura. Si se descarta solo por
-// contener esa frase, se pierde una respuesta buena y se dispara Tesseract sobre
-// una foto sin nada que leer — que devuelve ruido aleatorio con MÁS "palabras"
-// que la descripción buena, y ese ruido termina sustituyéndola (regresión real).
-// Por eso:
-//  - la meta-descripción ("habla SOBRE la estructura del documento citando los
-//    NOMBRES de los campos, no sus valores": "incluye detalles como la fecha de
-//    emisión...", "está dirigida a un cliente llamado...") se caza por frases
-//    concretas de ESE patrón, no por cómo empieza la frase — esas frases no
-//    aparecen en una descripción real de una foto;
-//  - la negación de texto ("no hay texto...") solo cuenta si el RESTO de la
-//    respuesta es corto — si va seguida de una descripción larga real, no es un
-//    fallo, es la conclusión normal de una buena respuesta;
-//  - y una respuesta de un puñado de palabras sueltas sin verbo/frase real (ej.
-//    "Factura": reconoce el tipo de documento pero no llega a transcribirlo).
-const METADESCRIPCION =
-  /\b(detalles como|estructurad[oa] en formato|columnas para|secciones para|menciona que|se proporciona un|dirigid[oa] a un cliente llamado|relacionad[oa] con una factura)\b/i;
-const NEGACION_TEXTO = /\bno\s+(hay|contiene|se\s+(ve|aprecia)|tiene)\b[^.]{0,30}\btexto\b/i;
-const UMBRAL_MUY_CORTO = 4;
-const UMBRAL_NEGACION = 15;
-const pareceResultadoPobre = (texto: string): boolean => {
-  const limpio = texto.trim();
-  if (!limpio) return true;
-  if (METADESCRIPCION.test(limpio)) return true;
-  const palabras = limpio.split(/\s+/).filter(Boolean).length;
-  if (NEGACION_TEXTO.test(limpio) && palabras < UMBRAL_NEGACION) return true;
-  return palabras < UMBRAL_MUY_CORTO;
-};
-
-// Tesseract.js: OCR clásico (no es un LLM de visión), corre en CPU y no compite
-// por la VRAM con Ollama. Es la red de seguridad cuando el modelo de visión no
-// consigue leer un documento bien impreso y legible — los modelos de visión reescalan la imagen a una resolución de entrada fija internamente, y
-// con texto denso/pequeño pierden legibilidad por el camino; Tesseract procesa la
-// imagen a su tamaño real, así que es buen complemento justo donde esos modelos
-// fallan (texto impreso, buen contraste). Al revés, es peor que ellos con fotos o
-// fondos complejos — por eso va el último, no el primero, y solo se usa su
-// resultado si de verdad aporta más que lo que ya había (ver ocrImagen).
-// Datos de idioma de Tesseract VENDORIZADOS (backend/tessdata/<lang>.traineddata,
-// copiados al contenedor por el Dockerfile). Sin langPath, createWorker DESCARGA
-// el .traineddata de un CDN la primera vez: en dev/casa (con internet) tardaba
-// ~0,5s, pero en el servidor SIN salida a internet esa descarga se COLGABA hasta
-// agotar el timeout —y se dispara por cada página de cada PDF de factura—, dejando
-// el archivo "colgado en procesando". Con langPath local + cacheMethod "none"
-// carga los ficheros del disco y NUNCA toca la red. gzip:false porque los
-// .traineddata vendorizados van sin comprimir. Se resuelve contra cwd, que es
-// backend/ en dev (npm run dev) y /app en el contenedor (WORKDIR /app): en ambos
-// casos, <cwd>/tessdata.
-const TESSDATA_DIR = path.join(process.cwd(), "tessdata");
-
-// Idiomas de OCR: castellano PRIMERO (idioma dominante de las facturas, Tesseract
-// lo usa como primario) + catalán e inglés. Cubre facturas escaneadas/fotos en
-// las lenguas más habituales (una factura de la luz en catalán, o una de un
-// proveedor extranjero en inglés) sin que el OCR pierda letras/palabras por leerlo
-// solo con datos de español. Cada idioma añade un .traineddata en tessdata/ y algo
-// de coste por pasada; spa+cat+eng es el equilibrio (añadir glg/eus es cambiar
-// esta cadena + vendorizar su fichero). Para PDFs con capa de texto no interviene
-// (eso lo lee pdf-parse); esto solo afecta al OCR de imágenes/escaneos.
-const IDIOMAS_OCR = "spa+cat+eng";
-
-let workerTesseract: Promise<Worker> | null = null;
-const obtenerWorkerTesseract = (): Promise<Worker> => {
-  if (!workerTesseract)
-    workerTesseract = createWorker(IDIOMAS_OCR, OEM.LSTM_ONLY, {
-      langPath: TESSDATA_DIR,
-      cachePath: TESSDATA_DIR,
-      cacheMethod: "none",
-      gzip: false,
-    });
-  return workerTesseract;
-};
-
-// Tras un fallo o timeout de Tesseract, tiramos el worker actual para no arrastrar
-// un worker en mal estado a la siguiente imagen (se recrea solo en la próxima llamada).
-// Anula el singleton al instante (la próxima llamada crea uno nuevo) y termina el
-// viejo en SEGUNDO PLANO y con timeout: si `createWorker` se quedó colgado (p. ej.
-// tesseract.js intentando descargar los datos del idioma sin salida a internet en
-// el contenedor), `await actual` bloquearía aquí para siempre — justo el cuelgue
-// que hay que evitar. Por eso no se espera su resolución.
-const reiniciarWorkerTesseract = async (): Promise<void> => {
-  const actual = workerTesseract;
-  workerTesseract = null;
-  if (actual) {
-    void conTimeout(actual, 5_000, "Tesseract terminate")
-      .then((w) => w.terminate())
-      .catch(() => {
-        /* el worker ya podía estar muerto o colgado; da igual */
-      });
-  }
-};
-
-// Preprocesado clásico de Tesseract: a diferencia de los modelos de visión (que
-// reescalan la entrada a una resolución fija interna, ver aPng — el preprocesado
-// no la sortea), Tesseract sí lee la imagen a su tamaño real. Gris (sin color que
-// distraiga), más resolución si la imagen es pequeña (más píxeles por carácter
-// en texto denso) y normalizar contraste mejoran la lectura en la práctica.
-const ANCHO_MIN_TESSERACT = 2000;
-// Devuelve un PNG NUEVO generado por sharp (decodifica los píxeles y reencodea) o
-// null si sharp no consigue decodificar la imagen. CLAVE de seguridad: si sharp
-// falla NO devolvemos los bytes originales — pasarle una imagen corrupta al libpng
-// nativo de Tesseract puede abortar el proceso ENTERO de la API (el error del
-// worker se relanza en process.nextTick y ningún try/catch lo atrapa), y la cola
-// durable reintentaría la tarea en cada arranque → bucle de reinicio. Es preferible
-// saltarse el OCR de esa imagen que arriesgar la caída del servicio.
-const prepararParaTesseract = async (buffer: Buffer): Promise<Buffer | null> => {
-  try {
-    const { width = 0 } = await sharp(buffer).metadata();
-    let imagen = sharp(buffer).grayscale().normalize();
-    if (width > 0 && width < ANCHO_MIN_TESSERACT) {
-      imagen = imagen.resize({ width: Math.round(width * (ANCHO_MIN_TESSERACT / width)) });
-    }
-    return await imagen.png().toBuffer();
-  } catch (err) {
-    console.error("[extraccion] imagen no decodificable para Tesseract, se omite OCR:", err);
-    return null;
-  }
-};
-
-// Dos pasadas con distinto modo de segmentación de página (PSM), no una sola:
-// probado con dos facturas reales, el modo automático (AUTO, el de por defecto)
-// lee bien la mayoría del documento pero en una tabla con bordes puede saltarse
-// FILAS ENTERAS (pasaba directo de la cabecera de la tabla al subtotal, sin
-// ninguna línea de artículo); el modo "texto disperso" (SPARSE_TEXT) sí las
-// recupera, pero pierde precisión en otras partes de OTRO documento (cantidades,
-// algún dígito mal leído). Ningún modo gana siempre, así que se combinan los dos
-// resultados en vez de escoger uno — la extracción de datos de factura (IA, más
-// adelante) ya tolera texto redundante/ruidoso y se queda con los datos reales
-// que encuentre en cualquiera de los dos.
-// Corta una recognize que se cuelgue: sin esto, un worker atascado bloquearía la
-// cola indefinidamente. Al saltar el timeout reiniciamos el worker (más abajo).
-const TIMEOUT_TESSERACT_MS = 60_000;
-const conTimeout = <T>(p: Promise<T>, ms: number, etiqueta = "Tesseract"): Promise<T> =>
+// Corta una promesa que se cuelgue (p. ej. el rasterizado del PDF).
+const conTimeout = <T>(p: Promise<T>, ms: number, etiqueta: string): Promise<T> =>
   Promise.race([
     p,
     new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${etiqueta} timeout`)), ms)),
   ]);
-
-// Nunca lanza: ante cualquier fallo/timeout devuelve "" y reinicia el worker, de
-// modo que un problema de OCR jamás tumba el proceso ni contamina la siguiente
-// imagen. La imagen que llega a Tesseract es siempre un PNG reencodeado por sharp
-// (ver prepararParaTesseract); si no se pudo decodificar, se omite el OCR.
-const ocrConTesseract = async (buffer: Buffer): Promise<string> => {
-  const preparado = await prepararParaTesseract(buffer);
-  if (!preparado) return "";
-  try {
-    // También con timeout: la PRIMERA creación del worker descarga los datos del
-    // idioma ("spa"); si eso se cuelga (sin salida a internet / CDN caído en el
-    // contenedor), sin este límite quedaría bloqueado antes incluso del recognize
-    // y colgaría la tarea de la cola para siempre.
-    const worker = await conTimeout(
-      obtenerWorkerTesseract(),
-      TIMEOUT_TESSERACT_MS,
-      "Tesseract init",
-    );
-    await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-    const auto = await conTimeout(worker.recognize(preparado), TIMEOUT_TESSERACT_MS);
-
-    await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
-    const disperso = await conTimeout(worker.recognize(preparado), TIMEOUT_TESSERACT_MS);
-
-    return `${auto.data.text ?? ""}\n\n${disperso.data.text ?? ""}`.trim();
-  } catch (err) {
-    console.error("[extraccion] Tesseract falló, se reinicia el worker:", err);
-    await reiniciarWorkerTesseract();
-    return "";
-  }
-};
 
 // Los modelos de visión de Ollama (vía llama.cpp) no decodifican WEBP de forma
 // fiable: con un WEBP normal (VP8, sin animación ni alpha) la 1ª pasada devolvía
@@ -336,62 +167,41 @@ const aPng = async (buffer: Buffer): Promise<Buffer> => {
   }
 };
 
-// OCR/descripción de una imagen:
-//   1. El modelo de visión transcribe el texto o describe la foto.
-//   2. Si lo que sacó es pobre (vacío, "Factura", "No hay texto"...), se prueba
-//      Tesseract (CPU, sin tocar la GPU) — los modelos de visión tienen una
-//      resolución de entrada fija y pueden perder el texto pequeño/denso de una
-//      factura perfectamente legible; Tesseract no tiene ese límite. Solo se
-//      adopta su resultado si no es también pobre (si lo es, era de verdad una
-//      foto sin texto).
-const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
-  const buffer = await aPng(bufferOriginal);
-
-  let resultado = "";
+// Texto de una imagen (foto o página de PDF) con el modelo de visión. Nunca
+// lanza: si Ollama falla o el modelo entra en bucle, devuelve "".
+const leerImagen = async (png: Buffer): Promise<string> => {
+  let texto = "";
   try {
-    resultado = await consultarVision(buffer);
+    texto = await consultarVision(png);
   } catch (err) {
     console.error("[extraccion] visión falló:", err);
   }
-  resultado = pareceBucleDegenerado(resultado) ? "" : limpiarTablasHtml(resultado.trim());
-
-  if (pareceResultadoPobre(resultado)) {
-    try {
-      const tess = await ocrConTesseract(buffer);
-      if (!pareceResultadoPobre(tess)) resultado = limpiarTablasHtml(tess.trim());
-    } catch (err) {
-      console.error("[extraccion] Tesseract falló:", err);
-    }
-  }
-
-  return resultado;
+  return pareceBucleDegenerado(texto) ? "" : limpiarTablasHtml(texto.trim());
 };
 
+// OCR/descripción de una imagen subida: el modelo de visión transcribe el texto o
+// describe la foto.
+const ocrImagen = async (buffer: Buffer): Promise<string> => leerImagen(await aPng(buffer));
+
 // Escala de rasterizado del PDF antes del OCR: a escala 1 la página A4 sale a
-// ~595px de ancho y el texto pequeño/denso se pierde; x2 (~1190px) le da a
-// Tesseract píxeles de sobra por carácter sin disparar el coste. Tope de páginas
-// para un PDF escaneado sin capa de texto: acota el coste del OCR (2 pasadas de
-// Tesseract por página) en documentos largos — el membrete/emisor y casi todas
-// las facturas caben en muchas menos.
+// ~595px de ancho y el texto pequeño/denso se pierde; x2 (~1190px) basta para
+// leerlo. Tope de páginas para un PDF escaneado sin capa de texto: cada página es
+// una llamada al modelo (varios segundos), y la tarea entera tiene un tope de
+// WORKER_TAREA_TIMEOUT_MS — el membrete/emisor y casi todas las facturas caben en
+// muchas menos.
 const ESCALA_OCR_PDF = 2;
-const MAX_PAGINAS_OCR_PDF = 8;
-// Timeout DURO del rasterizado: el worker de la cola no tiene timeout por tarea,
-// así que si getScreenshot se colgara (visto: el archivo se quedaba "procesando"
-// para siempre — puede pasar en el contenedor por las libs nativas de canvas/
-// pdfjs), la tarea quedaría "en_proceso" eternamente. Con esto, si el rasterizado
-// no termina a tiempo se aborta y la extracción sigue solo con la capa de texto
-// de pdf-parse (el comportamiento previo a añadir el OCR de página).
+const MAX_PAGINAS_OCR_PDF = 5;
+// Timeout DURO del rasterizado: si getScreenshot se colgara (visto: el archivo se
+// quedaba "procesando" para siempre — puede pasar en el contenedor por las libs
+// nativas de canvas/pdfjs), se aborta y la extracción sigue solo con la capa de
+// texto de pdf-parse.
 const TIMEOUT_RASTER_MS = 30_000;
 
 // Rasteriza las primeras `maxPaginas` de un PDF (con la MISMA instancia de
-// PDFParse ya abierta) y devuelve el texto que el OCR saca de esas imágenes.
-// Sirve para leer lo que pdf-parse NO ve: texto que en el PDF va como IMAGEN
-// —logos/membretes con el nombre y NIF del emisor, o una factura entera
-// escaneada—. Usa Tesseract directamente en vez del modelo de visión
-// (ocrImagen) porque una página de PDF renderizada es texto impreso limpio a
-// resolución real (el caso ideal de Tesseract), mientras que los VLM la
-// reescalan a baja resolución y pierden el texto denso (uno llegó a devolver
-// "no se puede transcribir el contenido" ante esta misma página).
+// PDFParse ya abierta) y devuelve el texto que el modelo de visión saca de esas
+// imágenes. Sirve para leer lo que pdf-parse NO ve: texto que en el PDF va como
+// IMAGEN —logos/membretes con el nombre y NIF del emisor, o una factura entera
+// escaneada—.
 // Nunca lanza: si el rasterizado falla (p. ej. faltan libs nativas de canvas en
 // el contenedor), devuelve "" y la extracción continúa solo con la capa de texto.
 const ocrPaginasPdf = async (parser: PDFParse, maxPaginas: number): Promise<string> => {
@@ -409,7 +219,7 @@ const ocrPaginasPdf = async (parser: PDFParse, maxPaginas: number): Promise<stri
   }
   const textos: string[] = [];
   for (const p of paginas) {
-    const t = (await ocrConTesseract(Buffer.from(p.data))).trim();
+    const t = await leerImagen(Buffer.from(p.data));
     if (t) textos.push(t);
   }
   return textos.join("\n\n");
@@ -480,7 +290,7 @@ export const extraerTexto = async (
       return limpiar(buffer.toString("utf8"));
     }
 
-    // Imagen: OCR/descripción con el modelo de visión (y Tesseract de respaldo).
+    // Imagen: OCR/descripción con el modelo de visión.
     if (/^image\//.test(mt)) {
       return limpiar(await ocrImagen(buffer));
     }

@@ -91,11 +91,35 @@ export class InicioPage implements AfterViewInit {
   // El backend manda todas las filas (máx. 200); se paginan en memoria.
   private readonly FILAS_POR_PAGINA = 10;
 
-  // Columnas visibles: los identificadores ("*_id") no se enseñan.
-  protected columnasVisibles(t: TablaChat): { nombre: string; i: number }[] {
+  // Columnas de datos: los identificadores ("*_id") no se enseñan.
+  private columnasDatos(t: TablaChat): { nombre: string; i: number }[] {
     return t.columnas
       .map((c, i) => ({ nombre: c, i }))
       .filter(({ nombre }) => !nombre.endsWith('_id'));
+  }
+
+  private esConstante(t: TablaChat, i: number): boolean {
+    return t.filas.length > 1 && t.filas.every((f) => f[i] === t.filas[0][i]);
+  }
+
+  // Columnas con el mismo valor en todas las filas (p. ej. la cabecera de una
+  // factura unida a sus líneas): se muestran una vez encima de la tabla en vez
+  // de repetirse en cada fila. Si todas lo son (filas idénticas), tabla normal.
+  protected columnasFijas(t: TablaChat): { nombre: string; i: number }[] {
+    const datos = this.columnasDatos(t);
+    const fijas = datos.filter((c) => this.esConstante(t, c.i));
+    return fijas.length === datos.length ? [] : fijas;
+  }
+
+  protected columnasVisibles(t: TablaChat): { nombre: string; i: number }[] {
+    const fijas = new Set(this.columnasFijas(t).map((c) => c.i));
+    return this.columnasDatos(t).filter((c) => !fijas.has(c.i));
+  }
+
+  // Si todas las filas son del mismo archivo, un solo botón "Abrir" arriba.
+  protected archivoComun(t: TablaChat): { id: string; nombre: string } | null {
+    const iId = t.columnas.indexOf('archivo_id');
+    return iId >= 0 && this.esConstante(t, iId) ? this.archivoDeFila(t, t.filas[0]) : null;
   }
 
   protected titulo(columna: string): string {

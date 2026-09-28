@@ -213,7 +213,7 @@ const manejarFallo = async (t: Tarea, err: unknown): Promise<void> => {
 };
 
 // Timeout DURO por tarea (red de seguridad, ver WORKER_TAREA_TIMEOUT_MS). Cada
-// operación pesada (rasterizado, Tesseract, llamadas a Ollama) ya tiene su propio
+// operación pesada (rasterizado, llamadas a Ollama) ya tiene su propio
 // timeout; esto cubre el caso de que, pese a ello, el cuerpo de una tarea no
 // termine y la deje "en_proceso" para siempre (archivo pegado en "procesando").
 // Al saltar, manejarFallo la reintenta o la marca "error" y el archivo sale del
