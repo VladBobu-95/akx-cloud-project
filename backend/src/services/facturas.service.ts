@@ -98,7 +98,7 @@ const SCHEMA_FACTURA = {
 const PROMPT_FACTURA = `Extrae los datos de la factura del texto y devuélvelos en JSON.
 Campos:
 - numero: el número de la factura (no el de cliente, contrato, póliza, pedido ni albarán).
-- fecha: la fecha de emisión de la factura, en formato YYYY-MM-DD (no la de vencimiento ni la del periodo facturado).
+- fecha: la fecha de emisión de la factura, en formato YYYY-MM-DD (no la de vencimiento ni la del periodo facturado). En las facturas españolas las fechas numéricas van día/mes/año: 10/09/2026 es el 10 de septiembre → 2026-09-10.
 - emisor y emisorNif: la empresa que EMITE y COBRA la factura, y su NIF/CIF/VAT.
 - cliente y clienteNif: el DESTINATARIO al que se factura, y su NIF/CIF/VAT.
 - moneda: código ISO de 3 letras de la divisa de los importes (EUR para € o euros, USD para $ o dólares, GBP para £ o libras…); si no se indica ninguna, EUR.
@@ -543,13 +543,56 @@ const normalizarMoneda = (m?: string): string => {
   return "EUR";
 };
 
+// ¿Es una fecha real del calendario? ("2026-02-30" o "2026-13-01" no lo son, y
+// Postgres rechazaría el INSERT de la factura entera.)
+const esFechaIsoValida = (iso: string): boolean => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const f = new Date(Date.UTC(y, m - 1, d));
+  return f.getUTCFullYear() === y && f.getUTCMonth() === m - 1 && f.getUTCDate() === d;
+};
+
 // Normaliza la fecha a ISO (YYYY-MM-DD); admite dd/mm/aaaa. null si no es válida.
 const normalizarFecha = (f?: string): string | null => {
   if (!f) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(f)) return f;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(f)) return esFechaIsoValida(f) ? f : null;
   const m = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(f);
-  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  if (m) {
+    const iso = `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return esFechaIsoValida(iso) ? iso : null;
+  }
   return null;
+};
+
+// Fechas numéricas del texto leídas a la española (día/mes/año), en ISO.
+const fechasDelTexto = (texto: string): Set<string> => {
+  const fechas = new Set<string>();
+  for (const m of texto.matchAll(/\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})\b/g)) {
+    const anio = m[3].length === 2 ? `20${m[3]}` : m[3];
+    const iso = `${anio}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    if (esFechaIsoValida(iso)) fechas.add(iso);
+  }
+  return fechas;
+};
+
+// Corrige el día y el mes intercambiados por el modelo. Una factura española pone
+// "10/09/2026" (10 de septiembre) y el modelo a veces lo lee a la americana y
+// devuelve 2026-10-09 (octubre): la factura salía en el mes equivocado. Solo se
+// corrige con evidencia clara: la fecha del modelo está en el FUTURO (una factura
+// no suele tener fecha posterior a hoy), la invertida no, y el texto contiene esa
+// fecha invertida leída a la española. Así no se toca una factura americana bien
+// leída (09/10/2026 = 10 de septiembre ya pasado → no está en el futuro).
+export const corregirFechaConTexto = (
+  fecha: string | null,
+  texto: string,
+  hoy: Date = new Date(),
+): string | null => {
+  const m = fecha ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(fecha) : null;
+  if (!fecha || !m || m[2] === m[3] || Number(m[3]) > 12) return fecha;
+  const invertida = `${m[1]}-${m[3]}-${m[2]}`;
+  const mañana = new Date(hoy.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const enFuturo = (iso: string): boolean => iso > mañana;
+  if (!enFuturo(fecha) || enFuturo(invertida)) return fecha;
+  return fechasDelTexto(texto).has(invertida) ? invertida : fecha;
 };
 
 // Formato monetario español legible POR DIVISA: separador de miles (.), coma
@@ -759,7 +802,7 @@ export const escanearFactura = async (
       propietario: { id: usuarioId } as Usuario,
       archivo: { id: archivo.id } as Archivo,
       numero: datos.numero,
-      fecha: normalizarFecha(datos.fecha),
+      fecha: corregirFechaConTexto(normalizarFecha(datos.fecha), contenido),
       emisor: datos.emisor,
       emisorNif: datos.emisorNif ?? null,
       cliente: datos.cliente,

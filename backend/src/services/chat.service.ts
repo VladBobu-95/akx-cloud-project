@@ -172,7 +172,9 @@ REGLAS SQL
 - Una sola sentencia SELECT (o WITH … SELECT), siempre con el prefijo chat. en las tablas.
 - Excluye la papelera (NOT en_papelera) salvo que pregunte por la papelera.
 - Para contar, sumar o hacer medias usa count(), sum() o avg() en la consulta: de cada resultado solo ves las ${MAX_FILAS_MODELO} primeras filas, así que nunca cuentes ni sumes filas tú.
-- Fechas relativas con current_date (hora de Madrid): este mes = fecha >= date_trunc('month', current_date); el mes pasado = fecha >= date_trunc('month', current_date) - interval '1 month' AND fecha < date_trunc('month', current_date); este año = fecha >= date_trunc('year', current_date).
+- Fechas: usa SIEMPRE un rango cerrado, con inicio (>=) y fin (<); nunca solo el inicio, o se cuelan los meses siguientes.
+  Un mes con nombre ("septiembre") sin año es el de este año si ya ha llegado, y si no el del año pasado: septiembre = fecha >= DATE '2026-09-01' AND fecha < DATE '2026-10-01' (con el año que toque).
+  Relativas con current_date (hora de Madrid): este mes = fecha >= date_trunc('month', current_date) AND fecha < date_trunc('month', current_date) + interval '1 month'; el mes pasado = fecha >= date_trunc('month', current_date) - interval '1 month' AND fecha < date_trunc('month', current_date); este año = fecha >= date_trunc('year', current_date) AND fecha < date_trunc('year', current_date) + interval '1 year'.
 - Texto: compara sin distinguir mayúsculas ni tildes: unaccent(columna) ILIKE unaccent('%texto%').
 - Carpeta X incluye sus subcarpetas: (carpeta = '/x' OR carpeta LIKE '/x/%').
 - Buscar un archivo por nombre: si da el nombre completo con extensión ("factura.pdf"), busca PRIMERO ese nombre exacto: unaccent(nombre) ILIKE unaccent('factura.pdf') (sin %). Si no sale, o si no dio la extensión, busca la parte distintiva sin la extensión (unaccent(nombre) ILIKE unaccent('%texto%')). Si aún no sale nada, haz OTRA consulta más amplia (una palabra del nombre, o los archivos más recientes) antes de decir que no existe.
@@ -197,6 +199,7 @@ ${
 SELECT moneda, count(*) AS facturas, sum(subtotal) AS base, sum(iva) AS iva, sum(total) AS total
 FROM chat.facturas
 WHERE tipo = 'venta' AND fecha >= date_trunc('quarter', current_date)
+  AND fecha < date_trunc('quarter', current_date) + interval '3 months'
 GROUP BY moneda
 \`\`\`
 Usuario: mis 5 mejores clientes

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
 import { pareceFacturaConImportes, tieneRegistroMercantil } from "../src/services/extraccion.service";
 import {
+  corregirFechaConTexto,
   reconciliarPartes,
   resolverDireccion,
   type DatosFactura,
@@ -128,5 +129,35 @@ describe("resolverDireccion", () => {
   it("ninguna parte es la empresa → desconocido", () => {
     const d: DatosFactura = { emisor: "Foo SL", cliente: "Bar SL" };
     expect(resolverDireccion(d, AKX)).toBe("desconocido");
+  });
+});
+
+describe("corregirFechaConTexto (día/mes intercambiados)", () => {
+  const hoy = new Date("2026-09-28T10:00:00Z");
+
+  it("10/09/2026 leído a la americana (2026-10-09, futuro) → 2026-09-10", () => {
+    expect(corregirFechaConTexto("2026-10-09", "Fecha factura: 10/09/2026", hoy)).toBe("2026-09-10");
+  });
+
+  it("fecha bien leída → no se toca", () => {
+    expect(corregirFechaConTexto("2026-09-10", "Fecha factura: 10/09/2026", hoy)).toBe("2026-09-10");
+  });
+
+  it("factura americana bien leída (pasada) → no se invierte", () => {
+    // 09/10/2026 en EE. UU. = 10 de septiembre; ya pasó, así que se respeta.
+    expect(corregirFechaConTexto("2026-09-10", "Invoice date: 09/10/2026", hoy)).toBe("2026-09-10");
+  });
+
+  it("fecha futura sin la invertida en el texto → no se inventa", () => {
+    expect(corregirFechaConTexto("2026-10-09", "Vencimiento: 9 de octubre de 2026", hoy)).toBe("2026-10-09");
+  });
+
+  it("día > 12 (no se puede invertir) o día = mes → sin cambios", () => {
+    expect(corregirFechaConTexto("2026-10-25", "25/10/2026", hoy)).toBe("2026-10-25");
+    expect(corregirFechaConTexto("2026-10-10", "10/10/2026", hoy)).toBe("2026-10-10");
+  });
+
+  it("sin fecha → null", () => {
+    expect(corregirFechaConTexto(null, "10/09/2026", hoy)).toBeNull();
   });
 });
