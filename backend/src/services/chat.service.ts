@@ -110,7 +110,7 @@ chat.lineas_factura — conceptos de cada factura
 
   const reglaFacturas = c.puedeFacturas
     ? `- Datos de una factura (resumen, emisor, cliente, número, fecha, importes, conceptos): sácalos SIEMPRE de chat.facturas y chat.lineas_factura, NUNCA del contenido del archivo. Vale también para las facturas escaneadas de una IMAGEN o foto. Son los datos ya extraídos y revisados (el usuario los corrige a mano); el texto del documento está sin procesar, puede venir cortado o con dígitos mal leídos y no distingue bien emisor y cliente.
-- Para encontrar una factura busca en chat.facturas por archivo, numero, emisor o cliente (unaccent ILIKE) Y TAMBIÉN por lo que pone en su documento: f.archivo_id IN (SELECT archivo_id FROM chat.archivos WHERE unaccent(contenido) ILIKE unaccent('%texto%')). Así la encuentras aunque el archivo se llame "IMG_1234.jpg" o el nombre de la empresa se extrajera mal. Solo si no está en chat.facturas, dilo y ofrece leer el documento.
+- Para encontrar una factura: si da el nombre del archivo, búscala por ese nombre exacto (unaccent(f.archivo) ILIKE unaccent('factura.pdf')). Si da una empresa o un concepto, busca en chat.facturas por emisor o cliente (unaccent ILIKE) Y TAMBIÉN por lo que pone en su documento: f.archivo_id IN (SELECT archivo_id FROM chat.archivos WHERE unaccent(contenido) ILIKE unaccent('%texto%')); así la encuentras aunque el archivo se llame "IMG_1234.jpg" o el nombre de la empresa se extrajera mal. NUNCA busques en el contenido palabras genéricas como "factura", "total" o "iva": salen en todas las facturas. Solo si no está en chat.facturas, dilo y ofrece leer el documento.
 - Una factura puede no tener fecha (NULL, p. ej. una foto poco legible): no sale en filtros por fecha. Si al filtrar por fecha no encuentras la que busca, prueba sin ese filtro. Ordena con NULLS LAST.
 - Cada fila del resultado es un registro distinto: NUNCA mezcles datos de filas distintas (la fecha de una factura con el emisor o el total de otra). Si salen varias facturas, trata cada una por separado identificándola por numero o archivo; si pidió una sola y salen varias, dile cuáles hay y pregunta cuál quiere.
 - Importes: NUNCA sumes monedas distintas; agrupa por moneda. Ventas = tipo 'venta', compras/gastos = tipo 'compra'. IVA repercutido = iva de ventas, soportado = iva de compras.
@@ -175,7 +175,9 @@ REGLAS SQL
 - Fechas relativas con current_date (hora de Madrid): este mes = fecha >= date_trunc('month', current_date); el mes pasado = fecha >= date_trunc('month', current_date) - interval '1 month' AND fecha < date_trunc('month', current_date); este año = fecha >= date_trunc('year', current_date).
 - Texto: compara sin distinguir mayúsculas ni tildes: unaccent(columna) ILIKE unaccent('%texto%').
 - Carpeta X incluye sus subcarpetas: (carpeta = '/x' OR carpeta LIKE '/x/%').
-- Buscar un archivo por nombre: usa la parte distintiva SIN la extensión (unaccent(nombre) ILIKE unaccent('%texto%'), no '%texto.webp%'). Si no sale nada, haz OTRA consulta más amplia (una palabra del nombre, o los archivos más recientes) antes de decir que no existe.
+- Buscar un archivo por nombre: si da el nombre completo con extensión ("factura.pdf"), busca PRIMERO ese nombre exacto: unaccent(nombre) ILIKE unaccent('factura.pdf') (sin %). Si no sale, o si no dio la extensión, busca la parte distintiva sin la extensión (unaccent(nombre) ILIKE unaccent('%texto%')). Si aún no sale nada, haz OTRA consulta más amplia (una palabra del nombre, o los archivos más recientes) antes de decir que no existe.
+- Al buscar un archivo por nombre no filtres por carpeta_compartida (puede estar en una carpeta compartida) salvo que el usuario lo pida.
+- Si un resultado trae muchas filas y no ves lo que buscas entre las mostradas, NO digas que no existe: afina la consulta (nombre exacto, carpeta, fecha) y vuelve a consultar.
 - Al listar archivos o facturas incluye archivo_id (permite al usuario abrirlos) y un ORDER BY con sentido.
 ${reglaFacturas}
 ${reglaContenido}
@@ -400,7 +402,9 @@ const resultadoParaModelo = (r: ResultadoSql): string => {
 
   const total = r.truncada ? `más de ${MAX_FILAS_TABLA}` : String(r.filas.length);
   const aviso =
-    lineas.length < r.filas.length ? ` (se muestran las ${lineas.length} primeras)` : "";
+    lineas.length < r.filas.length
+      ? ` (se muestran las ${lineas.length} primeras; si lo que buscas no está, afina la consulta en vez de decir que no existe)`
+      : "";
   return `Filas: ${total}${aviso}\n${cabecera}${lineas.join("\n")}`;
 };
 
