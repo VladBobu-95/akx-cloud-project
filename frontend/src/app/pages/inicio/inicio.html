@@ -17,7 +17,7 @@
           </div>
         } @else {
           @for (m of mensajes(); track $index) {
-            <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'">
+            <div class="burbuja" [class.usuario]="m.de === 'usuario'" [class.bot]="m.de === 'bot'" [class.con-tabla]="m.de === 'bot' && !!m.tabla">
               @if (m.de === 'bot') {
                 <div class="md" [innerHTML]="renderBot(m.texto)"></div>
                 @if (m.tabla; as t) {
@@ -37,7 +37,7 @@
                         @for (fila of filasVisibles(t); track $index) {
                           <tr>
                             @for (c of columnasVisibles(t); track c.i) {
-                              <td>{{ celda(t, fila, c.i) }}</td>
+                              <td [class]="claseCelda(fila, c.i)">{{ celda(t, fila, c.i) }}</td>
                             }
                             @if (tieneArchivos(t)) {
                               <td>

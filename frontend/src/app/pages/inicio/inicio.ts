@@ -167,6 +167,14 @@ export class InicioPage implements AfterViewInit {
     return s.length > 120 ? s.slice(0, 119) + '…' : s;
   }
 
+  // Números (importes, tamaños) a la derecha y sin partir; fechas sin partir.
+  protected claseCelda(fila: ValorTabla[], i: number): string {
+    const v = fila[i];
+    if (typeof v === 'number') return 'num';
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return 'fecha';
+    return '';
+  }
+
   private formatTamano(bytes: number): string {
     const unidades = ['B', 'KB', 'MB', 'GB'];
     let n = bytes;

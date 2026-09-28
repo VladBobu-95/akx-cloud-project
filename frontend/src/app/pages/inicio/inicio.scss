@@ -141,11 +141,29 @@
         border-collapse: collapse;
         font-size: 0.85rem;
       }
+      /* Con tabla, la burbuja puede ocupar todo el ancho (con el 75% las
+         columnas se apretaban); si aun así no cabe, scroll horizontal. */
+      .burbuja.con-tabla {
+        max-width: 100%;
+      }
       .tabla-chat th,
       .tabla-chat td {
         border: 1px solid rgba(255, 255, 255, 0.14);
         padding: 5px 8px;
         text-align: left;
+        /* La burbuja parte palabras en cualquier punto (break-word); en la
+           tabla eso cortaba números y palabras por la mitad para no
+           ensancharla. Aquí solo se parte por espacios. */
+        word-break: normal;
+        overflow-wrap: normal;
+      }
+      .tabla-chat td.num,
+      .tabla-chat td.fecha {
+        white-space: nowrap;
+      }
+      .tabla-chat td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
       }
       .tabla-chat th {
         background: rgba(255, 255, 255, 0.06);
