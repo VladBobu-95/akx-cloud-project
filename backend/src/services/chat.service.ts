@@ -110,6 +110,7 @@ chat.lineas_factura — conceptos de cada factura
 
   const reglaFacturas = c.puedeFacturas
     ? `- Datos de una factura (resumen, emisor, cliente, número, fecha, importes, conceptos): sácalos SIEMPRE de chat.facturas y chat.lineas_factura, NUNCA del contenido del archivo. Son los datos ya extraídos y revisados (el usuario los corrige a mano); el texto del documento está sin procesar, puede venir cortado y no distingue bien emisor y cliente. Busca la factura por archivo, numero, emisor o cliente (unaccent ILIKE). Solo si no está en chat.facturas, dilo y ofrece leer el documento.
+- Cada fila del resultado es un registro distinto: NUNCA mezcles datos de filas distintas (la fecha de una factura con el emisor o el total de otra). Si salen varias facturas, trata cada una por separado identificándola por numero o archivo; si pidió una sola y salen varias, dile cuáles hay y pregunta cuál quiere.
 - Importes: NUNCA sumes monedas distintas; agrupa por moneda. Ventas = tipo 'venta', compras/gastos = tipo 'compra'. IVA repercutido = iva de ventas, soportado = iva de compras.
 - Filtra por tipo SOLO si pregunta por ventas/facturado/clientes o por compras/gastos/proveedores. Si pregunta por "facturas" en general (en dólares, de un mes, de un emisor…), NO filtres por tipo: incluye ventas, compras y 'desconocido'.
 - moneda es el código ISO en mayúsculas: dólares = 'USD', euros = 'EUR', libras = 'GBP', yenes = 'JPY'. Compara con igualdad (moneda = 'USD'), nunca con el símbolo ni buscando en el contenido.
@@ -206,7 +207,7 @@ SELECT f.archivo_id, f.archivo, f.numero, f.fecha, f.tipo, f.emisor, f.cliente, 
 FROM chat.facturas f LEFT JOIN chat.lineas_factura l ON l.factura_id = f.factura_id
 WHERE unaccent(f.archivo) ILIKE unaccent('%repsol%') OR unaccent(f.emisor) ILIKE unaccent('%repsol%')
    OR unaccent(f.cliente) ILIKE unaccent('%repsol%')
-ORDER BY f.fecha DESC
+ORDER BY f.fecha DESC, f.numero
 \`\`\`
 `
     : ""
@@ -354,24 +355,36 @@ export const ejecutarSql = async (token: string, sql: string): Promise<Resultado
 
 // Resultado resumido para el modelo, con los textos largos recortados: si hay
 // pocas filas se deja más texto (leer un documento concreto); con muchas, menos.
-// Con pocas filas, cada una como objeto JSON (más fácil de leer); con muchas, las
-// columnas una sola vez y cada fila como array, que gasta bastantes menos tokens
-// que repetir los nombres de columna en cada fila. Tope total MAX_CHARS_RESULTADO
-// (se cortan filas enteras, avisando de cuántas se enseñan).
+// Cada fila va como objeto JSON con sus nombres de columna: probado con filas
+// como arrays (columnas una vez arriba), el modelo contaba mal las posiciones y
+// mezclaba datos de columnas y filas (fecha/emisor de otra factura). Para ahorrar
+// tokens sin esa ambigüedad, las columnas con el MISMO valor en todas las filas
+// (p. ej. la cabecera de una factura unida a sus líneas) se dan una sola vez.
+// Tope total MAX_CHARS_RESULTADO (se cortan filas enteras, avisando).
 const resultadoParaModelo = (r: ResultadoSql): string => {
   if (r.filas.length === 0) return "La consulta no devolvió ninguna fila.";
-  const pocas = r.filas.length <= 3;
-  const maxTexto = r.filas.length === 1 ? 2500 : pocas ? 1100 : 200;
+  const maxTexto = r.filas.length === 1 ? 2500 : r.filas.length <= 3 ? 1100 : 200;
   const recortar = (v: Valor): Valor =>
     typeof v === "string" && v.length > maxTexto ? `${v.slice(0, maxTexto)}…` : v;
 
-  const cabecera = pocas ? "" : `Columnas: ${JSON.stringify(r.columnas)}\n`;
+  const iguales = r.columnas
+    .map((_, i) => i)
+    .filter((i) => r.filas.length > 1 && r.filas.every((f) => f[i] === r.filas[0][i]));
+  const comunes = iguales.length < r.columnas.length ? new Set(iguales) : new Set<number>();
+  const aObjeto = (fila: Valor[], incluir: (i: number) => boolean): string =>
+    JSON.stringify(
+      Object.fromEntries(
+        r.columnas.flatMap((c, i) => (incluir(i) ? [[c, recortar(fila[i])]] : [])),
+      ),
+    );
+
+  const cabecera = comunes.size
+    ? `Igual en todas las filas: ${aObjeto(r.filas[0], (i) => comunes.has(i))}\n`
+    : "";
   const lineas: string[] = [];
   let usados = cabecera.length;
   for (const fila of r.filas.slice(0, MAX_FILAS_MODELO)) {
-    const linea = pocas
-      ? JSON.stringify(Object.fromEntries(r.columnas.map((c, i) => [c, recortar(fila[i])])))
-      : JSON.stringify(fila.map(recortar));
+    const linea = aObjeto(fila, (i) => !comunes.has(i));
     if (lineas.length > 0 && usados + linea.length > MAX_CHARS_RESULTADO) break;
     lineas.push(linea);
     usados += linea.length + 1;

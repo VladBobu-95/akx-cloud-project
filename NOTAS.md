@@ -60,8 +60,11 @@ al explorador).
 
 **Contexto (8k) y prompt**: si la conversación pasa de `OLLAMA_NUM_CTX`, Ollama descarta mensajes
 en silencio y el modelo responde sin los datos (inventa). Por eso: cada resultado que ve el modelo
-tiene tope (`MAX_CHARS_RESULTADO` 4000 caracteres, filas enteras; con más de 3 filas, columnas una
-vez + filas como arrays en vez de objetos JSON), y al llegar uno nuevo los anteriores del mismo
+tiene tope (`MAX_CHARS_RESULTADO` 4000 caracteres, filas enteras). Cada fila va como objeto JSON con
+sus columnas; las columnas con el mismo valor en todas las filas (cabecera de una factura unida a sus
+líneas) se dan una vez ("Igual en todas las filas"). Se probó mandar las filas como arrays con las
+columnas una sola vez arriba y el modelo contaba mal las posiciones: mezclaba fecha/emisor/cliente
+de otra fila o factura. Al llegar un resultado nuevo, los anteriores del mismo
 mensaje se recortan a 600 (`compactarResultadosAnteriores`). Repetir una consulta idéntica no se
 ejecuta (se le pide que responda). El prompt pide `count/sum/avg` en SQL porque solo ve 25 filas.
 El prompt va de lo fijo a lo variable (nombre/empresa/fecha al final, sección CONTEXTO) para que
