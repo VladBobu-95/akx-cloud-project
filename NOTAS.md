@@ -58,6 +58,12 @@ así que la protección está en la BD, no en el prompt:
 rellena. `gestion_archivos` no aplica: el chat no modifica nada (para mover/borrar/subir remite
 al explorador).
 
+**Datos de facturas siempre de `chat.facturas`**: al pedir "resumen de la factura X", el modelo
+leía `left(contenido, 2500)` del archivo en vez de `chat.facturas`: el total (al final del
+documento) quedaba cortado → decía 0, y en el texto bruto confundía emisor/cliente (sin
+`reconciliarPartes` ni las correcciones manuales). El prompt obliga a usar `chat.facturas` +
+`chat.lineas_factura` para cualquier dato de factura y trae un ejemplo de resumen.
+
 **Recién subidos**: `chat.archivos.procesando` (migración `1780…-ChatArchivosProcesando`) es true
 mientras el archivo sigue en la cola (extracción de texto o escaneo de factura). El prompt le pide
 al modelo que, si no encuentra la factura/contenido y el archivo está procesando, lo diga en vez

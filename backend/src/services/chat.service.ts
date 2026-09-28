@@ -99,7 +99,8 @@ chat.lineas_factura — conceptos de cada factura
     : "";
 
   const reglaFacturas = c.puedeFacturas
-    ? `- Importes: NUNCA sumes monedas distintas; agrupa por moneda. Ventas = tipo 'venta', compras/gastos = tipo 'compra'. IVA repercutido = iva de ventas, soportado = iva de compras.`
+    ? `- Datos de una factura (resumen, emisor, cliente, número, fecha, importes, conceptos): sácalos SIEMPRE de chat.facturas y chat.lineas_factura, NUNCA del contenido del archivo. Son los datos ya extraídos y revisados (el usuario los corrige a mano); el texto del documento está sin procesar, puede venir cortado y no distingue bien emisor y cliente. Busca la factura por archivo o numero (unaccent ILIKE). Solo si no está en chat.facturas, dilo y ofrece leer el documento.
+- Importes: NUNCA sumes monedas distintas; agrupa por moneda. Ventas = tipo 'venta', compras/gastos = tipo 'compra'. IVA repercutido = iva de ventas, soportado = iva de compras.`
     : `- El usuario NO tiene acceso a facturas: si pregunta por ellas, dile que no está disponible para su rol (sin consultar nada).`;
 
   const reglaContenido = c.puedeContenido
@@ -137,7 +138,7 @@ SELECT ...
    Recibirás el resultado y podrás hacer otra consulta si hace falta, o responder.
    Ante CUALQUIER pregunta sobre sus archivos, fotos, documentos, carpetas o facturas, consulta SIEMPRE antes de responder, aunque ya se hablara de ello antes en la conversación (tus respuestas anteriores pueden estar incompletas o desactualizadas): nunca contestes de memoria ni digas que no tienes acceso o que no puedes verlo.
 2. Cuando tengas los datos (o si no hacen falta, p. ej. un saludo), responde al usuario en español, en markdown, breve y claro.
-   - Usa SOLO los datos de los resultados. No inventes nombres, cifras ni fechas. Si no hay resultados, dilo.
+   - Usa SOLO los datos de los resultados. No inventes nombres, cifras ni fechas. Si no hay resultados, dilo. Si un dato no aparece en las filas, no lo pongas (nunca un 0 ni un nombre de relleno).
    - No menciones SQL, consultas, tablas ni columnas.
    - Si el resultado tiene varias filas, se mostrará como tabla debajo de tu respuesta: no las copies todas, resume (cuántas hay, totales, lo más destacado).
    - Importes en formato español: 1.234,56 €.
@@ -178,6 +179,15 @@ Usuario: mis 5 mejores clientes
 \`\`\`sql
 SELECT cliente, moneda, count(*) AS facturas, sum(total) AS total FROM chat.facturas
 WHERE tipo = 'venta' GROUP BY cliente, moneda ORDER BY total DESC LIMIT 5
+\`\`\`
+Usuario: hazme un resumen de la factura de repsol
+\`\`\`sql
+SELECT f.archivo_id, f.archivo, f.numero, f.fecha, f.tipo, f.emisor, f.cliente, f.moneda,
+       f.subtotal, f.iva, f.total, l.descripcion, l.cantidad, l.precio_unitario, l.total AS total_linea
+FROM chat.facturas f LEFT JOIN chat.lineas_factura l ON l.factura_id = f.factura_id
+WHERE unaccent(f.archivo) ILIKE unaccent('%repsol%') OR unaccent(f.emisor) ILIKE unaccent('%repsol%')
+   OR unaccent(f.cliente) ILIKE unaccent('%repsol%')
+ORDER BY f.fecha DESC
 \`\`\`
 `
     : ""
