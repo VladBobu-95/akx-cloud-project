@@ -109,7 +109,9 @@ chat.lineas_factura — conceptos de cada factura
     : "";
 
   const reglaFacturas = c.puedeFacturas
-    ? `- Datos de una factura (resumen, emisor, cliente, número, fecha, importes, conceptos): sácalos SIEMPRE de chat.facturas y chat.lineas_factura, NUNCA del contenido del archivo. Son los datos ya extraídos y revisados (el usuario los corrige a mano); el texto del documento está sin procesar, puede venir cortado y no distingue bien emisor y cliente. Busca la factura por archivo, numero, emisor o cliente (unaccent ILIKE). Solo si no está en chat.facturas, dilo y ofrece leer el documento.
+    ? `- Datos de una factura (resumen, emisor, cliente, número, fecha, importes, conceptos): sácalos SIEMPRE de chat.facturas y chat.lineas_factura, NUNCA del contenido del archivo. Vale también para las facturas escaneadas de una IMAGEN o foto. Son los datos ya extraídos y revisados (el usuario los corrige a mano); el texto del documento está sin procesar, puede venir cortado o con dígitos mal leídos y no distingue bien emisor y cliente.
+- Para encontrar una factura busca en chat.facturas por archivo, numero, emisor o cliente (unaccent ILIKE) Y TAMBIÉN por lo que pone en su documento: f.archivo_id IN (SELECT archivo_id FROM chat.archivos WHERE unaccent(contenido) ILIKE unaccent('%texto%')). Así la encuentras aunque el archivo se llame "IMG_1234.jpg" o el nombre de la empresa se extrajera mal. Solo si no está en chat.facturas, dilo y ofrece leer el documento.
+- Una factura puede no tener fecha (NULL, p. ej. una foto poco legible): no sale en filtros por fecha. Si al filtrar por fecha no encuentras la que busca, prueba sin ese filtro. Ordena con NULLS LAST.
 - Cada fila del resultado es un registro distinto: NUNCA mezcles datos de filas distintas (la fecha de una factura con el emisor o el total de otra). Si salen varias facturas, trata cada una por separado identificándola por numero o archivo; si pidió una sola y salen varias, dile cuáles hay y pregunta cuál quiere.
 - Importes: NUNCA sumes monedas distintas; agrupa por moneda. Ventas = tipo 'venta', compras/gastos = tipo 'compra'. IVA repercutido = iva de ventas, soportado = iva de compras.
 - Filtra por tipo SOLO si pregunta por ventas/facturado/clientes o por compras/gastos/proveedores. Si pregunta por "facturas" en general (en dólares, de un mes, de un emisor…), NO filtres por tipo: incluye ventas, compras y 'desconocido'.
@@ -119,7 +121,12 @@ chat.lineas_factura — conceptos de cada factura
 
   const reglaContenido = c.puedeContenido
     ? `- Para buscar qué documento habla de algo: unaccent(contenido) ILIKE unaccent('%palabra%'). Para leer un documento: left(contenido, 2500) de ESE archivo. Nunca pidas el contenido completo de muchos archivos a la vez.
-- Las IMÁGENES y fotos ya están leídas: su contenido es el texto que aparece en ellas o, si no tienen texto, una descripción de lo que se ve. NUNCA digas que no puedes ver imágenes: consulta su contenido y responde con él.`
+- Las IMÁGENES y fotos ya están leídas: su contenido es el texto que aparece en ellas o, si no tienen texto, una descripción de lo que se ve. NUNCA digas que no puedes ver imágenes: consulta su contenido y responde con él.${
+        c.puedeFacturas
+          ? `
+- Leer el contenido es para documentos y fotos que NO son facturas escaneadas. Si preguntan por una factura (aunque sea una foto), usa chat.facturas.`
+          : ""
+      }`
     : `- El usuario NO puede leer el contenido de los documentos ni de las imágenes (la columna contenido viene vacía): si lo pide, dile que no está disponible para su rol.`;
 
   return `Eres el asistente de ATEKA Cloud, una app de almacenamiento de archivos y facturas de empresa. Respondes siempre en español.
@@ -198,7 +205,7 @@ WHERE tipo = 'venta' GROUP BY cliente, moneda ORDER BY total DESC LIMIT 5
 Usuario: ¿qué facturas tengo en dólares?
 \`\`\`sql
 SELECT archivo_id, archivo, numero, fecha, tipo, emisor, cliente, moneda, total FROM chat.facturas
-WHERE moneda = 'USD' ORDER BY fecha DESC
+WHERE moneda = 'USD' ORDER BY fecha DESC NULLS LAST
 \`\`\`
 Usuario: hazme un resumen de la factura de repsol
 \`\`\`sql
@@ -207,7 +214,8 @@ SELECT f.archivo_id, f.archivo, f.numero, f.fecha, f.tipo, f.emisor, f.cliente, 
 FROM chat.facturas f LEFT JOIN chat.lineas_factura l ON l.factura_id = f.factura_id
 WHERE unaccent(f.archivo) ILIKE unaccent('%repsol%') OR unaccent(f.emisor) ILIKE unaccent('%repsol%')
    OR unaccent(f.cliente) ILIKE unaccent('%repsol%')
-ORDER BY f.fecha DESC, f.numero
+   OR f.archivo_id IN (SELECT archivo_id FROM chat.archivos WHERE unaccent(contenido) ILIKE unaccent('%repsol%'))
+ORDER BY f.fecha DESC NULLS LAST, f.numero
 \`\`\`
 `
     : ""
