@@ -130,7 +130,7 @@ Si no cuadra:
 
 Misma API que la web. Chat: `POST /api/chat` con el JWT. En Android va al túnel (`127.0.0.1:3001`). El historial se guarda en el teléfono y se borra al cerrar sesión.
 
-Ollama (modelos, OCR, embeddings) corre **en el GPU**, no en el teléfono. Si el chat o el escaneo fallan, es la API/Ollama del servidor, no Plesk.
+Ollama (el modelo de chat, facturas y OCR) corre **en el GPU**, no en el teléfono. Si el chat o el escaneo fallan, es la API/Ollama del servidor, no Plesk.
 
 El explorador y las facturas van en sus pestañas; desde el chat aún no se abre el archivo en el visor nativo.
 

@@ -31,7 +31,7 @@ import {
   schemaActualizarCarpetaCompartida,
   buscarEnCompartida,
 } from "../services/compartido.service";
-import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
+import { encolarTarea, marcarIndexadoPendiente } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
 import { validarContenidoArchivo } from "../utils/tiposArchivo";
 
@@ -138,7 +138,6 @@ export const ctrlSubir = async (req: Request, res: Response, next: NextFunction)
       tipo: "indexar",
       archivoId: archivo.id,
       usuarioId: req.usuario!.id,
-      prioridad: /^image\//.test(archivo.mimeType) ? P_OCR : P_TEXTO,
     });
 
     res.status(201).json(archivo);

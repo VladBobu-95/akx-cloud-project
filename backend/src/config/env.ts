@@ -55,36 +55,28 @@ const envSchema = z.object({
     (v) => (v === "" ? undefined : v),
     z.string().optional(),
   ),
-  // Modelo del chat: escribe las consultas SQL y redacta la respuesta (ver
-  // chat.service.ts). También extrae los datos de las facturas. qwen3:14b cabe
-  // entero en una GPU de 12 GB; en máquinas pequeñas se sobreescribe por .env.
-  OLLAMA_MODEL: z.string().default("qwen3:14b"),
-  // Modo "pensamiento" del modelo del chat (qwen3 y similares). Mejora el SQL en
-  // preguntas difíciles pero tarda bastante más. Se ignora si el modelo no lo tiene.
+  // El ÚNICO modelo de la app (multimodal): escribe el SQL del chat y redacta la
+  // respuesta (chat.service.ts), extrae los datos de las facturas y hace el OCR /
+  // descripción de las imágenes (extraccion.service.ts). Al ser uno solo, Ollama
+  // no tiene que alternar modelos en la GPU. Debe tener visión (se avisa al
+  // arrancar si no la tiene: las imágenes caerían solo a Tesseract).
+  OLLAMA_MODEL: z.string().default("qwen3.5:9b"),
+  // Modo "pensamiento" del chat (qwen3 y similares). Mejora el SQL en preguntas
+  // difíciles pero tarda bastante más. Se ignora si el modelo no lo tiene. El OCR
+  // y la extracción de facturas van siempre sin pensamiento.
   OLLAMA_THINK: z.preprocess((v) => v === "true" || v === "1", z.boolean()).default(false),
-  // Contexto (tokens) del chat: esquema + historial + resultados de las consultas.
-  // Cada token de más ocupa VRAM: con 8k, qwen3:14b (~9,3 GB) + contexto (~1,3 GB)
-  // cabe entero en una GPU de 12 GB sin tocar la configuración de Ollama.
+  // Contexto (tokens) de TODAS las llamadas: chat (esquema + historial +
+  // resultados), facturas (~20k chars de texto) e imágenes. Tiene que ser el mismo
+  // en todas: si cambia entre llamadas, Ollama recarga el modelo. Cada token de
+  // más ocupa VRAM.
   OLLAMA_NUM_CTX: z.coerce.number().int().min(2048).default(8192),
-  // Cascada de visión para imágenes (ver `ocrImagen` en extraccion.service.ts):
-  //  - OLLAMA_CAPTION_MODEL: 1ª pasada, modelo ligero (granite3.2-vision). Rápido,
-  //    cabe en GPU y hace las dos cosas — transcribe texto si lo hay o describe la
-  //    foto si no — sin el bucle degenerado de un modelo solo-OCR.
-  //  - OLLAMA_OCR_MODEL: 2ª pasada, OCR especialista (deepseek-ocr). Solo se usa
-  //    si la 1ª pasada detecta que parece una factura con importes, para no
-  //    equivocar dígitos. Más lento, por eso no se lanza en todo.
-  // Poniendo ambos al mismo modelo, la 2ª pasada se desactiva (máquinas con un
-  // solo VLM).
-  OLLAMA_OCR_MODEL: z.string().default("deepseek-ocr"),
-  OLLAMA_CAPTION_MODEL: z.string().default("granite3.2-vision"),
   // Timeout (ms) de CADA llamada a Ollama (chat/visión/extracción). Sin
-  // esto, si Ollama se cuelga esperando VRAM —p. ej. no puede cargar el modelo
-  // que toca porque otro sigue fijado en la GPU por su keep_alive— el `fetch` se
+  // esto, si Ollama se cuelga esperando VRAM —p. ej. el Ollama del servidor es
+  // compartido y otra app tiene su modelo fijado en la GPU— el `fetch` se
   // queda colgado indefinidamente y la tarea del worker se eterniza en
   // "escaneando" (el archivo nunca sale de "procesando"). Con el timeout, la
   // llamada falla y la tarea reintenta/marca error en vez de colgarse. 180 s
-  // cubre de sobra una inferencia lenta real (incl. cargar deepseek-ocr de disco
-  // y OCR en CPU), pero corta muy por debajo del keep_alive de 10 min.
+  // cubre de sobra una inferencia lenta real (incl. cargar el modelo de disco).
   OLLAMA_TIMEOUT_MS: z.coerce.number().int().min(1000).default(180_000),
   // Worker de la cola durable (tareas.service.ts):
   //  - WORKER_CONCURRENCIA: cuántas tareas se procesan a la vez. 1 por defecto,

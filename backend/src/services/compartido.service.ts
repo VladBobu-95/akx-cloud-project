@@ -16,7 +16,7 @@ import { AppError } from "../utils/errors";
 import { calcularHashSha256 } from "./archivos.service";
 import { crearCarpeta } from "./carpetas.service";
 import { esArchivoFactura, marcarPendiente } from "./facturas.service";
-import { encolarTarea, P_ALTA, P_IMG_SCAN } from "./tareas.service";
+import { encolarTarea } from "./tareas.service";
 import { buscarEnCompartidaTexto, ResultadoBusqueda } from "./contenido.service";
 
 // Carpetas compartidas por rol. El admin las crea y decide qué roles acceden; los
@@ -693,7 +693,6 @@ export const copiarCompartidoAPersonal = async (
       tipo: "autoescanear",
       archivoId: guardado.id,
       usuarioId,
-      prioridad: /^image\//.test(guardado.mimeType) ? P_IMG_SCAN : P_ALTA,
     });
   }
 
@@ -807,7 +806,6 @@ export const moverCompartidoAPersonal = async (
       tipo: "autoescanear",
       archivoId: guardado.id,
       usuarioId,
-      prioridad: /^image\//.test(guardado.mimeType) ? P_IMG_SCAN : P_ALTA,
     });
   }
 

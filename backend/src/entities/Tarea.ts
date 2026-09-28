@@ -26,7 +26,7 @@ export class Tarea {
   id!: string;
 
   // "indexar"     → extrae texto (OCR de imágenes / pdf-parse / docx).
-  // "autoescanear" → extrae los datos de factura (qwen) del texto ya indexado.
+  // "autoescanear" → extrae los datos de factura (IA) del texto ya indexado.
   @Column({ type: "varchar" })
   tipo!: "indexar" | "autoescanear";
 
@@ -40,10 +40,9 @@ export class Tarea {
   @Column({ type: "varchar", default: "pendiente" })
   estado!: "pendiente" | "en_proceso" | "ok" | "error";
 
-  // Menor = antes. Preserva el agrupado por fases del diseño anterior (evitar
-  // que Ollama descargue/cargue modelos por archivo): texto barato y facturas
-  // PDF primero, luego el OCR de imágenes, y al final el escaneo derivado de
-  // esas imágenes. Ver constantes de prioridad en tareas.service.ts.
+  // Menor = antes (el worker ordena por prioridad y luego por antigüedad). Hoy
+  // todas van a 0 (FIFO): el agrupado por fases que evitaba alternar modelos en
+  // la GPU sobra desde que un solo modelo lo hace todo.
   @Column({ type: "int", default: 0 })
   prioridad!: number;
 

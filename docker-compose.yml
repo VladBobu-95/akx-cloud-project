@@ -65,11 +65,9 @@ services:
       N8N_USER_EMAIL: ${N8N_USER_EMAIL:-}
       OLLAMA_URL: ${OLLAMA_URL}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:14b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b}
       OLLAMA_THINK: ${OLLAMA_THINK:-false}
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
-      OLLAMA_OCR_MODEL: ${OLLAMA_OCR_MODEL:-deepseek-ocr}
-      OLLAMA_CAPTION_MODEL: ${OLLAMA_CAPTION_MODEL:-granite3.2-vision}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

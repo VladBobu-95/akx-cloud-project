@@ -4,7 +4,7 @@ import { PDFParse } from "pdf-parse";
 import sharp from "sharp";
 import { createWorker, OEM, PSM, type Worker } from "tesseract.js";
 import { env } from "../config/env";
-import { campoThink, ollamaHeaders } from "../config/ollama";
+import { campoThink, KEEP_ALIVE, ollamaHeaders } from "../config/ollama";
 
 // MIME de un .docx (Word moderno).
 const DOCX_MIME =
@@ -12,47 +12,38 @@ const DOCX_MIME =
 
 // Tope de tokens generados por el OCR de visión. Sin esto, una foto sin texto
 // real puede entrar en un bucle degenerado (ver pareceBucleDegenerado) y gastar
-// el máximo del modelo (~115s observados) antes de cortar. Una factura real,
-// con sus líneas y totales, no necesita ni de lejos 800 tokens para
-// transcribirse entera, así que el límite no afecta al caso bueno.
-const MAX_TOKENS_OCR = 800;
+// el máximo del modelo antes de cortar. Da de sobra para transcribir una factura
+// entera con sus líneas y totales.
+const MAX_TOKENS_OCR = 1500;
 
-// Si el modelo de visión es el MISMO que el del chat (un único modelo multimodal
-// para todo), se le pasa el mismo num_ctx: con otro valor, Ollama lo recargaría
-// en cada imagen. Y sin modo pensamiento, que en OCR no aporta y lo haría lento.
-const opcionesMismoModelo = async (modelo: string): Promise<{ think?: boolean }> =>
-  modelo === env.OLLAMA_MODEL ? campoThink(modelo, false) : {};
+// OCR / descripción de una imagen con el modelo de la app (OLLAMA_MODEL, el mismo
+// del chat y las facturas). Hace las dos cosas en una llamada: transcribe el texto
+// si lo hay, o describe la foto si no. Mismo num_ctx y keep_alive que el resto de
+// llamadas (si difieren, Ollama recarga el modelo) y sin modo pensamiento, que en
+// OCR no aporta y lo haría lento.
+const PROMPT_VISION =
+  "Si la imagen contiene texto (factura, recibo, documento), transcríbelo TODO tal cual aparece, con sus números, importes, fechas y las líneas de las tablas. Si NO contiene texto, describe brevemente lo que se ve, en español. No añadas explicaciones.";
 
-const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): Promise<string> => {
-  const esChat = modelo === env.OLLAMA_MODEL;
+const consultarVision = async (buffer: Buffer): Promise<string> => {
   const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: "POST",
     headers: ollamaHeaders(),
     body: JSON.stringify({
-      model: modelo,
+      model: env.OLLAMA_MODEL,
       messages: [
         {
           role: "user",
-          content: prompt,
+          content: PROMPT_VISION,
           images: [buffer.toString("base64")],
         },
       ],
       stream: false,
-      ...(await opcionesMismoModelo(modelo)),
-      options: {
-        temperature: 0,
-        num_predict: MAX_TOKENS_OCR,
-        ...(esChat ? { num_ctx: env.OLLAMA_NUM_CTX } : {}),
-      },
-      // keep_alive mantiene el VLM (granite/deepseek-ocr) cargado entre imágenes
-      // de un mismo lote. La cola agrupa por fases para que el swap deepseek↔qwen
-      // sea uno por lote (no por imagen); esto evita además que, dentro de la fase,
-      // Ollama descargue el modelo por inactividad entre dos imágenes consecutivas.
-      keep_alive: "10m",
+      ...(await campoThink(env.OLLAMA_MODEL, false)),
+      options: { temperature: 0, num_predict: MAX_TOKENS_OCR, num_ctx: env.OLLAMA_NUM_CTX },
+      keep_alive: KEEP_ALIVE,
     }),
-    // Timeout para no colgarse si Ollama no puede cargar este VLM porque otro
-    // modelo sigue fijado en la GPU (ver OLLAMA_TIMEOUT_MS). Si salta, ocrImagen
-    // lo captura y pasa a la siguiente pasada de la cascada.
+    // Timeout para no colgarse si Ollama no puede cargar el modelo (ver
+    // OLLAMA_TIMEOUT_MS). Si salta, ocrImagen lo captura y prueba con Tesseract.
     signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
   });
   const data = (await res.json()) as {
@@ -64,48 +55,22 @@ const consultarVision = async (modelo: string, prompt: string, buffer: Buffer): 
   if (!res.ok || data.error || !data.message?.content) {
     // res.status solo no basta para diagnosticar: Ollama puede responder 200 con
     // el contenido vacío (ej. el modelo no llegó a generar nada por falta de
-    // VRAM al tener que cargar otro modelo grande a la vez). done_reason ayuda a
-    // distinguir ese caso de un error real de la API.
+    // VRAM). done_reason ayuda a distinguir ese caso de un error real de la API.
     throw new Error(
-      `Modelo de visión (${modelo}) falló: status=${res.status} error=${data.error ?? "-"} done=${data.done ?? "-"} done_reason=${data.done_reason ?? "-"}`,
+      `Visión (${env.OLLAMA_MODEL}) falló: status=${res.status} error=${data.error ?? "-"} done=${data.done ?? "-"} done_reason=${data.done_reason ?? "-"}`,
     );
   }
   return data.message.content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 };
 
-// 2ª pasada: OCR especialista (deepseek-ocr, glm-ocr). La transcripción más fiel
-// de texto/tablas/importes, pero ante una imagen SIN texto alucina; por eso solo
-// se usa cuando la 1ª pasada ya detectó que parece una factura.
-// glm-ocr no sigue instrucciones libres: solo entiende sus órdenes fijas
-// ("Text Recognition:", "Table Recognition:"…).
-const PROMPT_OCR = /^glm-ocr/i.test(env.OLLAMA_OCR_MODEL)
-  ? "Text Recognition:"
-  : "Transcribe TODO el texto de esta imagen tal cual aparece (números, importes, fechas, líneas de la tabla). No añadas explicaciones.";
-const ocrConOllama = (buffer: Buffer): Promise<string> =>
-  consultarVision(env.OLLAMA_OCR_MODEL, PROMPT_OCR, buffer);
-
-// 1ª pasada: modelo de visión ligero (granite3.2-vision). Rápido, cabe entero en
-// GPU y hace las dos cosas — transcribe el texto si lo hay, o describe la foto si
-// no — sin entrar en el bucle degenerado de un modelo solo-OCR.
-// El refuerzo de idioma va solo en la rama de descripción libre: al transcribir,
-// el idioma de salida ya viene dado por el propio documento; pero generando una
-// descripción desde cero, granite3.2-vision (modelo pequeño) a veces ignora "en
-// español" y cae al inglés, su idioma dominante de entrenamiento para captioning.
-const visionPrimeraPasada = (buffer: Buffer): Promise<string> =>
-  consultarVision(
-    env.OLLAMA_CAPTION_MODEL,
-    "Si la imagen contiene texto (factura, recibo, documento), transcríbelo TODO tal cual aparece, con sus números e importes. Si NO contiene texto, describe brevemente lo que se ve. IMPORTANTE: la descripción debe estar SIEMPRE en español, nunca en inglés ni en otro idioma. No añadas explicaciones.",
-    buffer,
-  );
-
-// Un modelo solo-OCR (deepseek-ocr) ante una foto sin texto no sabe decir "no hay
-// texto" y a veces entra en un bucle degenerado repitiendo la misma etiqueta
-// cientos de veces (ej. "<table:tr><td>...</table>") hasta agotar el límite de
-// tokens. OJO: deepseek también emite `<table>/<td>` LEGÍTIMOS para transcribir
-// las tablas de una factura real, así que NO se puede tratar esas etiquetas como
-// basura por sí solas (eso descartaba transcripciones buenas). Se juzga el
-// CONTENIDO tras quitar las etiquetas: si apenas queda texto real, o si lo que
-// queda es muy repetitivo, es un bucle/placeholder y se descarta.
+// Ante una foto sin texto, un modelo de visión puede entrar en un bucle
+// degenerado repitiendo la misma etiqueta cientos de veces (ej.
+// "<table:tr><td>...</table>") hasta agotar el límite de tokens. OJO: también
+// emite `<table>/<td>` LEGÍTIMOS para transcribir las tablas de una factura real,
+// así que NO se puede tratar esas etiquetas como basura por sí solas (eso
+// descartaba transcripciones buenas). Se juzga el CONTENIDO tras quitar las
+// etiquetas: si apenas queda texto real, o si lo que queda es muy repetitivo, es
+// un bucle/placeholder y se descarta.
 const pareceBucleDegenerado = (texto: string): boolean => {
   const teniaTags = /<[^>]*>/.test(texto);
   const sinTags = texto
@@ -117,11 +82,10 @@ const pareceBucleDegenerado = (texto: string): boolean => {
   const palabras = sinTags.toLowerCase().split(/\s+/).filter(Boolean);
   if (palabras.length === 0) return true; // no quedó nada
   // Tras quitar etiquetas casi no queda texto → era sopa de tags vacía. OJO: esto
-  // solo tiene sentido si el texto original tenía etiquetas — granite a veces da
-  // una respuesta corta pero válida sin ninguna etiqueta (ej. "Factura" ante un
-  // documento denso que no llegó a transcribir), y esa NO es basura: descartarla
-  // aquí le cortaba el paso a la escalada a deepseek-ocr, que es la que de verdad
-  // tenía que leer la factura.
+  // solo tiene sentido si el texto original tenía etiquetas — una respuesta corta
+  // SIN etiquetas (ej. "Factura" ante un documento denso que no llegó a
+  // transcribir) es pobre por otra razón y la juzga pareceResultadoPobre, que
+  // decide si probar con Tesseract.
   if (teniaTags && palabras.length < 3) return true;
   // Ristra de números sueltos ("1 2 3 ... 64"): un modelo de OCR que se cuelga
   // contando (visto al echar el prompt + contar). Todos los enteros son distintos,
@@ -136,8 +100,8 @@ const pareceBucleDegenerado = (texto: string): boolean => {
   return unicas.size / palabras.length < 0.15;
 };
 
-// deepseek-ocr transcribe las tablas de una factura como HTML (<table><td>...),
-// pero pdf-parse (el otro origen posible de este mismo texto) nunca devuelve
+// Los modelos de visión a veces transcriben las tablas de una factura como HTML
+// (<table><td>...), pero pdf-parse (el otro origen posible de este mismo texto) nunca devuelve
 // HTML, solo texto plano. Sin esto, el contenido guardado (lo que se ve al
 // leer el archivo en el chat y lo que se
 // le pasa a la extracción de datos de la factura) sale con pinta distinta según
@@ -154,10 +118,9 @@ const limpiarTablasHtml = (texto: string): string =>
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-// ¿El texto de la 1ª pasada parece una factura/recibo con importes? Es la señal
-// para escalar al OCR especialista (deepseek-ocr), que no se equivoca con los
-// dígitos. Una descripción de foto o un texto sin importes no lo dispara, así nos
-// ahorramos la pasada lenta de deepseek en todo lo que no es factura.
+// ¿El texto parece una factura/recibo con importes? En un PDF con capa de texto
+// es la señal para OCR-ear el membrete (ver extraerTexto). Una descripción de
+// foto o un texto sin importes no lo dispara.
 export const pareceFacturaConImportes = (texto: string): boolean => {
   const t = texto.toLowerCase();
   // Señal FIABLE de factura/recibo: un importe monetario de verdad — símbolo de
@@ -186,7 +149,7 @@ const RE_REGISTRO_MERCANTIL_TXT = /(?:inscrit[ao]\b[^\n]{0,40}?)?re[gx]istr[eo]\
 export const tieneRegistroMercantil = (texto: string): boolean =>
   RE_REGISTRO_MERCANTIL_TXT.test(texto ?? "");
 
-// ¿Lo que sacaron granite/deepseek se queda corto para ser un documento real?
+// ¿Lo que sacó el modelo de visión se queda corto para ser un documento real?
 // OJO: NO es solo "pocas palabras", ni basta con buscar una frase concreta EN
 // CUALQUIER PARTE del texto — una buena descripción real de una foto sin texto
 // también puede empezar con "La imagen presenta..." (forma normal de describir
@@ -221,9 +184,8 @@ const pareceResultadoPobre = (texto: string): boolean => {
 };
 
 // Tesseract.js: OCR clásico (no es un LLM de visión), corre en CPU y no compite
-// por la VRAM con Ollama. Es la red de seguridad final cuando ni granite ni
-// deepseek-ocr consiguen leer un documento bien impreso y legible — los modelos
-// de visión reescalan la imagen a una resolución de entrada fija internamente, y
+// por la VRAM con Ollama. Es la red de seguridad cuando el modelo de visión no
+// consigue leer un documento bien impreso y legible — los modelos de visión reescalan la imagen a una resolución de entrada fija internamente, y
 // con texto denso/pequeño pierden legibilidad por el camino; Tesseract procesa la
 // imagen a su tamaño real, así que es buen complemento justo donde esos modelos
 // fallan (texto impreso, buen contraste). Al revés, es peor que ellos con fotos o
@@ -359,59 +321,6 @@ const ocrConTesseract = async (buffer: Buffer): Promise<string> => {
   }
 };
 
-// Refuerzo final por si el prompt de visionPrimeraPasada no basta: heurística
-// simple para detectar que el texto cayó (total o parcialmente) en inglés, por
-// densidad de stopwords inglesas muy comunes. OJO: granite a veces mezcla los
-// dos idiomas en la misma frase ("La imagen muestra un árbol... under a clear
-// blue sky"), así que NO se puede descartar inglés solo por encontrar una tilde
-// suelta en otra parte del texto — eso dejaba pasar justo los casos mixtos que
-// más interesa traducir. No es perfecta (frases cortas o muy técnicas pueden
-// colar falsos positivos/negativos), pero es suficiente como red de seguridad
-// antes de pagar una llamada extra de traducción.
-const STOPWORDS_INGLES = /\b(the|and|with|this|that|is|are|was|were|has|have|of|in|on|its|an|to|for)\b/gi;
-const pareceIngles = (texto: string): boolean => {
-  const matches = texto.match(STOPWORDS_INGLES) ?? [];
-  return matches.length >= 2;
-};
-
-// Traduce con el modelo de chat principal (OLLAMA_MODEL: más grande y mucho más
-// obediente con instrucciones que el modelo de visión) solo cuando la heurística
-// anterior detecta inglés. Si la llamada falla, se devuelve el texto original sin
-// traducir en vez de perderlo.
-const traducirAlEspanol = async (texto: string): Promise<string> => {
-  try {
-    const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: ollamaHeaders(),
-      body: JSON.stringify({
-        model: env.OLLAMA_MODEL,
-        messages: [
-          {
-            role: "user",
-            content: `Traduce el siguiente texto al español. Si ya está en español, devuélvelo exactamente igual. No añadas explicaciones ni comentarios.\n\n${texto}`,
-          },
-        ],
-        stream: false,
-        // Mismo num_ctx y sin pensamiento, como el chat: si no, Ollama recargaría
-        // el modelo y qwen3 pensaría antes de cada traducción.
-        ...(await campoThink(env.OLLAMA_MODEL, false)),
-        options: { temperature: 0, num_ctx: env.OLLAMA_NUM_CTX },
-        keep_alive: "30m",
-      }),
-      // Timeout: si la traducción se cuelga, devolvemos el texto original (catch).
-      signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
-    });
-    const data = (await res.json()) as { message?: { content?: string } };
-    return data.message?.content?.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || texto;
-  } catch (err) {
-    console.error("[extraccion] no se pudo traducir la descripción al español:", err);
-    return texto;
-  }
-};
-
-const asegurarEspanol = (texto: string): Promise<string> =>
-  pareceIngles(texto) ? traducirAlEspanol(texto) : Promise.resolve(texto);
-
 // Los modelos de visión de Ollama (vía llama.cpp) no decodifican WEBP de forma
 // fiable: con un WEBP normal (VP8, sin animación ni alpha) la 1ª pasada devolvía
 // "Failed to load image or audio file" en CPU, y llegó a tirar el proceso entero
@@ -427,53 +336,35 @@ const aPng = async (buffer: Buffer): Promise<Buffer> => {
   }
 };
 
-// OCR/descripción de una imagen, cascada "ligero primero":
-//   1. granite (rápido) transcribe el texto o describe la foto.
-//   2. Si lo que sacó parece una factura con importes Y hay un modelo de OCR
-//      distinto configurado, se RE-LEE con deepseek-ocr para máxima fidelidad de
-//      los dígitos; si deepseek falla o alucina, nos quedamos con lo de granite.
-//   3. Si no parece factura (foto, o texto sin importes), se usa lo de granite —
-//      sin pagar la pasada lenta de deepseek.
-//   4. Si lo que queda hasta aquí es pobre (vacío, "Factura", "No hay texto"...),
-//      se prueba Tesseract (CPU, sin tocar la GPU) como último recurso — visto en
-//      la práctica: granite puede alucinar "no hay texto" ante una factura
-//      perfectamente legible porque su entrada de visión tiene una resolución
-//      fija y pierde el texto pequeño/denso por el camino; Tesseract no tiene
-//      ese límite. Solo se adopta su resultado si de verdad aporta más texto que
-//      lo que ya había (si también sale pobre, era de verdad una foto sin texto).
-// Si OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL (máquinas con un solo VLM), la 2ª
-// pasada se desactiva sola.
+// OCR/descripción de una imagen:
+//   1. El modelo de visión transcribe el texto o describe la foto.
+//   2. Si lo que sacó es pobre (vacío, "Factura", "No hay texto"...), se prueba
+//      Tesseract (CPU, sin tocar la GPU) — los modelos de visión tienen una
+//      resolución de entrada fija y pueden perder el texto pequeño/denso de una
+//      factura perfectamente legible; Tesseract no tiene ese límite. Solo se
+//      adopta su resultado si no es también pobre (si lo es, era de verdad una
+//      foto sin texto).
 const ocrImagen = async (bufferOriginal: Buffer): Promise<string> => {
   const buffer = await aPng(bufferOriginal);
 
-  let primera = "";
+  let resultado = "";
   try {
-    primera = await visionPrimeraPasada(buffer);
+    resultado = await consultarVision(buffer);
   } catch (err) {
-    console.error("[extraccion] visión (1ª pasada) falló:", err);
+    console.error("[extraccion] visión falló:", err);
   }
-  primera = pareceBucleDegenerado(primera) ? "" : limpiarTablasHtml(primera.trim());
-
-  let resultado = primera;
-  if (env.OLLAMA_OCR_MODEL !== env.OLLAMA_CAPTION_MODEL && pareceFacturaConImportes(primera)) {
-    try {
-      const ocr = await ocrConOllama(buffer);
-      if (ocr.trim() && !pareceBucleDegenerado(ocr)) resultado = limpiarTablasHtml(ocr.trim());
-    } catch (err) {
-      console.error("[extraccion] OCR especialista (2ª pasada) falló:", err);
-    }
-  }
+  resultado = pareceBucleDegenerado(resultado) ? "" : limpiarTablasHtml(resultado.trim());
 
   if (pareceResultadoPobre(resultado)) {
     try {
       const tess = await ocrConTesseract(buffer);
       if (!pareceResultadoPobre(tess)) resultado = limpiarTablasHtml(tess.trim());
     } catch (err) {
-      console.error("[extraccion] Tesseract (3ª red) falló:", err);
+      console.error("[extraccion] Tesseract falló:", err);
     }
   }
 
-  return await asegurarEspanol(resultado);
+  return resultado;
 };
 
 // Escala de rasterizado del PDF antes del OCR: a escala 1 la página A4 sale a
@@ -496,11 +387,11 @@ const TIMEOUT_RASTER_MS = 30_000;
 // PDFParse ya abierta) y devuelve el texto que el OCR saca de esas imágenes.
 // Sirve para leer lo que pdf-parse NO ve: texto que en el PDF va como IMAGEN
 // —logos/membretes con el nombre y NIF del emisor, o una factura entera
-// escaneada—. Usa Tesseract directamente en vez de la cascada de visión
+// escaneada—. Usa Tesseract directamente en vez del modelo de visión
 // (ocrImagen) porque una página de PDF renderizada es texto impreso limpio a
 // resolución real (el caso ideal de Tesseract), mientras que los VLM la
-// reescalan a baja resolución y pierden el texto denso (granite llegó a
-// devolver "no se puede transcribir el contenido" ante esta misma página).
+// reescalan a baja resolución y pierden el texto denso (uno llegó a devolver
+// "no se puede transcribir el contenido" ante esta misma página).
 // Nunca lanza: si el rasterizado falla (p. ej. faltan libs nativas de canvas en
 // el contenedor), devuelve "" y la extracción continúa solo con la capa de texto.
 const ocrPaginasPdf = async (parser: PDFParse, maxPaginas: number): Promise<string> => {
@@ -589,7 +480,7 @@ export const extraerTexto = async (
       return limpiar(buffer.toString("utf8"));
     }
 
-    // Imagen: OCR con deepseek-ocr vía Ollama (sin fallback automático).
+    // Imagen: OCR/descripción con el modelo de visión (y Tesseract de respaldo).
     if (/^image\//.test(mt)) {
       return limpiar(await ocrImagen(buffer));
     }

@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { AppDataSource } from "../config/database";
 import { poolChat } from "../config/chatDb";
 import { env } from "../config/env";
-import { campoThink, ollamaHeaders } from "../config/ollama";
+import { campoThink, KEEP_ALIVE, ollamaHeaders } from "../config/ollama";
 import { Usuario } from "../entities/Usuario";
 import { AppError } from "../utils/errors";
 import { capacidadesDe } from "./equipo.service";
@@ -214,10 +214,10 @@ const llamarModelo = async (messages: MensajeOllama[]): Promise<string> => {
         messages,
         stream: false,
         ...(await campoThink(env.OLLAMA_MODEL, env.OLLAMA_THINK)),
-        // Mismo num_ctx que la extracción de facturas: si difiere, Ollama
-        // recarga el modelo al alternar entre chat y escaneo.
+        // Mismo num_ctx y keep_alive que las facturas y el OCR (mismo modelo):
+        // si difieren, Ollama recarga el modelo al alternar.
         options: { temperature: 0.2, num_ctx: env.OLLAMA_NUM_CTX },
-        keep_alive: "30m",
+        keep_alive: KEEP_ALIVE,
       }),
       signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
     });

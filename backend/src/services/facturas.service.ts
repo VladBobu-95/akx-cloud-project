@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AppDataSource } from "../config/database";
 import { env } from "../config/env";
-import { ollamaHeaders, campoThink } from "../config/ollama";
+import { ollamaHeaders, campoThink, KEEP_ALIVE } from "../config/ollama";
 import { Archivo } from "../entities/Archivo";
 import { Usuario } from "../entities/Usuario";
 import { Empresa } from "../entities/Empresa";
@@ -14,13 +14,13 @@ import { pareceFacturaConImportes } from "./extraccion.service";
 // Cola durable: encolarEscaneoManual encola aquí en vez de en la cola en memoria.
 // (Import circular tareas<->facturas: ambos se usan solo dentro de funciones, no
 // a nivel de módulo, así que se resuelve en runtime sin problema.)
-import { encolarTarea, P_ALTA } from "./tareas.service";
+import { encolarTarea } from "./tareas.service";
 
 // Contenido de la factura: el texto ya extraído (OCR/PDF/DOCX) combinado con
 // la descripción manual del usuario, si la hay (ver `combinarContenido`). NO
 // vuelve a lanzar el OCR aquí: el pipeline de subida (`indexarArchivo`) ya lo
 // intentó siempre antes de llegar a este punto — repetirlo aquí solo duplicaba
-// el coste de deepseek-ocr en imágenes sin texto real, sin ningún beneficio
+// el coste del OCR en imágenes sin texto real, sin ningún beneficio
 // (mismo archivo, misma IA con temperature 0 → mismo resultado vacío otra vez).
 // Añade la "pista" del usuario si la hay. Lanza si no consigue nada.
 const leerContenidoFactura = (archivo: Archivo, pista?: string): string => {
@@ -121,16 +121,14 @@ const extraerDatosFactura = async (contenido: string): Promise<DatosFactura> => 
         // versión) TRUNCA en silencio una factura larga — `textoExtraido` llega
         // hasta ~20k chars (≈6-7k tokens) y `leerContenidoFactura` no lo recorta,
         // así que sin esto las líneas/totales del final de una factura densa se
-        // perdían. Es el MISMO valor que usa el chat (mismo modelo): si difiriera,
-        // Ollama recargaría el modelo cada vez que se alternan chat y escaneo.
-        // keep_alive mantiene el modelo cargado entre facturas de un mismo lote
-        // (escanear 40 de golpe) en vez de descargarlo y recargarlo en cada una.
+        // perdían. num_ctx y keep_alive son los MISMOS que en el chat y el OCR
+        // (mismo modelo): si difirieran, Ollama lo recargaría al alternar.
         options: { temperature: 0, num_ctx: env.OLLAMA_NUM_CTX },
-        keep_alive: "10m",
+        keep_alive: KEEP_ALIVE,
       }),
       // Timeout para no colgarse si Ollama no libera VRAM para cargar el modelo
-      // de chat (ver OLLAMA_TIMEOUT_MS): mejor un 503 reintentable que dejar el
-      // archivo eternamente en "escaneando".
+      // (ver OLLAMA_TIMEOUT_MS): mejor un 503 reintentable que dejar el archivo
+      // eternamente en "escaneando".
       signal: AbortSignal.timeout(env.OLLAMA_TIMEOUT_MS),
     });
   } catch {
@@ -598,10 +596,7 @@ export const enSerieFacturas = enSerie;
 
 // NOTA: la antigua cola en memoria (colaOcr/colaExtraccion/procesarColas) se
 // sustituyó por la COLA DURABLE en Postgres (tareas.service.ts), que sobrevive
-// a reinicios, reintenta con backoff y limita la concurrencia hacia Ollama. El
-// agrupado por fases (evitar que Ollama cambie de modelo por archivo: OCR de
-// imágenes con deepseek vs. extracción con qwen, que no caben juntos en la GPU)
-// se conserva allí mediante las prioridades P_TEXTO/P_OCR/P_IMG_SCAN.
+// a reinicios, reintenta con backoff y limita la concurrencia hacia Ollama.
 
 // --- API pública del servicio ---
 
@@ -853,14 +848,12 @@ export const encolarEscaneoManual = async (
   }
   await marcarPendiente(archivo);
   // El texto ya se extrajo al subir; escanear NO relanza OCR. Encolamos una
-  // tarea durable de extracción (prioridad alta: la pide el usuario) que el
-  // worker procesa. El estado final lo deja escanearFactura y lo refleja el
+  // tarea durable de extracción que el worker procesa. El estado final lo deja escanearFactura y lo refleja el
   // polling de la columna "Estado".
   await encolarTarea({
     tipo: "autoescanear",
     archivoId,
     usuarioId,
-    prioridad: P_ALTA,
     pista,
   });
 };

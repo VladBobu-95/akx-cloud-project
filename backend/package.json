@@ -1,7 +1,7 @@
 {
   "name": "clouddrive-backend",
   "version": "1.0.0",
-  "description": "API de almacenamiento en la nube con chatbot IA (Express + TypeORM + Postgres/pgvector + MinIO + Ollama)",
+  "description": "API de almacenamiento en la nube con chatbot IA (Express + TypeORM + Postgres + MinIO + Ollama)",
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",

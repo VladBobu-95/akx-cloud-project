@@ -4,7 +4,7 @@ App de almacenamiento en la nube con chatbot IA. Backend Node/TypeScript + front
 
 **Repo:** `https://github.com/VladBobu-95/akx-cloud-project`
 
-> El **detalle y el porqué** de cada decisión (chat por SQL y su frontera de seguridad, cascada OCR,
+> El **detalle y el porqué** de cada decisión (chat por SQL y su frontera de seguridad, OCR,
 > historial de bugs, limitaciones) está en **`NOTAS.md`** — que NO se carga cada sesión.
 > Este `CLAUDE.md` es la referencia compacta de uso frecuente; consulta `NOTAS.md` cuando
 > toques chat/OCR/facturas en profundidad.
@@ -29,8 +29,8 @@ akx-cloud-project/
 | API | Node 22, Express 5, TypeScript 6 |
 | ORM | TypeORM + PostgreSQL 16 |
 | Objetos | MinIO (S3-compatible) |
-| IA chat + facturas | Ollama — `qwen3:14b` (servidor, GPU de 12 GB); el chat lee la BD escribiendo SQL de solo lectura |
-| Visión/OCR | Cascada granite3.2-vision → deepseek-ocr → Tesseract.js `spa+cat+eng` (ver `NOTAS.md`) |
+| IA (chat + facturas + visión) | Ollama — un **único modelo multimodal** `qwen3.5:9b` (servidor, GPU); el chat lee la BD escribiendo SQL de solo lectura |
+| OCR | El mismo modelo de visión → Tesseract.js `spa+cat+eng` de respaldo (ver `NOTAS.md`) |
 | Extracción | pdf-parse v2 (PDF), mammoth (DOCX) |
 | Auth / Validación | JWT + bcrypt / Zod |
 | Frontend | Angular 22 (signals, standalone), SCSS, marked v18 |
@@ -43,10 +43,8 @@ akx-cloud-project/
 ```bash
 cp .env.example .env                          # rellenar valores reales
 docker compose up -d
-# modelos Ollama (solo 1ª vez):
-docker exec clouddrive-ollama ollama pull qwen3:14b
-docker exec clouddrive-ollama ollama pull deepseek-ocr
-docker exec clouddrive-ollama ollama pull granite3.2-vision
+# modelo Ollama (solo 1ª vez):
+docker exec clouddrive-ollama ollama pull qwen3.5:9b
 ```
 
 | URL | Servicio |
@@ -75,11 +73,9 @@ MINIO_USER, MINIO_PASSWORD, MINIO_BUCKET=archivos, MINIO_PORT_HOST=9000, MINIO_C
 API_PORT_HOST=3000, JWT_SECRET=<min 32 chars>, CORS_ORIGIN=*   # en prod: dominio del front
 SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD                          # seed del superadmin (multi-tenant; ver abajo)
 OLLAMA_URL=http://host.docker.internal:11434                   # local override → http://ollama:11434
-OLLAMA_MODEL=qwen3:14b                                         # chat (SQL) + extracción de facturas
-OLLAMA_THINK=false                                             # opcional: modo pensamiento (mejor SQL, más lento)
-OLLAMA_NUM_CTX=8192                                            # opcional: contexto del chat y de las facturas
-OLLAMA_CAPTION_MODEL=granite3.2-vision                         # 1ª pasada visión
-OLLAMA_OCR_MODEL=deepseek-ocr                                  # 2ª pasada (solo si parece factura)
+OLLAMA_MODEL=qwen3.5:9b                                        # ÚNICO modelo (multimodal): chat (SQL) + facturas + OCR de imágenes
+OLLAMA_THINK=false                                             # opcional: modo pensamiento del chat (mejor SQL, más lento)
+OLLAMA_NUM_CTX=8192                                            # opcional: contexto de todas las llamadas (mismo valor → no recarga el modelo)
 N8N_API_KEY, N8N_USER_EMAIL                                    # opcional: key fija de pruebas para /api/n8n (actúa como ese usuario)
 ```
 `env.ts` valida con Zod y **falla al arrancar** si falta algo. Cambiar de modelo: editar
@@ -125,7 +121,7 @@ services/
   compartido.service.ts  carpetas compartidas por rol: CRUD admin, acceso por empresa+roles, subir/listar/descargar/borrar (almacenamiento único, dedup por hash)
   chat.service.ts        chatbot IA por SQL de solo lectura (ver abajo + NOTAS.md)
   contenido.service.ts   texto extraído / descripción manual de cada archivo + buscador del explorador (nombre y contenido, sin IA)
-  extraccion.service.ts  texto de PDF/DOCX/txt + cascada OCR de imágenes
+  extraccion.service.ts  texto de PDF/DOCX/txt + OCR de imágenes (modelo de visión → Tesseract)
   facturas.service.ts    escaneo, auto-escaneo, clasificación venta/compra (CIF/nombre), edición manual, listados paginados
 ```
 
@@ -259,10 +255,10 @@ La petición actúa **como el usuario dueño de la clave** (mismos permisos/capa
 4. **Solo lectura**: mover/copiar/borrar/subir/restaurar se hace desde el explorador; el chat lo indica.
 5. **Frontera de seguridad en la BD, no en el prompt**: el SQL corre con el rol `ateka_chat` (conexión propia, `config/chatDb.ts`), que solo puede leer las vistas `chat.*`; estas filtran por un token de un solo uso (`chat_accesos`) que el rol no puede leer. Una sola sentencia (protocolo extendido de pg), transacción `READ ONLY`, `statement_timeout` 10 s, máx. 200 filas. Tests: `tests/chat.sql.test.ts`.
 6. **RBAC**: `facturas` → `chat.facturas` devuelve filas; `busqueda` → `chat.archivos.contenido` viene relleno (si no, NULL). Las partes del prompt de lo que no puede ver no se incluyen.
-7. **Modelo**: `OLLAMA_THINK=true` activa el modo pensamiento (qwen3); `think` solo se manda a modelos que lo soportan (`soportaThink`). Mismo `OLLAMA_NUM_CTX` que la extracción de facturas para que Ollama no recargue el modelo al alternar.
+7. **Modelo**: `OLLAMA_THINK=true` activa el modo pensamiento (qwen3); `think` solo se manda a modelos que lo soportan (`soportaThink`). Mismo `OLLAMA_NUM_CTX` y `KEEP_ALIVE` (`config/ollama.ts`) en chat, facturas y OCR para que Ollama no recargue el modelo al alternar.
 
 ## OCR, texto extraído y buscador — resumen
-- **OCR imágenes** (`extraccion.service.ts`): cascada de 3 pasadas (granite → deepseek si parece factura → Tesseract si los VLM se quedan cortos), normalizando a PNG primero. Detalle completo en `NOTAS.md`.
+- **OCR imágenes** (`extraccion.service.ts`): una llamada al modelo de visión (`OLLAMA_MODEL`: transcribe o describe en español) y Tesseract si se queda corto, normalizando a PNG primero. Sin 2ª pasada ni traducción. Detalle completo en `NOTAS.md`.
 - **Tesseract multi-idioma**: `IDIOMAS_OCR = "spa+cat+eng"` (traineddata vendorizados en `backend/tessdata/`, copiados por el Dockerfile) — para facturas escaneadas/fotos en catalán/inglés, no solo castellano. Ampliar = editar la cadena + añadir el `.traineddata`.
 - **OCR de página en PDFs con texto** (rescate del membrete): solo se rasteriza+OCR-ea la 1ª página si el texto `pareceFacturaConImportes` **y NO** trae ya la línea "Registro/Registre/Rexistro Mercantil" (`tieneRegistroMercantil`). Si el emisor ya está en la capa de texto (ej. factura de la luz), el OCR solo añadiría ruido (leer "AKX"→"ARX"); se salta.
 - **Texto extraído** (`contenido.service.ts`): al subir, la tarea `indexar` extrae el texto (PDF/DOCX/OCR) a `textoExtraido`. Sin embeddings (la búsqueda semántica con bge-m3 se quitó).
@@ -304,7 +300,7 @@ app.routes.ts, app.config.ts (provideRouter + HttpClient con interceptor), style
 - **No editar a mano en el servidor**: cambios en local → commit → push → `git pull`.
 
 ## Limitaciones conocidas (resumen)
-- El chat por SQL necesita un modelo capaz (`qwen3:14b`); con 3b/7b el SQL falla bastante más. Un modelo pequeño también mezcla campos al extraer facturas — mitigado con `reconciliarPartes`/`resolverDireccion` y la **edición manual** en la página Facturas. Detalle y resto de limitaciones en `NOTAS.md`.
+- El chat por SQL necesita un modelo capaz (`qwen3.5:9b` o mayor); con 3b/7b el SQL falla bastante más. Un modelo pequeño también mezcla campos al extraer facturas — mitigado con `reconciliarPartes`/`resolverDireccion` y la **edición manual** en la página Facturas. Detalle y resto de limitaciones en `NOTAS.md`.
 - Tipos permitidos: PDF, DOCX, XLSX, TXT, CSV, JPEG, PNG, WEBP. Máx 50 MB. Subida: 1 archivo/petición (paralelas en el front).
 - **Carpetas compartidas / chat por rol (Fase 3):**
   - La capacidad **`chat`** gobierna el acceso al chatbot entero: sin ella, `POST /api/chat` responde 403 y el front oculta el enlace/ruta `/inicio`. Un miembro **sin ningún rol** (o con roles que no incluyen `chat`) **no ve el chatbot** — el admin debe darle un rol con la capacidad `chat`. (Quitar `chat` a un rol surte efecto en la siguiente petición del backend y al recargar el front, sin re-loguear.) La capacidad **`busqueda`** decide si el chat puede leer el **contenido** de los documentos (no solo nombres y carpetas).

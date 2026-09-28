@@ -17,14 +17,6 @@ import {
 // (colaOcr/colaExtraccion) que se perdían al reiniciar la API. Ver Tarea.ts.
 // ---------------------------------------------------------------------------
 
-// Prioridades (menor = antes). Reproducen el agrupado por fases del diseño
-// anterior para que Ollama no descargue/cargue modelos por archivo: primero el
-// texto barato y el escaneo de PDFs, luego el OCR de imágenes (deepseek), y al
-// final el escaneo de factura derivado de esas imágenes (qwen).
-export const P_TEXTO = 0; // indexar de PDF/DOCX/TXT (sin IA de visión)
-export const P_ALTA = 0; // autoescanear de PDF / escaneo manual (rápido, prioritario)
-export const P_OCR = 1; // indexar de imagen (OCR con deepseek-vision)
-export const P_IMG_SCAN = 2; // autoescanear derivado de una imagen ya OCR'eada
 
 const repo = () => AppDataSource.getRepository(Tarea);
 const archivoRepo = () => AppDataSource.getRepository(Archivo);
@@ -58,7 +50,6 @@ export interface NuevaTarea {
   tipo: "indexar" | "autoescanear";
   archivoId: string;
   usuarioId: string;
-  prioridad?: number;
   pista?: string;
 }
 
@@ -70,7 +61,6 @@ export const encolarTarea = async (t: NuevaTarea): Promise<void> => {
     tipo: t.tipo,
     archivoId: t.archivoId,
     usuarioId: t.usuarioId,
-    prioridad: t.prioridad ?? 0,
     maxIntentos: env.WORKER_MAX_INTENTOS,
     pista: t.pista ?? null,
   });
@@ -135,7 +125,6 @@ const ejecutarIndexar = async (t: Tarea): Promise<void> => {
       tipo: "autoescanear",
       archivoId: archivo.id,
       usuarioId: t.usuarioId,
-      prioridad: /^image\//.test(archivo.mimeType) ? P_IMG_SCAN : P_ALTA,
     });
   } else {
     await limpiarEstadoSiNoEsFactura(archivo);

@@ -28,7 +28,7 @@ import {
 } from "../services/carpetas.service";
 import { actualizarDescripcionManual, buscarEnPersonales } from "../services/contenido.service";
 import { marcarPendiente } from "../services/facturas.service";
-import { encolarTarea, marcarIndexadoPendiente, P_OCR, P_TEXTO } from "../services/tareas.service";
+import { encolarTarea, marcarIndexadoPendiente } from "../services/tareas.service";
 import { AppError } from "../utils/errors";
 import { validarContenidoArchivo } from "../utils/tiposArchivo";
 
@@ -168,16 +168,10 @@ export const ctrlSubir = async (
     //
     // Se encola ANTES de responder para que la tarea quede persistida: si el
     // proceso muere justo después del 201, el archivo no se queda sin indexar.
-    //
-    // La prioridad reproduce el agrupado por fases que evita que Ollama cambie de
-    // modelo por archivo: el OCR de imágenes (deepseek) va con prioridad inferior
-    // al texto barato/escaneo de PDFs, y el escaneo derivado de imágenes (qwen)
-    // queda para el final.
     await encolarTarea({
       tipo: "indexar",
       archivoId: archivo.id,
       usuarioId: req.usuario!.id,
-      prioridad: /^image\//.test(archivo.mimeType) ? P_OCR : P_TEXTO,
     });
 
     res.status(201).json(archivo);

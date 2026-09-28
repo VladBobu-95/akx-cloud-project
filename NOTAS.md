@@ -8,7 +8,7 @@
 ## Chat por SQL (`chat.service.ts`)
 
 Sustituye al chat anterior (tools + ~160 regex de pre-flights, 4.000 líneas) desde la
-migración `1779000000000-ChatSql`. El modelo (`OLLAMA_MODEL`, por defecto `qwen3:14b`)
+migración `1779000000000-ChatSql`. El modelo (`OLLAMA_MODEL`, por defecto `qwen3.5:9b`)
 ya no llama a funciones: **escribe SQL de solo lectura** y redacta la respuesta.
 
 **Flujo** (`chatear`):
@@ -16,7 +16,13 @@ ya no llama a funciones: **escribe SQL de solo lectura** y redacta la respuesta.
 2. Prompt de sistema con el esquema de las vistas `chat.*`, la fecha de hoy (Europe/Madrid),
    el nombre/CIF de la empresa, reglas SQL y ejemplos. Las partes de facturas/contenido solo
    aparecen si el rol tiene `facturas`/`busqueda`.
-3. Se envían los **últimos 8 mensajes** (usuario y bot): el chat es de solo lectura, así que
+3. Historial (`aHistorial`): se quitan las preguntas que se quedaron sin respuesta
+   (`sinPreguntasHuerfanas`: si no, el modelo contestaba dos preguntas a la vez) y las
+   respuestas previas del bot se **recortan a 200 caracteres**. Enteras, el modelo contestaba
+   copiándolas sin volver a consultar (`0 consultas SQL` en el log) y arrastraba sus errores
+   ("no encuentro text2.webp" repetido). El prompt exige consultar siempre, responder solo al
+   último mensaje y, al buscar por nombre, usar la parte distintiva sin extensión y reintentar
+   con una búsqueda más amplia antes de decir que no existe. Se envían los **últimos 8 mensajes** (usuario y bot): el chat es de solo lectura, así que
    reenviar el historial ya no puede repetir acciones (el motivo por el que antes solo se
    mandaba el último mensaje) y permite preguntas de seguimiento ("¿y en mayo?").
 4. Si el modelo responde con un bloque ```` ```sql ````, se ejecuta y se le devuelven las filas
@@ -60,8 +66,8 @@ de responder que no existe. El worker registra la duración de cada tarea
 
 **Modelo**: `OLLAMA_THINK=true` activa el modo pensamiento de qwen3 (mejor SQL en preguntas
 difíciles, bastante más lento). Solo se manda `think` a modelos que lo soportan
-(`soportaThink`, vía `/api/show`). `OLLAMA_NUM_CTX` (8192) es el mismo para el chat y la
-extracción de facturas: si difiriera, Ollama recargaría el modelo al alternar.
+(`soportaThink`, vía `/api/show`). `OLLAMA_NUM_CTX` (8192) y `keep_alive` son los mismos para
+el chat, las facturas y el OCR (mismo modelo): si difirieran, Ollama lo recargaría al alternar.
 
 ---
 
@@ -107,26 +113,27 @@ El sistema cataloga **ventas** (la empresa del propietario es el emisor) y **com
 
 **Reclasificar** (`POST /api/facturas/reclasificar`, botón "↻ Reclasificar"): el `tipo` se calcula y **guarda al escanear**, así que fijar/corregir el CIF de la empresa DESPUÉS no reclasifica lo ya escaneado — se quedaría todo en `desconocido`. `reclasificarFacturas` re-ejecuta `resolverDireccion` sobre los datos YA guardados (emisor/cliente/NIFs + el `textoExtraido` del archivo para el ancla CIF-en-texto), **sin re-escanear ni re-OCR** (instantáneo) y aprende el CIF por corroboración si aún no lo tiene (los resúmenes, al generarse desde la BD, ya reflejan el nuevo `tipo`). Caso típico: empresa creada sin CIF → todas `desconocido` → el admin pone su CIF en Equipo → "Reclasificar".
 
-## OCR y descripción de imágenes (`extraccion.service.ts`) — cascada de 3 pasadas
+## OCR y descripción de imágenes (`extraccion.service.ts`) — modelo de visión + Tesseract
 
-`ocrImagen()` usa una cascada "ligero primero" (los dos primeros son modelos Ollama configurables; el tercero es CPU pura):
+Un **único modelo** (`OLLAMA_MODEL`, multimodal) hace el chat, la extracción de facturas y el OCR
+de imágenes. Antes había una cascada de modelos (granite3.2-vision → deepseek-ocr → Tesseract, más
+una traducción al español con el modelo de chat); con un solo modelo se quitó todo eso, y con ello
+el agrupado por fases de la cola (prioridades `P_OCR`/`P_IMG_SCAN`), que solo servía para que
+Ollama no alternara modelos en la GPU. Todas las llamadas comparten `num_ctx` (`OLLAMA_NUM_CTX`) y
+`keep_alive` (`KEEP_ALIVE`, 30 min en `config/ollama.ts`): si difieren, Ollama recarga el modelo.
+Al arrancar, `verificarModelosOllama` avisa si el modelo no está descargado o no tiene visión.
+
+`ocrImagen()`:
 
 1. **Normalización a PNG** (`aPng`, sharp): TODA imagen se reconvierte a PNG antes de mandarla a Ollama. Sin esto, **WEBP** hacía fallar la decodificación en llama.cpp (y en GPU llegaba a tirar el proceso de Ollama).
-2. **1ª pasada — granite3.2-vision** (`OLLAMA_CAPTION_MODEL`): VLM ligero (~2.4GB). Transcribe el texto si lo hay o describe la foto si no, en una sola llamada. El prompt fuerza descripción **siempre en español**.
-3. **¿Parece factura con importes?** (`pareceFacturaConImportes`): símbolos de moneda / palabras clave (factura, IVA, total…) o muchos dígitos → escala a la 2ª pasada. Si no, se queda con granite (sin pagar la pasada lenta).
-4. **2ª pasada — deepseek-ocr** (`OLLAMA_OCR_MODEL`): OCR especialista, la transcripción más fiel de tablas/importes. Solo para lo que parece factura. Si falla/alucina, se conserva granite. Su salida puede traer tablas HTML; `limpiarTablasHtml()` las pasa a texto plano con `|`, consistente con pdf-parse.
-5. **¿Resultado pobre?** (`pareceResultadoPobre`): vacío, "meta-descripción" (habla SOBRE la estructura citando NOMBRES de campos en vez de valores) o negación de texto ("no hay texto...") sin nada útil detrás (<15 palabras) → 3ª red. Cuidado con falsos positivos: una descripción real puede empezar "La imagen presenta..." o terminar "No hay texto presente en la imagen"; por eso la meta-descripción se caza por frases concretas y la negación solo cuenta si el resto es corto.
-6. **3ª red — Tesseract.js** (`ocrConTesseract`, worker singleton `createWorker(IDIOMAS_OCR)` con `IDIOMAS_OCR = "spa+cat+eng"` — castellano primero + catalán e inglés, para facturas escaneadas/fotos en esas lenguas; los `.traineddata` van vendorizados en `backend/tessdata/` y los copia el Dockerfile): OCR clásico por CPU, sin alucinaciones. Preprocesado (`prepararParaTesseract`: gris + normalización + reescalado a ancho mínimo 2000px) y **dos pasadas** (`PSM.AUTO` + `PSM.SPARSE_TEXT`) concatenadas: en pruebas reales `AUTO` se saltaba filas de tablas con bordes y `SPARSE_TEXT` las recuperaba pero perdía precisión en otros datos; ningún modo gana siempre, así que se quedan los dos y la IA de extracción escoge el dato correcto.
-7. **Español garantizado** (`asegurarEspanol`/`pareceIngles`/`traducirAlEspanol`): si el resultado tiene 2+ palabras inglesas típicas, se traduce con `OLLAMA_MODEL` antes de guardar.
+2. **Visión** (`consultarVision`, `OLLAMA_MODEL` sin modo pensamiento, máx. 1500 tokens): transcribe el texto si lo hay o describe la foto (en español) si no, en una sola llamada. Si trae tablas HTML, `limpiarTablasHtml()` las pasa a texto plano con `|`, consistente con pdf-parse.
+3. **¿Resultado pobre?** (`pareceResultadoPobre`): vacío, "meta-descripción" (habla SOBRE la estructura citando NOMBRES de campos en vez de valores) o negación de texto ("no hay texto...") sin nada útil detrás (<15 palabras) → Tesseract. Cuidado con falsos positivos: una descripción real puede empezar "La imagen presenta..." o terminar "No hay texto presente en la imagen"; por eso la meta-descripción se caza por frases concretas y la negación solo cuenta si el resto es corto.
+4. **Respaldo — Tesseract.js** (`ocrConTesseract`, worker singleton `createWorker(IDIOMAS_OCR)` con `IDIOMAS_OCR = "spa+cat+eng"` — castellano primero + catalán e inglés, para facturas escaneadas/fotos en esas lenguas; los `.traineddata` van vendorizados en `backend/tessdata/` y los copia el Dockerfile): OCR clásico por CPU, sin alucinaciones. Preprocesado (`prepararParaTesseract`: gris + normalización + reescalado a ancho mínimo 2000px) y **dos pasadas** (`PSM.AUTO` + `PSM.SPARSE_TEXT`) concatenadas: en pruebas reales `AUTO` se saltaba filas de tablas con bordes y `SPARSE_TEXT` las recuperaba pero perdía precisión en otros datos; ningún modo gana siempre, así que se quedan los dos y la IA de extracción escoge el dato correcto.
 
-Si `OLLAMA_OCR_MODEL == OLLAMA_CAPTION_MODEL`, la 2ª pasada se desactiva sola (máquinas con un solo VLM). Reparto: granite clasifica/describe barato, deepseek afina facturas, Tesseract entra solo cuando ningún VLM dio algo aprovechable. (Se comprobó que ningún modelo pequeño iguala a deepseek en fidelidad de OCR, y que deepseek alucina ante fotos sin texto.)
-
-`pareceBucleDegenerado()` descarta la basura de un modelo solo-OCR ante imagen sin texto (bucle repitiendo `<table:tr><td>…` o `None`). Juzga el contenido **tras quitar el HTML**, y la regla "menos de 3 palabras → basura" solo se aplica si el texto original TENÍA etiquetas (deepseek emite esas etiquetas también para tablas legítimas; una respuesta corta SIN etiquetas es pobre por otra razón).
-
-En GPU de 8GB, deepseek-ocr (6.7GB) no entra entero (corre parcial en CPU, ~2 min/imagen) — pero solo se invoca en imágenes que parecen factura. Todo en segundo plano.
+`pareceBucleDegenerado()` descarta la basura de un modelo de visión ante imagen sin texto (bucle repitiendo `<table:tr><td>…` o `None`). Juzga el contenido **tras quitar el HTML**, y la regla "menos de 3 palabras → basura" solo se aplica si el texto original TENÍA etiquetas (esas etiquetas también salen en tablas legítimas; una respuesta corta SIN etiquetas es pobre por otra razón).
 
 ### Describir una imagen a mano (`PATCH /api/archivos/:id/descripcion`)
-Ya **no** hay modal obligatorio al subir. Con la cascada, una foto sin texto se describe automáticamente al subir. El endpoint queda para corregir/afinar a mano; lo que se guarde se combina con el OCR vía `combinarContenido` (que omite repetir el OCR si ya está contenido en la descripción) y lo leen el chat y el buscador. Escanear manualmente algo que no es factura ya no copia `textoExtraido` dentro de `descripcionManual` (solo guarda la pista real del usuario).
+Ya **no** hay modal obligatorio al subir. El modelo de visión describe automáticamente al subir una foto sin texto. El endpoint queda para corregir/afinar a mano; lo que se guarde se combina con el OCR vía `combinarContenido` (que omite repetir el OCR si ya está contenido en la descripción) y lo leen el chat y el buscador. Escanear manualmente algo que no es factura ya no copia `textoExtraido` dentro de `descripcionManual` (solo guarda la pista real del usuario).
 
 ### No inventar facturas a partir de imágenes que no lo son
 El `SCHEMA_FACTURA` ya NO marca campos como `required`: con la decodificación restringida de Ollama, exigir todos los campos forzaba al modelo a inventar emisor/cliente/importes cuando el texto era una foto sin factura. Además, antes de extraer hay un **gate** `pareceFacturaConImportes(contenido)`: si el contenido no tiene señales de factura, no se llama a la IA y se trata como `no_factura`. Y al detectar `no_factura` se borra cualquier factura inventada que se hubiera guardado antes para ese archivo.
@@ -147,8 +154,7 @@ Para facturas subidas antes de esta función: escanearlas desde la página Factu
 
 ## Limitaciones conocidas (detalle)
 
-- **Modelo del chat**: el text-to-SQL depende del tamaño del modelo. `qwen3:14b` (cabe entero en 12 GB con `OLLAMA_NUM_CTX=8192`, sin tocar la configuración de Ollama) es el objetivo; con 3b/7b el SQL falla bastante más (columnas inventadas, sumas mezclando monedas). Los errores de Postgres se le devuelven para que corrija, pero con un modelo pequeño no siempre lo consigue. La extracción de facturas con un modelo pequeño también mezcla campos (p. ej. nombre+email+teléfono en `cliente`).
-- **VRAM compartida**: chat (qwen3:14b ~9 GB) y OCR (granite ~2,4 GB, deepseek-ocr ~6,7 GB) no caben a la vez en 12 GB; Ollama los intercambia y la primera respuesta del chat tras un escaneo tarda unos segundos más.
-- **PDFs escaneados (sin capa de texto)**: `pdf-parse` no hace OCR; solo las imágenes pasan por la cascada de visión. Para un PDF puramente escaneado habría que rasterizar las páginas a imagen antes del OCR (pendiente).
-- **Auto-escaneo al subir**: consume cómputo de OCR+IA por cada PDF/imagen, aunque la guardia `soloSiFactura` no guarde los que no son factura.
-- **GPU pequeña (8GB)**: deepseek-ocr corre parcial en CPU (~2 min/imagen); no bloquea la subida (segundo plano). Tesseract siempre en CPU.
+- **Modelo**: el text-to-SQL depende del tamaño del modelo; con 3b/7b el SQL falla bastante más (columnas inventadas, sumas mezclando monedas). Los errores de Postgres se le devuelven para que corrija, pero con un modelo pequeño no siempre lo consigue. La extracción de facturas con un modelo pequeño también mezcla campos (p. ej. nombre+email+teléfono en `cliente`). Al ser un solo modelo para todo, tiene que ser multimodal (`qwen3.5:9b` por defecto).
+- **Cola compartida**: chat, OCR y facturas usan el mismo modelo; una subida masiva de imágenes ocupa la GPU y el chat responde más lento mientras tanto (el worker procesa de 1 en 1, `WORKER_CONCURRENCIA`).
+- **PDFs escaneados (sin capa de texto)**: se rasterizan las primeras páginas (`MAX_PAGINAS_OCR_PDF`) y se leen con Tesseract, no con el modelo de visión.
+- **Auto-escaneo al subir**: consume cómputo de OCR+IA por cada PDF/imagen, aunque la guardia `soloSiFactura` no guarde los que no son factura. Tesseract siempre en CPU.

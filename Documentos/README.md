@@ -12,8 +12,8 @@ la base de datos con SQL de solo lectura, y se puede buscar por nombre y por el
 | Servidor HTTP / rutas | Express 5 + TypeScript (ts-node en dev, `tsc` en build) |
 | ORM / base de datos | TypeORM + PostgreSQL 16 (imagen **pgvector**) |
 | Almacenamiento de archivos | **MinIO** (S3-compatible), descarga por streaming desde la API |
-| IA / asistente | **Ollama**: chat `qwen3:14b` (escribe SQL de solo lectura) + visión `granite3.2-vision` (rápido) → `deepseek-ocr` (OCR fiel de facturas) → **Tesseract.js** (red de seguridad por CPU si los dos modelos anteriores se quedan cortos) |
-| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: cascada de 3 pasadas — granite transcribe/describe, si parece factura deepseek-ocr re-lee para no fallar dígitos, y si ninguno de los dos da algo aprovechable entra Tesseract.js (OCR clásico, preprocesado con sharp). Se puede añadir una descripción a mano (`PATCH .../descripcion`) |
+| IA / asistente | **Ollama** con un **único modelo multimodal** `qwen3.5:9b`: chat (escribe SQL de solo lectura), extracción de facturas y visión/OCR; **Tesseract.js** como red de seguridad por CPU |
+| Extracción de texto | `pdf-parse` (PDF) + `mammoth` (Word) + texto plano; imágenes: el modelo de visión transcribe el texto o describe la foto, y si no da algo aprovechable entra Tesseract.js (OCR clásico, preprocesado con sharp). Se puede añadir una descripción a mano (`PATCH .../descripcion`) |
 | Subida de ficheros | Multer (en memoria, filtro MIME, límite 50 MB) |
 | Auth | JWT (`jsonwebtoken`) + bcrypt |
 | Validación | Zod (entrada y variables de entorno) |
@@ -37,9 +37,7 @@ solo lectura; todo lo que modifica pasa por la API normal.
 ```bash
 cp .env.example .env         # rellenar contraseñas y JWT_SECRET (mín. 16 chars)
 docker compose up -d         # db + minio + api + web + ollama (en casa, vía override)
-docker exec clouddrive-ollama ollama pull qwen3:14b          # chatbot + extracción de facturas
-docker exec clouddrive-ollama ollama pull granite3.2-vision  # visión: 1ª pasada (transcribe/describe)
-docker exec clouddrive-ollama ollama pull deepseek-ocr       # visión: OCR fiel de facturas (2ª pasada)
+docker exec clouddrive-ollama ollama pull qwen3.5:9b   # único modelo: chatbot + facturas + visión/OCR
 ```
 
 Desarrollo con hot-reload (fuera de Docker): `cd backend && npm install && npm run dev`
@@ -105,7 +103,7 @@ el contenido de las carpetas.
 El asistente **lee la base de datos escribiendo SQL de solo lectura**; no hay *tool
 calling* ni detección de intenciones por regex. Por cada mensaje:
 
-1. El modelo (`qwen3:14b`, `OLLAMA_MODEL`) recibe el esquema de unas **vistas de solo
+1. El modelo (`qwen3.5:9b`, `OLLAMA_MODEL`) recibe el esquema de unas **vistas de solo
    lectura** (`chat.archivos`, `chat.carpetas`, `chat.carpetas_compartidas`,
    `chat.facturas`, `chat.lineas_factura`), la fecha de hoy, reglas y ejemplos, más los
    últimos 8 mensajes de la conversación.
@@ -227,7 +225,7 @@ servicio `web` del `docker-compose.yml` construye el frontend desde `./frontend`
 cp .env.example .env        # editar OLLAMA_URL al Ollama externo del servidor (con GPU)
 rm docker-compose.override.yml   # en el servidor NO se usa Ollama en contenedor
 docker compose up -d --build     # db + minio + api + web
-docker exec <ollama-del-servidor> ollama pull qwen3:14b   # o el modelo que toque
+docker exec <ollama-del-servidor> ollama pull qwen3.5:9b   # o el modelo que toque (multimodal)
 ```
 
 La API apunta al Ollama externo vía `OLLAMA_URL=http://host.docker.internal:11434`
@@ -253,3 +251,4 @@ API directa); no exponer 5433 (Postgres) ni 9000 (MinIO).
 - [x] **Fase 4 — Facturas:** visión en cascada de 3 pasadas (granite3.2-vision → deepseek-ocr para facturas → Tesseract.js como red de seguridad por CPU), auto-escaneo al subir, analítica filtrable vía tools (`ventas_top`, `totales_facturas`, `clientes_top`), descripción de fotos a mano opcional
 - [x] **Fase 5 — Robustez:** cola de trabajos durable en Postgres + worker (reintentos, backoff, sobrevive a reinicios) que sustituye al procesado en memoria, estado de indexado en el explorador, estado del chat fuera de memoria, deduplicación por hash al subir, rate-limit + cap de backlog en los endpoints caros, confirmación para vaciar la papelera, validación del avatar, reconciliación MinIO↔Postgres + retención de papelera, y detección de intenciones del chat extraída a un módulo puro con tests
 - [x] **Fase 6 — Chat por SQL:** el asistente deja el *tool calling* y los pre-flights por regex y consulta la BD con SQL de solo lectura (rol `ateka_chat` + vistas filtradas por usuario); se quita la búsqueda semántica (bge-m3) y el buscador pasa a búsqueda de texto normal
+- [x] **Fase 7 — Un solo modelo:** un único modelo multimodal (`qwen3.5:9b`) para chat, facturas y visión; se quitan la cascada granite → deepseek-ocr, la traducción al español y el agrupado por fases de la cola

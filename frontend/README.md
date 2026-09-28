@@ -83,7 +83,7 @@ Vista de carpetas + archivos con navegación por rutas, subida, drag & drop para
 mover/copiar, renombrar y enviar a la papelera. Las carpetas vacías se mantienen como
 metadata en el backend. Al borrar una selección que mezcla carpetas y archivos sueltos,
 se espera a que el borrado de las carpetas termine en el servidor antes de refrescar la
-lista (si no, una carpeta podía "reaparecer" hasta repetir la acción una segunda vez). Incluye un **buscador por contenido** (RAG): llama a
+lista (si no, una carpeta podía "reaparecer" hasta repetir la acción una segunda vez). Incluye un **buscador por nombre y contenido** (búsqueda de texto, sin IA): llama a
 `GET /api/archivos/buscar?q=` y muestra los documentos relevantes con el fragmento que
 coincide; al hacer clic lleva a la carpeta del archivo.
 
