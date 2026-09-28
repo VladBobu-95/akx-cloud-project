@@ -1,9 +1,14 @@
 import { describe, it, expect } from "@jest/globals";
 import { pareceFacturaConImportes, tieneRegistroMercantil } from "../src/services/extraccion.service";
 import {
+  conciliarImportes,
   corregirFechaConTexto,
+  normalizarFecha,
+  normalizarMoneda,
+  normalizarNif,
   reconciliarPartes,
   resolverDireccion,
+  verificarImportesReales,
   type DatosFactura,
 } from "../src/services/facturas.service";
 import type { Empresa } from "../src/entities/Empresa";
@@ -148,6 +153,10 @@ describe("corregirFechaConTexto (día/mes intercambiados)", () => {
     expect(corregirFechaConTexto("2026-09-10", "Invoice date: 09/10/2026", hoy)).toBe("2026-09-10");
   });
 
+  it("factura americana leída a la española (09/10/2026 → 2026-10-09, futuro) → 2026-09-10", () => {
+    expect(corregirFechaConTexto("2026-10-09", "Invoice date: 09/10/2026", hoy)).toBe("2026-09-10");
+  });
+
   it("fecha futura sin la invertida en el texto → no se inventa", () => {
     expect(corregirFechaConTexto("2026-10-09", "Vencimiento: 9 de octubre de 2026", hoy)).toBe("2026-10-09");
   });
@@ -159,5 +168,100 @@ describe("corregirFechaConTexto (día/mes intercambiados)", () => {
 
   it("sin fecha → null", () => {
     expect(corregirFechaConTexto(null, "10/09/2026", hoy)).toBeNull();
+  });
+});
+
+describe("abonos y descuentos (importes negativos)", () => {
+  it("un abono conserva sus importes negativos si están en el texto", () => {
+    const d: DatosFactura = {
+      subtotal: -41.32,
+      iva: -8.68,
+      total: -50,
+      lineas: [{ descripcion: "Devolución", cantidad: 1, precioUnit: -41.32, total: -41.32 }],
+    };
+    verificarImportesReales(d, "FACTURA RECTIFICATIVA Base -41,32 € IVA 21% -8,68 € Total -50,00 €");
+    expect(d.total).toBe(-50);
+    expect(d.lineas![0].total).toBe(-41.32);
+  });
+
+  it("un importe que no está en el texto se sigue vaciando", () => {
+    const d: DatosFactura = { total: 999 };
+    verificarImportesReales(d, "Total 50,00 €");
+    expect(d.total).toBe(0);
+  });
+
+  it("conciliar completa el total negativo de un abono", () => {
+    const d: DatosFactura = { subtotal: -41.32, iva: -8.68, lineas: [] };
+    conciliarImportes(d);
+    expect(d.total).toBe(-50);
+  });
+
+  it("una línea de descuento negativa cuenta en el subtotal", () => {
+    const d: DatosFactura = {
+      iva: 18.9,
+      lineas: [
+        { descripcion: "Servicio", cantidad: 1, precioUnit: 100 },
+        { descripcion: "Descuento", cantidad: 1, total: -10 },
+      ],
+    };
+    conciliarImportes(d);
+    expect(d.subtotal).toBe(90);
+    expect(d.total).toBe(108.9);
+  });
+});
+
+describe("normalizarNif (prefijo ES, CIF/NIE con letra final)", () => {
+  it("quita el prefijo VAT ES", () => {
+    expect(normalizarNif("ESB13861935")).toBe("B13861935");
+    expect(normalizarNif("ES B-13861935")).toBe("B13861935");
+    expect(normalizarNif("ESQ2826000H")).toBe("Q2826000H");
+  });
+
+  it("deja igual DNI, NIE y CIF sin prefijo", () => {
+    expect(normalizarNif("b13861935")).toBe("B13861935");
+    expect(normalizarNif("X1234567L")).toBe("X1234567L");
+    expect(normalizarNif("12345678Z")).toBe("12345678Z");
+  });
+
+  it("clasifica como compra aunque el CIF venga con ES en la factura", () => {
+    const empresa = { nombre: "AKX Studio SL", nif: "B13861935" } as Empresa;
+    expect(
+      resolverDireccion(
+        { emisor: "Repsol", emisorNif: "A12345678", cliente: "AKX", clienteNif: "ESB13861935" },
+        empresa,
+      ),
+    ).toBe("compra");
+    expect(
+      resolverDireccion({ emisor: "Repsol", emisorNif: "A12345678" }, empresa, "Cliente NIF: ESB13861935"),
+    ).toBe("compra");
+  });
+});
+
+describe("normalizarMoneda", () => {
+  it("no acepta como divisa 3 letras que no lo son", () => {
+    expect(normalizarMoneda("IVA")).toBe("EUR");
+    expect(normalizarMoneda("TAX")).toBe("EUR");
+  });
+
+  it("reconoce nombres en inglés y códigos ISO reales", () => {
+    expect(normalizarMoneda("dollars")).toBe("USD");
+    expect(normalizarMoneda("US  Dollars")).toBe("USD");
+    expect(normalizarMoneda("Pounds")).toBe("GBP");
+    expect(normalizarMoneda("cad")).toBe("CAD");
+    expect(normalizarMoneda("SEK")).toBe("SEK");
+  });
+});
+
+describe("normalizarFecha", () => {
+  it("admite los formatos que devuelve el modelo", () => {
+    expect(normalizarFecha("2026-9-10")).toBe("2026-09-10");
+    expect(normalizarFecha("2026/09/10")).toBe("2026-09-10");
+    expect(normalizarFecha("2026-09-10T00:00:00Z")).toBe("2026-09-10");
+    expect(normalizarFecha("10/09/2026")).toBe("2026-09-10");
+  });
+
+  it("rechaza fechas imposibles o vacías", () => {
+    expect(normalizarFecha("2026-02-30")).toBeNull();
+    expect(normalizarFecha("")).toBeNull();
   });
 });
