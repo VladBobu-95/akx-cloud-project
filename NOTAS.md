@@ -58,6 +58,17 @@ así que la protección está en la BD, no en el prompt:
 rellena. `gestion_archivos` no aplica: el chat no modifica nada (para mover/borrar/subir remite
 al explorador).
 
+**Contexto (8k) y prompt**: si la conversación pasa de `OLLAMA_NUM_CTX`, Ollama descarta mensajes
+en silencio y el modelo responde sin los datos (inventa). Por eso: cada resultado que ve el modelo
+tiene tope (`MAX_CHARS_RESULTADO` 4000 caracteres, filas enteras; con más de 3 filas, columnas una
+vez + filas como arrays en vez de objetos JSON), y al llegar uno nuevo los anteriores del mismo
+mensaje se recortan a 600 (`compactarResultadosAnteriores`). Repetir una consulta idéntica no se
+ejecuta (se le pide que responda). El prompt pide `count/sum/avg` en SQL porque solo ve 25 filas.
+El prompt va de lo fijo a lo variable (nombre/empresa/fecha al final, sección CONTEXTO) para que
+Ollama reutilice lo ya procesado entre preguntas. El SQL corre con `TimeZone = Europe/Madrid`
+(`current_date` de Madrid, no UTC). El contenido de documentos se declara como datos, no
+instrucciones (prompt injection); aun así la frontera real es la BD (solo lectura, filtrado por token).
+
 **Datos de facturas siempre de `chat.facturas`**: al pedir "resumen de la factura X", el modelo
 leía `left(contenido, 2500)` del archivo en vez de `chat.facturas`: el total (al final del
 documento) quedaba cortado → decía 0, y en el texto bruto confundía emisor/cliente (sin
@@ -137,7 +148,10 @@ tiene visión.
 
 1. **Normalización a PNG** (`aPng`, sharp, solo imágenes subidas; las páginas de PDF ya salen en PNG): sin esto, **WEBP** hacía fallar la decodificación en llama.cpp (y en GPU llegaba a tirar el proceso de Ollama).
 2. **Visión** (`consultarVision`, `OLLAMA_MODEL` sin modo pensamiento, máx. 1500 tokens): transcribe el texto si lo hay o describe la foto (en español) si no, en una sola llamada. Si trae tablas HTML, `limpiarTablasHtml()` las pasa a texto plano con `|`, consistente con pdf-parse.
-3. **PDFs**: se rasterizan a escala 2 (~1190 px de ancho); un PDF sin capa de texto lee hasta `MAX_PAGINAS_OCR_PDF` = 5 páginas (una llamada al modelo por página; la tarea tiene un tope de `WORKER_TAREA_TIMEOUT_MS`).
+3. **PDFs**: se rasterizan a escala 2 (~1190 px de ancho); un PDF sin capa de texto lee hasta `MAX_PAGINAS_OCR_PDF` = 5 páginas (una llamada al modelo por página; la tarea tiene un tope de `WORKER_TAREA_TIMEOUT_MS`). Para el **membrete** (PDF con texto sin línea de Registro Mercantil) se usa `PROMPT_MEMBRETE`: solo logo/cabecera/pie (máx. 400 tokens), no la página entera, que ya está en la capa de texto; y se pone DELANTE del texto para que no se pierda al cortar a 20k.
+4. **Prompt**: transcribir en el idioma original (sin traducir: pidiendo la descripción en español, el modelo traducía también facturas en catalán/inglés) y tablas con ` | `.
+
+**Extracción de facturas** (`PROMPT_FACTURA`): define cada campo para los errores típicos (número de factura ≠ contrato/póliza/cliente; fecha de emisión ≠ vencimiento/periodo; base, IVA y total no son líneas; importes `1.234,56 → 1234.56`). El texto que se le manda se recorta a 12k caracteres (8k del principio + 4k del final: partes, totales, pie legal y pista) y la salida a 2500 tokens, para que prompt + texto + JSON quepan en 8k (si no, Ollama recorta en silencio las instrucciones). Las heurísticas posteriores usan el texto completo.
 
 `pareceBucleDegenerado()` descarta la basura de un modelo de visión ante imagen sin texto (bucle repitiendo `<table:tr><td>…` o `None`). Juzga el contenido **tras quitar el HTML**, y la regla "menos de 3 palabras → basura" solo se aplica si el texto original TENÍA etiquetas (esas etiquetas también salen en tablas legítimas).
 
