@@ -271,6 +271,7 @@ El sistema cataloga **ventas** (la empresa es el emisor) y **compras** (es el cl
 2. **`reconciliarPartes`**: ancla el **emisor** en la razón social de la línea legal "…Registro Mercantil…" del pie (también catalán "Registre"/gallego "Rexistro", y extrae su NIF). Corrige inversiones (cliente = empresa del registro → swap) y duplicados (emisor==cliente → lo fija con el del pie), tolerando ruido OCR de nombres (`compartenTokenDistintivo`: "AKX"≈"ARX").
 3. **`resolverDireccion`** (venta/compra/desconocido): por **CIF** de la empresa si se conoce (== emisorNif→venta, == clienteNif→compra); si el CIF del tenant aparece en el **texto** y el emisor es otro→compra; si no, por **parecido de nombre** contra `empresa.nombre`; `emisor==cliente`→desconocido.
 4. **Auto-CIF por corroboración** (`intentarAprenderCifEmpresa`): fija `empresa.nif` cuando el mismo NIF del lado del tenant aparece en **≥2 facturas** (un NIF mal leído una vez no se cuela). Editable por el admin en `/api/equipo/empresa`.
+- **Abonos/devoluciones** (`aplicarSignoAbono`): la IA marca `abono` en el JSON; si además el texto dice "rectificativa/abono/devolución/credit note…" y el total salió en positivo, se invierte el signo de todo el documento (resta en la analítica).
 - **Desconocido** = no se pudo clasificar (queda fuera de ambas analíticas). Se resuelve editándola en la página **Facturas** (pestaña "Sin clasificar").
 - Heurísticas cubiertas por **tests** (`backend/tests/facturas.heuristicas.test.ts`, puros, sin BD/IA).
 

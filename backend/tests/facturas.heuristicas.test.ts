@@ -1,6 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
 import { pareceFacturaConImportes, tieneRegistroMercantil } from "../src/services/extraccion.service";
 import {
+  aplicarSignoAbono,
   conciliarImportes,
   corregirFechaConTexto,
   normalizarFecha,
@@ -207,6 +208,60 @@ describe("abonos y descuentos (importes negativos)", () => {
     conciliarImportes(d);
     expect(d.subtotal).toBe(90);
     expect(d.total).toBe(108.9);
+  });
+});
+
+describe("aplicarSignoAbono (devolución con importes en positivo)", () => {
+  const abono = (): DatosFactura => ({
+    abono: true,
+    subtotal: 100,
+    iva: 21,
+    total: 121,
+    lineas: [
+      { descripcion: "Producto devuelto", cantidad: 1, precioUnit: 110, total: 110 },
+      { descripcion: "Descuento", cantidad: 1, precioUnit: -10, total: -10 },
+    ],
+  });
+
+  it("marca de la IA + palabra en el texto → invierte todo el documento", () => {
+    const d = abono();
+    aplicarSignoAbono(d, "FACTURA RECTIFICATIVA R-2026/3 … Total 121,00 €");
+    expect([d.subtotal, d.iva, d.total]).toEqual([-100, -21, -121]);
+    expect(d.lineas?.map((l) => l.total)).toEqual([-110, 10]);
+    expect(d.lineas?.[0].cantidad).toBe(1);
+  });
+
+  it("reconoce devolución en catalán y credit note en inglés", () => {
+    const cat = abono();
+    aplicarSignoAbono(cat, "Factura de devolució núm. 12");
+    expect(cat.total).toBe(-121);
+    const en = abono();
+    aplicarSignoAbono(en, "CREDIT NOTE #CN-004");
+    expect(en.total).toBe(-121);
+  });
+
+  it("sin palabra de abono en el texto no toca nada (la IA pudo equivocarse)", () => {
+    const d = abono();
+    aplicarSignoAbono(d, "Factura 2026/15 … Total 121,00 €");
+    expect(d.total).toBe(121);
+  });
+
+  it("sin la marca de la IA no toca nada aunque el texto hable de devoluciones", () => {
+    const d = { ...abono(), abono: false };
+    aplicarSignoAbono(d, "Factura 2026/15. Plazo de devolución: 30 días.");
+    expect(d.total).toBe(121);
+  });
+
+  it("si el total ya es negativo no lo vuelve a invertir", () => {
+    const d: DatosFactura = { abono: true, subtotal: -100, iva: -21, total: -121 };
+    aplicarSignoAbono(d, "Abono A-7");
+    expect(d.total).toBe(-121);
+  });
+
+  it("una devolución sin cargo (importes a 0) se queda en 0", () => {
+    const d: DatosFactura = { abono: true, total: 0, lineas: [] };
+    aplicarSignoAbono(d, "Factura de devolución RMA 2.025/SAT/542");
+    expect(d.total).toBe(0);
   });
 });
 
